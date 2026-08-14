@@ -1,0 +1,45 @@
+<h2>选择平台的主界面结构</h2>
+<p class="subtitle">三种方案都保留 Obsidian 式文件树、双向链接和关系图；区别是学习答疑在界面中的位置。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#17171b;color:#ddd;height:270px">
+      <div style="display:grid;grid-template-columns:38px 145px 1fr 175px;height:100%;gap:1px;background:#38383f;border-radius:7px;overflow:hidden">
+        <div style="background:#202026;padding:9px 5px;text-align:center;line-height:2.2">◫<br>⌕<br>⌘<br>⚙</div>
+        <div style="background:#25252c;padding:10px;font-size:11px"><b>我的知识库</b><br><br>⌄ 七年级数学<br>　⌄ 第一章<br>　　有理数.md<br>　　练习一.md<br><br>⌄ 班级空间<br>　初一（2）班</div>
+        <div style="background:#1e1e23;padding:14px;font-size:11px"><b>有理数｜概念笔记</b><hr style="border-color:#3d3d45"><h4>1. 正数与负数</h4><p>本节来自教材第 4–8 页……</p><div style="margin-top:20px;padding:10px;background:#292931;border-radius:6px">关联：[[数轴]]　[[绝对值]]</div></div>
+        <div style="background:#25252c;padding:10px;font-size:11px"><b>AI 答疑</b><br><br><div style="background:#303039;padding:8px;border-radius:6px">为什么负负得正？</div><div style="margin-top:8px;color:#aaa">完整解答……<br><span style="color:#9988ff">教材 P.12</span></div></div>
+      </div>
+    </div>
+    <div class="card-body"><h3>A｜高度还原 Obsidian</h3><p>四栏常驻，像知识管理工具；适合重度整理，但小屏信息较拥挤。</p></div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#f4f5f8;color:#222;height:270px">
+      <div style="display:grid;grid-template-rows:42px 1fr;height:100%;background:white;border:1px solid #ddd;border-radius:8px;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid #ddd"><b>知学空间</b><span style="font-size:11px">知识库　班级　用量　　● 小明</span></div>
+        <div style="display:grid;grid-template-columns:165px 1fr;min-height:0">
+          <div style="padding:12px;border-right:1px solid #ddd;font-size:11px"><button style="width:100%;padding:7px;background:#6558d8;color:white;border:0;border-radius:6px">＋ 上传资料</button><br><br><b>我的资料</b><br>📘 数学课本.pdf<br>📙 同步练习.pdf<br><br><b>班级空间</b><br>初一（2）班</div>
+          <div style="display:grid;grid-template-rows:38px 1fr 43px;padding:10px 18px"><div style="font-size:11px;color:#666">完整解答　　○ 分步引导　　模型：千问 ▾</div><div><h4>负负得正是怎么理解的？</h4><div style="padding:12px;background:#f2f0ff;border-radius:8px;font-size:11px">可以从“相反数”来理解……<br><br><span style="color:#6558d8">引用：《七年级数学》P.12 ↗</span></div></div><div style="border:1px solid #ccc;border-radius:8px;padding:10px;font-size:11px;color:#999">输入问题，或粘贴一道题……</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>B｜学习问答优先</h3><p>默认进入答疑，知识库作为侧栏；新用户最容易上手，图谱放在独立页面。</p></div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="padding:12px;background:#15161a;color:#ddd;height:270px">
+      <div style="display:grid;grid-template-rows:40px 1fr;height:100%;border:1px solid #35363d;border-radius:8px;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:#202127"><b>Atlas 学习空间</b><span style="font-size:11px">工作台　图谱　班级　账单　　余额 ¥26.40</span></div>
+        <div style="display:grid;grid-template-columns:150px 1fr 210px">
+          <div style="padding:11px;background:#24252b;font-size:11px"><b>空间</b><br><br>⌄ 我的知识库<br>　教材与练习<br>　AI 笔记<br>　错题集<br><br>⌄ 初一（2）班<br>　共享资料<br>　待审核 (2)</div>
+          <div style="position:relative;background:#191a1f;overflow:hidden"><div style="position:absolute;inset:0;background:radial-gradient(circle at 45% 42%,#6657d8 0 5px,transparent 6px),radial-gradient(circle at 25% 65%,#51a8a1 0 4px,transparent 5px),radial-gradient(circle at 70% 65%,#cf8a56 0 4px,transparent 5px),radial-gradient(circle at 68% 25%,#5b8fd1 0 4px,transparent 5px)"></div><svg width="100%" height="100%" style="position:absolute"><line x1="45%" y1="42%" x2="25%" y2="65%" stroke="#555"/><line x1="45%" y1="42%" x2="70%" y2="65%" stroke="#555"/><line x1="45%" y1="42%" x2="68%" y2="25%" stroke="#555"/></svg><div style="position:absolute;top:12px;left:12px;font-size:11px"><b>七年级数学｜知识图谱</b></div></div>
+          <div style="padding:11px;background:#24252b;font-size:11px"><b>AI 学习助手</b><br><br><div style="padding:8px;background:#30313a;border-radius:6px">已选中：有理数</div><p>你可以继续问概念、例题或薄弱点。</p><div style="margin-top:65px;border:1px solid #444;padding:9px;border-radius:7px;color:#999">围绕当前内容提问…</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>C｜双模式工作台（推荐）</h3><p>答疑与知识管理并重；聊天、笔记、图谱可切换，中间区域保持专注。</p></div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:18px">点击一个方案，再回到对话告诉我选择；也可以说希望混合哪些部分。</p>

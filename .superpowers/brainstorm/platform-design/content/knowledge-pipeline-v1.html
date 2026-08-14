@@ -1,0 +1,40 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>知识流水线设计</title>
+<style>*{box-sizing:border-box}body{margin:0;padding:28px;background:#111318;color:#e9ebf1;font-family:Inter,"Microsoft YaHei",system-ui,sans-serif}.wrap{max-width:1320px;margin:auto}h1{margin:0 0 6px;font-size:24px}.sub{margin:0 0 22px;color:#959ba8;font-size:13px}.panel{border:1px solid #303541;background:#191c23;border-radius:14px;padding:15px;margin-bottom:14px}.panel h2{font-size:14px;margin:0 0 12px}.pipeline{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;align-items:stretch}.step{border:1px solid #3a404d;background:#222630;border-radius:10px;padding:10px;min-height:105px;position:relative}.step h3{font-size:11px;margin:0 0 6px}.step p{font-size:9px;color:#a5abb8;line-height:1.45;margin:0}.step:not(:last-child):after{content:"›";position:absolute;right:-8px;top:41px;z-index:3;color:#8478e5;font-size:20px}.purple{border-color:#7468db;background:#29263f}.blue{border-color:#4a87ae;background:#20303b}.green{border-color:#4d9a76;background:#20352d}.orange{border-color:#a97948;background:#382b21}.decision{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}.branch{border:1px solid #373d49;background:#21252d;border-radius:10px;padding:11px}.branch h3{font-size:11px;margin:0 0 6px}.branch p,.branch li{font-size:9.5px;color:#a5abb7;line-height:1.55}.branch ul{padding-left:17px;margin:5px 0}.tag{font-size:8px;background:#333044;color:#c5bdff;padding:3px 6px;border-radius:7px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.flow{display:flex;align-items:stretch;gap:7px}.box{flex:1;border:1px solid #383e4a;background:#222630;border-radius:9px;padding:9px}.box b{font-size:10px}.box p{font-size:9px;color:#9fa5b2;line-height:1.45;margin:4px 0 0}.arr{align-self:center;color:#7b70dc}.version{display:grid;grid-template-columns:1fr 1fr;gap:10px}.version>div{border:1px solid #353b48;background:#20242c;border-radius:10px;padding:11px}.version h3{font-size:11px;margin:0 0 5px}.version p{font-size:9.5px;color:#a0a6b3;line-height:1.5;margin:0}.active{border-left:3px solid #61c394!important}.building{border-left:3px solid #e0a05c!important}.query{display:grid;grid-template-columns:repeat(6,1fr);gap:7px}.q{border:1px solid #373d49;background:#21252d;border-radius:9px;padding:9px}.q b{font-size:9.5px}.q p{font-size:8.7px;color:#9fa5b2;line-height:1.4;margin:4px 0}.rule{padding:10px 12px;border-radius:8px;background:#252238;border-left:3px solid #8175e8;color:#c9c5e5;font-size:10px;line-height:1.55;margin-top:10px}.costs{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.cost{border:1px solid #373d49;background:#21252d;border-radius:9px;padding:10px}.cost h3{font-size:10px;margin:0 0 5px}.cost p{font-size:9px;color:#a2a8b4;line-height:1.45;margin:0}@media(max-width:950px){.pipeline{grid-template-columns:repeat(2,1fr)}.step:not(:last-child):after{display:none}.grid{grid-template-columns:1fr}.query{grid-template-columns:repeat(2,1fr)}.costs{grid-template-columns:repeat(2,1fr)}}
+</style></head><body><div class="wrap"><h1>文档导入、自生长知识库与检索流水线</h1><p class="sub">OCR 只在必要页面发生；原文、页面图像、公式和版面永远保留，解析文本主要服务于搜索与引用定位。</p>
+
+<section class="panel"><h2>上传到“可提问”的七阶段流水线</h2><div class="pipeline">
+<div class="step"><h3>1. 接收与隔离</h3><p>校验用户/空间权限、文件类型和大小；生成 UUID，原文件写入隔离存储。</p></div>
+<div class="step"><h3>2. 安全与去重</h3><p>MIME、扩展名、ZIP 路径、压缩炸弹、恶意文件检查；SHA-256 内容去重。</p></div>
+<div class="step blue"><h3>3. 原生解析</h3><p>PDF 文本层、DOCX 段落/图片、Markdown/Frontmatter、Obsidian 链接与附件。</p></div>
+<div class="step orange"><h3>4. 按页 OCR 决策</h3><p>仅对无文本、乱码、低覆盖或用户强制的页面调用后台配置的 OCR API。</p></div>
+<div class="step blue"><h3>5. 结构与切分</h3><p>章节、题号、答案、段落、页码、坐标、图片/公式锚点；保留父子层级。</p></div>
+<div class="step purple"><h3>6. 混合索引</h3><p>Postgres 全文索引 + Embedding 向量；可选 Rerank；写入索引版本。</p></div>
+<div class="step green"><h3>7. 知识自生长</h3><p>后台生成概念、关系、摘要、题型和草稿笔记；按个人/班级规则发布或待审。</p></div>
+</div></section>
+
+<section class="panel"><h2>OCR 决策：先判断，再付费</h2><div class="decision">
+<div class="branch"><h3><span class="tag">无需 OCR</span> 可直接提取</h3><ul><li>DOCX 与普通 Markdown</li><li>具有有效文本层的 PDF</li><li>Obsidian Vault 的 Markdown 正文</li></ul><p>图片和公式附件仍保留，并建立页面锚点。</p></div>
+<div class="branch"><h3><span class="tag">页面级 OCR</span> 自动触发</h3><ul><li>扫描页或拍照图片</li><li>提取字符数过少/乱码率高</li><li>文本覆盖明显低于页面视觉区域</li></ul><p>不是整本无条件 OCR，只计必要页。</p></div>
+<div class="branch"><h3><span class="tag">视觉保真</span> 最终理解</h3><ul><li>公式、几何图、示意图、复杂表格</li><li>OCR 低置信度区域</li><li>回答需要看版面关系时</li></ul><p>检索定位后，将相关原页图像交给多模态 LLM。</p></div>
+</div><div class="rule">识别文本不是唯一真相：回答引用同时指向原始页、文本块和页面坐标。若 OCR 与原页视觉冲突，Agent 以原页内容为准，并标记“视觉复核”。</div></section>
+
+<div class="grid"><section class="panel"><h2>自生长知识库的发布规则</h2><div class="flow"><div class="box"><b>原始证据层</b><p>课本、练习册、原始页和导入的 Obsidian 笔记；不可由 AI 覆盖。</p></div><div class="arr">→</div><div class="box"><b>AI 草稿层</b><p>章节摘要、概念卡、关系、题型、答案分析；保存 Prompt/模型/来源。</p></div><div class="arr">→</div><div class="box"><b>发布层</b><p>个人空间自动发布且可撤销；班级空间进入教师审核队列。</p></div></div><div class="rule">每个 AI 节点都保存来源、生成模型、生成时间、审核状态和版本；重新生成会创建新版本，不静默覆盖已审核内容。</div></section>
+
+<section class="panel"><h2>零中断索引切换</h2><div class="version"><div class="active"><h3>Active v3 · 正在服务</h3><p>继续回答用户请求；绑定旧 Embedding 签名和旧解析结果，不受后台重建影响。</p></div><div class="building"><h3>Building v4 · 后台构建</h3><p>管理员切换 OCR/Embedding/切分配置后建立新版本；完成数量、错误和抽样质量检查。</p></div></div><div class="flow" style="margin-top:9px"><div class="box"><b>构建完成</b><p>原子切换 active_version_id。</p></div><div class="arr">→</div><div class="box"><b>保留旧版本</b><p>短期回滚与历史引用解析。</p></div><div class="arr">→</div><div class="box"><b>延迟清理</b><p>确认稳定后再删除旧向量。</p></div></div></section></div>
+
+<section class="panel"><h2>每次提问的混合检索链</h2><div class="query">
+<div class="q"><b>1. 问题分析</b><p>识别空间、学科、题号、引用对象和是否需要视觉。</p></div>
+<div class="q"><b>2. 权限过滤</b><p>先限制个人/班级资源范围，再做任何搜索。</p></div>
+<div class="q"><b>3. 双路召回</b><p>Postgres 全文/BM25 风格搜索 + pgvector 语义搜索。</p></div>
+<div class="q"><b>4. 结构扩展</b><p>按章节、题目-答案、知识节点关系补充邻近证据。</p></div>
+<div class="q"><b>5. 重排与视觉</b><p>可选 Rerank；必要时附相关原页截图给多模态模型。</p></div>
+<div class="q"><b>6. 有证据回答</b><p>生成引用、页码和坐标；不足时明确区分模型补充。</p></div>
+</div></section>
+
+<section class="panel"><h2>成本与可靠性控制</h2><div class="costs">
+<div class="cost"><h3>内容哈希缓存</h3><p>相同文件、相同页和相同配置不重复解析、OCR 或 Embedding。</p></div>
+<div class="cost"><h3>可恢复任务</h3><p>每阶段保存状态和产物；失败从断点继续，不从头重复计费。</p></div>
+<div class="cost"><h3>低置信度队列</h3><p>OCR/结构抽取不确定时标记复核，不把错误内容直接发布。</p></div>
+<div class="cost"><h3>幂等与限流</h3><p>上传和任务具有幂等键；按用户/空间限制并发、页数和预算。</p></div>
+</div></section>
+</div></body></html>
