@@ -6,6 +6,9 @@ from tutor_api.core.config import Settings, get_settings
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
+    production_errors = active_settings.production_errors()
+    if production_errors:
+        raise RuntimeError("Invalid production configuration: " + "; ".join(production_errors))
     app = FastAPI(title="Textbook Tutor API", version="0.1.0")
     app.state.settings = active_settings
     app.add_middleware(
