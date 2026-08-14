@@ -10,6 +10,9 @@
 - 已写入认证、个人空间、班级邀请码与服务端权限的测试先行详细计划：`docs/superpowers/plans/2026-08-14-identity-classrooms-plan.md`。
 - 已完成 Task 1：失败测试确认安全与数据库模块尚不存在；加入 Argon2 密码哈希、非测试环境 PostgreSQL 限制、事务作用域与 Alembic 基础配置。目标测试和 Ruff 均通过。
 - Task 1 首次提交被 Git safe.directory 保护阻止，未产生提交或文件变动；改为仅对隔离 worktree 传入临时安全目录后重试。
+- Task 2 已完成 RED：租户模型尚不存在时，架构测试无法导入预期的声明式基类。当前正实现 UUID 用户与空间模型，以及数据库层的“每位用户一个个人空间”约束。
+- Task 2 已扩展为用户、空间、班级、成员、邀请码与会话的 UUID 数据模型；个人空间与班级成员的唯一性测试均通过。初始 Alembic 迁移已写入，待只读语法验证后提交。
+- Task 2 完成：初始迁移的 PostgreSQL 静态 SQL 已成功生成，包含用户、空间、班级、成员、邀请码和会话表，以及个人空间与成员唯一性约束。下一步进入注册、会话和登出接口。
 
 ## Session: 2026-08-14 · Platform Foundation
 

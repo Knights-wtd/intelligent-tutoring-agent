@@ -2,7 +2,11 @@ from collections.abc import Generator
 from contextlib import contextmanager
 
 from sqlalchemy import Engine, create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 def create_engine_from_url(database_url: str, *, app_env: str) -> Engine:

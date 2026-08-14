@@ -3,12 +3,17 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import tutor_api.classrooms.models  # noqa: F401
+import tutor_api.identity.models  # noqa: F401
+import tutor_api.spaces.models  # noqa: F401
+from tutor_api.core.database import Base
+
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

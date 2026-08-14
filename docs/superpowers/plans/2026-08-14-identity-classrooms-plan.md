@@ -90,7 +90,7 @@ git commit -m "feat: add database and password primitives"
 
 ### Task 2: Define the tenant schema and apply the initial migration
 
-**Status:** in_progress
+**Status:** complete
 
 **Files:**
 - Create: `apps/api/src/tutor_api/identity/models.py`, `apps/api/src/tutor_api/spaces/models.py`, `apps/api/src/tutor_api/classrooms/models.py`, `apps/api/migrations/versions/0001_identity.py`
@@ -141,6 +141,8 @@ git commit -m "feat: add identity and classroom schema"
 ```
 
 ### Task 3: Implement registration, opaque sessions, and logout
+
+**Status:** in_progress
 
 **Files:**
 - Create: `apps/api/src/tutor_api/identity/{schemas.py,repository.py,service.py,router.py}`
