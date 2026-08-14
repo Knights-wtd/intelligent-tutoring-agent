@@ -13,7 +13,13 @@ Copy-Item .env.example .env
 
 将 `<project checkout>` 替换为你本机的项目检出目录；其余命令都从该目录运行。
 
-打开 `.env`，将其中所有 `replace-for-non-local-use` 占位值替换为你自己的本地密码，并同步修改引用这些密码的连接地址。不要提交或分享真实密码；`.env` 已被 Git 忽略，只保留在本机。
+打开 `.env`，将其中所有 `replace-for-non-local-use` 占位值替换为你自己的本地密码，并保持以下对应关系：
+
+- `POSTGRES_PASSWORD` 必须与 `DATABASE_URL` 中的 PostgreSQL 密码一致。
+- `REDIS_PASSWORD` 必须与 `REDIS_URL` 中的 Redis 密码一致。
+- `OBJECT_STORAGE_SECRET_KEY` 必须与 `MINIO_ROOT_PASSWORD` 完全相同。
+
+写入 `DATABASE_URL` 或 `REDIS_URL` 的密码必须是 URL 安全的；如果包含特殊字符，请先进行百分号编码。不要提交或分享真实密码；`.env` 已被 Git 忽略，只保留在本机。
 
 ```powershell
 docker compose --env-file .env up --build -d
@@ -22,7 +28,7 @@ docker compose --env-file .env ps
 
 启动完成后可访问：
 
-- Web 工作区：<http://127.0.0.1:3000>
+- Web 工作区：<http://localhost:3000>
 - API 健康检查：<http://127.0.0.1:8000/api/v1/health>
 - MinIO 管理界面：<http://127.0.0.1:9001>
 
@@ -80,9 +86,10 @@ API 检查（从仓库根目录开始）：
 Set-Location apps/api
 & .\.venv\Scripts\python.exe -m ruff check src tests
 & .\.venv\Scripts\python.exe -m pytest --cov=tutor_api --cov-report=term-missing --cov-fail-under=90
+Set-Location ..\..
 ```
 
-Web 检查（从仓库根目录运行）：
+继续运行 Web 检查：
 
 ```powershell
 pnpm test:web
