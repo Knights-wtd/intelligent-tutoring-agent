@@ -8,6 +8,9 @@
 
 Phase 4：基础平台实现
 
+- **已完成里程碑：** 平台基础骨架（前后端、C3 工作台、Docker、CI、安全基线与本机验收）
+- **下一实施里程碑：** 注册登录、用户隔离、个人空间初始化、班级邀请码与服务端权限
+
 ## Phases
 
 ### Phase 1：需求发现与产品边界
@@ -66,7 +69,7 @@ Phase 4：基础平台实现
 
 1. 首期具体启用哪些千问、DeepSeek、OpenAI 模型，以及各供应商 OCR/Embedding 型号？
 2. 用户结算人民币时采用什么汇率来源、更新周期和精度规则？
-3. 本机测试环境是否已经具备 Docker Desktop、PostgreSQL/Redis 可用资源？
+3. 【已解决】Docker Desktop、Compose、PostgreSQL/pgvector、Redis、MinIO、API 和 Web 已在隔离环境完成本机验收。
 4. DeepTutor 哪些 Apache 2.0 模块直接复用，哪些只借鉴架构并重写？
 
 ## Decisions Made
@@ -88,6 +91,10 @@ Phase 4：基础平台实现
 | 自主平台并选择性复用 DeepTutor | 保留班级、计费和权限自主性，同时利用成熟 AI 模块 |
 | 本机先测试，再迁移 Linux 云服务器 | 降低初期成本并验证完整链路 |
 | 使用 planning-with-files 维护项目上下文 | 通过磁盘文件解决长任务上下文丢失，不依赖 OpenClaw |
+| 生产配置采用失效保护 | 生产环境拒绝 SQLite、本地或未认证后端、占位及空白凭据，避免误连开发资源 |
+| MinIO 管理员与应用身份分离 | API 只持有指定存储桶权限，不能执行管理员操作 |
+| CI 依赖和第三方 Action 固定版本 | 降低供应链漂移并保持本机与 CI 检查一致 |
+| 基础里程碑在独立 worktree 完成 | 保留主分支稳定性，并为下一阶段提供可审查的提交边界 |
 
 ## Errors Encountered
 
@@ -98,6 +105,8 @@ Phase 4：基础平台实现
 | 可视化服务被回收 | 1 | 重新启动并恢复已保存的页面 |
 | Computer Use 读取 Obsidian 窗口遭遇 EPERM | 2 | 停止重复尝试，改用用户截图和既有 Obsidian 交互规律 |
 | C3 原型首次补丁无法匹配压缩 CSS 行 | 1 | 按实际行内容拆分成更小补丁后完成更新 |
+| Windows 构建缓存由不同权限上下文创建，导致 `.next`、Ruff/Pytest 缓存写入被拒绝 | 2 | 只重建可再生前端产物，并在最终检查中禁用工具缓存 |
+| 旧测试卷无法证明为空，删除请求被安全策略拒绝 | 1 | 保留旧卷不动，使用独立 Compose 项目和新数据卷完成无损验收 |
 
 ## Notes
 

@@ -127,13 +127,29 @@
 - Node.js 已安装：v24.18.0。
 - pnpm 可用：v11.19.0。
 - 系统 Python 为 3.9.13，不作为本项目目标运行时；后端统一使用 Python 3.12 容器或后续安装的独立运行时。
-- Docker 和 uv 当前未安装。实施计划必须先完成 Docker Desktop/Compose 可用性检查；在此之前可以先生成代码和运行不依赖容器的前端检查，但不能宣称本机端到端环境完成。
+- 初检时 Docker 和 uv 尚未可用；Docker 问题现已解决，后续验收使用 Docker Desktop 29.7.2 与 Compose v5.3.1。项目不依赖系统 uv。
 - 用户随后报告 Docker 已安装，但当前 Codex 终端仍无法解析 `docker`；桌面快捷方式目标位于已不存在的沙箱用户目录，标准安装目录也未发现可执行文件。可能需要重启 Codex/终端刷新安装状态，或确认 Docker Desktop 实际安装位置。
 - 安装 WSL 后再次核对：`C:/Users/asus/AppData/Local/Docker/wsl` 已出现，但 Docker Desktop 主程序与 `docker.exe` 仍未安装到 Program Files 或当前用户程序目录；需要在 WSL 安装完成后重新运行 Docker Desktop Installer。
 - Docker Desktop 最终安装在 `C:/Users/asus/AppData/Local/Programs/DockerDesktop/`。当前 Codex 沙箱不能直接执行该用户目录程序，但经授权在沙箱外验证成功：Docker Client/Server 29.7.2、Compose v5.3.1、引擎操作系统为 Docker Desktop。
 - Codex 工作区提供独立 Python 3.12.13，可用于 Docker 安装前的后端单元测试与开发；正式项目仍以 Python 3.12 和锁定依赖为准，不依赖系统 Anaconda Python 3.9。
 - `react-resizable-panels` 官方当前版本 4.x 使用 `Group`、`Panel`、`Separator`，并支持 `defaultLayout` 与键盘可访问分隔条；首个前端计划按该接口实现三块可拖动区域。
-- 当前仓库是 `main` 分支的普通检出，不是隔离 worktree；开始业务代码前需按开发流程获得用户同意后创建项目内隔离 worktree。
+- 基础实现位于 `E:/项目/知识库课本/.worktrees/platform-foundation`，分支为 `feature/platform-foundation`；主检出和 `main` 分支未被自动合并或删除。
+
+## Platform Foundation Implementation Findings（2026-08-14）
+
+- 基础里程碑已完成：pnpm monorepo、FastAPI、Next.js 16、C3 可调整宽度工作台、PostgreSQL/pgvector、Redis、MinIO、Docker Compose、CI 与本机使用说明均已落地。
+- 后端生产配置必须失效保护：生产模式拒绝 SQLite、本地 PostgreSQL/Redis/MinIO、未认证 Redis、HTTP Web 来源、开发占位值、空白或过短对象存储凭据；开发和测试模式仍保留本机默认值。
+- 数据库 URL、Redis URL 和对象存储端点在设置对象的 `repr` 中隐藏，错误消息不回显凭据，避免日志泄密。
+- MinIO 使用两套身份：初始化器暂用管理员身份创建存储桶、策略和应用用户；API 只接收 `OBJECT_STORAGE_*` 应用凭据，策略仅允许目标存储桶的列表、读写、删除和分片上传操作。
+- MinIO 初始化流程已在保留数据卷的情况下重复执行成功；应用身份可以列出目标存储桶，但无法执行 `mc admin` 管理操作。
+- Compose 仅向本机发布 Web、API 与 MinIO 端口；PostgreSQL 和 Redis 保持容器网络内部访问。Redis 启用密码认证，API/Web 镜像以非 root 用户运行。
+- Python 运行、构建、开发依赖使用精确锁文件；基础镜像使用可读标签加内容摘要；GitHub Actions 固定完整提交 SHA，检出凭据不持久化。
+- 最新验证：API 65 项测试通过，覆盖率 96.64%；Web 6 项测试、ESLint 和生产构建通过；所有隔离容器健康，API 健康接口和 Web 页面均返回 200。
+- 浏览器实测确认：空间切换位于最左栏，当前空间内容位于第二栏，中间为知识工作区，右侧为 AI 家教；两条分隔线存在，键盘方向键可以改变面板宽度，教材原页标签可切换内容。
+- Windows 上不同执行身份可能锁住 `.next`、`.ruff_cache` 或 `.pytest_cache`。可靠验收方式是只清理可再生的 `.next`，Ruff 使用 `--no-cache`，Pytest 使用 `-p no:cacheprovider`，覆盖率文件写入系统临时目录。
+- 为避免删除无法确认内容的旧测试卷，旧默认 Compose 数据卷被保留且旧容器已停止；当前可访问服务运行在隔离项目 `platform-foundation-security-final` 中。
+- 已知非阻断提示：Starlette TestClient/httpx 依赖存在弃用警告；Vite 原生配置加载器对当前 TypeScript 配置给出未来兼容性警告。后续依赖升级时处理，不影响当前里程碑。
+- 下一实施重点是注册登录、Opaque Session、个人空间初始化、班级成员/邀请码、教师审核和服务端权限边界；模型计费与知识入库在其后接入。
 
 ## Resources
 
