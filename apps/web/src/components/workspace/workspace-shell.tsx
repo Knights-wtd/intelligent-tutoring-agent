@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import styles from "./workspace-shell.module.css";
@@ -14,7 +15,31 @@ const treeItems = [
   { label: "题库", kind: "collection", count: "45" },
 ] as const;
 
+const workspaceViews = [
+  {
+    id: "graph",
+    label: "知识图谱",
+    message: "查看教材、笔记、题目之间的知识关系。",
+  },
+  {
+    id: "source",
+    label: "教材原页",
+    message: "查看教材原始页面及其版面内容。",
+  },
+  {
+    id: "notes",
+    label: "AI 笔记",
+    message: "查看基于教材内容生成和整理的 AI 笔记。",
+  },
+] as const;
+
+type WorkspaceViewId = (typeof workspaceViews)[number]["id"];
+
 export function WorkspaceShell() {
+  const [selectedViewId, setSelectedViewId] = useState<WorkspaceViewId>("graph");
+  const selectedView =
+    workspaceViews.find((view) => view.id === selectedViewId) ?? workspaceViews[0];
+
   return (
     <main className={styles.shell}>
       <nav aria-label="空间切换" className={styles.spaceRail}>
@@ -74,19 +99,25 @@ export function WorkspaceShell() {
         <Panel id="center" minSize="30%">
           <section aria-label="知识工作区" className={styles.centerPane}>
             <div className={styles.tabs} aria-label="知识内容视图">
-              <button className={styles.selectedTab} type="button" aria-pressed="true">
-                知识图谱
-              </button>
-              <button type="button" aria-pressed="false">
-                教材原页
-              </button>
-              <button type="button" aria-pressed="false">
-                AI 笔记
-              </button>
+              {workspaceViews.map((view) => {
+                const isSelected = view.id === selectedViewId;
+
+                return (
+                  <button
+                    className={isSelected ? styles.selectedTab : undefined}
+                    key={view.id}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => setSelectedViewId(view.id)}
+                  >
+                    {view.label}
+                  </button>
+                );
+              })}
             </div>
             <div className={styles.emptyState}>
-              <strong>知识工作区</strong>
-              <span>选择教材、笔记、题目或关系节点后在这里查看。</span>
+              <h2>{selectedView.label}</h2>
+              <span>{selectedView.message}</span>
             </div>
           </section>
         </Panel>

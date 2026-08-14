@@ -213,7 +213,8 @@
   text-align: center;
 }
 
-.emptyState strong {
+.emptyState h2 {
+  margin: 0;
   color: #d9dce5;
   font-size: 20px;
 }

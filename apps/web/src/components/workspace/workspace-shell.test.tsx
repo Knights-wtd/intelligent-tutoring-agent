@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +34,22 @@ describe("WorkspaceShell", () => {
       "aria-pressed",
       "false",
     );
+  });
+
+  it("changes the selected workspace view and its center content", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceShell />);
+
+    const graphButton = screen.getByRole("button", { name: "知识图谱" });
+    const sourceButton = screen.getByRole("button", { name: "教材原页" });
+    await user.click(sourceButton);
+
+    expect(sourceButton).toHaveAttribute("aria-pressed", "true");
+    expect(graphButton).toHaveAttribute("aria-pressed", "false");
+
+    const workspace = screen.getByLabelText("知识工作区");
+    expect(within(workspace).getByRole("heading", { name: "教材原页" })).toBeInTheDocument();
+    expect(workspace).toHaveTextContent("查看教材原始页面及其版面内容。");
   });
 
   it("renders three keyboard-resizable content panes", async () => {
