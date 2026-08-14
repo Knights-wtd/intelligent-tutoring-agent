@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
+import type { SpaceSummary } from "@/lib/api";
+
 import styles from "./workspace-shell.module.css";
 
 const treeItems = [
@@ -35,10 +37,21 @@ const workspaceViews = [
 
 type WorkspaceViewId = (typeof workspaceViews)[number]["id"];
 
-export function WorkspaceShell() {
+const exampleSpaces: SpaceSummary[] = [
+  { id: "personal", kind: "personal", name: "我的空间" },
+  { id: "math", kind: "classroom", name: "七年级数学" },
+];
+
+type WorkspaceShellProps = {
+  spaces?: SpaceSummary[];
+};
+
+export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) {
   const [selectedViewId, setSelectedViewId] = useState<WorkspaceViewId>("graph");
+  const [selectedSpaceId, setSelectedSpaceId] = useState(spaces[0]?.id ?? "");
   const selectedView =
     workspaceViews.find((view) => view.id === selectedViewId) ?? workspaceViews[0];
+  const selectedSpace = spaces.find((space) => space.id === selectedSpaceId) ?? spaces[0];
 
   return (
     <main className={styles.shell}>
@@ -46,19 +59,24 @@ export function WorkspaceShell() {
         <button className={styles.brand} type="button" aria-label="平台首页">
           知
         </button>
-        <button className={styles.spaceButton} type="button" aria-label="个人空间">
-          <span aria-hidden="true">我</span>
-          <span className={styles.visuallyHidden}>个人空间</span>
-        </button>
-        <button
-          className={`${styles.spaceButton} ${styles.active}`}
-          type="button"
-          aria-label="七年级数学"
-          aria-current="page"
-        >
-          <span aria-hidden="true">七</span>
-          <span className={styles.visuallyHidden}>七年级数学</span>
-        </button>
+        {spaces.map((space) => {
+          const isSelected = space.id === selectedSpace?.id;
+          const icon = space.kind === "personal" ? "我" : space.name.slice(0, 1);
+          const spaceLabel = space.kind === "personal" ? "个人空间" : space.name;
+          return (
+            <button
+              aria-current={isSelected ? "page" : undefined}
+              aria-label={spaceLabel}
+              className={`${styles.spaceButton} ${isSelected ? styles.active : ""}`}
+              key={space.id}
+              onClick={() => setSelectedSpaceId(space.id)}
+              type="button"
+            >
+              <span aria-hidden="true">{icon}</span>
+              <span className={styles.visuallyHidden}>{spaceLabel}</span>
+            </button>
+          );
+        })}
         <button className={styles.spaceButton} type="button" aria-label="创建或加入班级">
           <span aria-hidden="true">+</span>
         </button>
@@ -72,7 +90,7 @@ export function WorkspaceShell() {
         <Panel id="tree" minSize="16%" maxSize="34%">
           <aside aria-label="当前空间内容" className={styles.treePane}>
             <header className={styles.paneHeader}>
-              <strong>七年级数学</strong>
+              <strong>{selectedSpace?.name ?? "我的空间"}</strong>
               <button type="button" aria-label="空间设置">
                 •••
               </button>

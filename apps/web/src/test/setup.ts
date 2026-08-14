@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 
 afterEach(cleanup);
 
@@ -11,3 +11,5 @@ class TestResizeObserver {
 }
 
 globalThis.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));

@@ -9,6 +9,37 @@ afterEach(() => {
 });
 
 describe("WorkspaceShell", () => {
+  it("renders authenticated personal and classroom spaces in the left rail", () => {
+    render(
+      <WorkspaceShell
+        spaces={[
+          { id: "personal", kind: "personal", name: "我的空间" },
+          { id: "math", kind: "classroom", name: "七年级数学" },
+        ]}
+      />,
+    );
+
+    expect(screen.getByLabelText("个人空间")).toBeInTheDocument();
+    expect(screen.getByLabelText("七年级数学")).toBeInTheDocument();
+    expect(screen.getAllByRole("separator")).toHaveLength(2);
+  });
+
+  it("updates the content pane heading when a space is selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkspaceShell
+        spaces={[
+          { id: "personal", kind: "personal", name: "我的空间" },
+          { id: "math", kind: "classroom", name: "七年级数学" },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "个人空间" }));
+
+    expect(screen.getByLabelText("当前空间内容")).toHaveTextContent("我的空间");
+  });
+
   it("keeps spaces in the far-left rail and content in the second pane", () => {
     render(<WorkspaceShell />);
 
