@@ -51,6 +51,8 @@
   - 使用 writing-plans 将整体范围拆分为六个可独立验收的里程碑，并建立设计覆盖矩阵。
   - 完成首个“平台基础骨架”详细实施计划，包含精确文件、测试先行步骤、命令、预期结果和小提交边界。
   - 自检实施计划：无 TODO/TBD/泛化占位步骤，Markdown 围栏成对，前后端类型与路径一致；Docker 缺失被明确保留为外部前置条件。
+  - 用户报告 Docker 安装完成；验证发现当前 Codex 终端仍找不到 Docker 可执行文件，暂不把 Docker 端到端验证标记为通过。
+  - 检查 Git 隔离状态：当前位于普通 `main` 检出，尚未创建业务实现 worktree。
 - Files created/modified:
   - `task_plan.md`
   - `findings.md`
@@ -83,6 +85,7 @@
 | 2026-08-13 | Computer Use 读取 Obsidian 返回 EPERM | 2 | 停止尝试，使用用户截图 |
 | 2026-08-13 | C3 首次补丁匹配失败 | 1 | 读取实际行后拆分补丁完成更新 |
 | 2026-08-14 | Git 初始化后因沙箱用户与目录所有者不同触发 safe.directory 保护 | 1 | 不修改全局配置，后续 Git 命令仅对当前仓库传入安全目录参数 |
+| 2026-08-14 | Docker 安装后当前 Codex 进程尚未刷新 PATH，直接调用 `docker` 找不到命令 | 1 | 从 Docker Desktop 标准安装目录定位可执行文件并使用绝对路径验证，不修改用户全局 PATH |
 
 ## 5-Question Reboot Check
 

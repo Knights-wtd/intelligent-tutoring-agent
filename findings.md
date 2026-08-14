@@ -128,8 +128,10 @@
 - pnpm 可用：v11.19.0。
 - 系统 Python 为 3.9.13，不作为本项目目标运行时；后端统一使用 Python 3.12 容器或后续安装的独立运行时。
 - Docker 和 uv 当前未安装。实施计划必须先完成 Docker Desktop/Compose 可用性检查；在此之前可以先生成代码和运行不依赖容器的前端检查，但不能宣称本机端到端环境完成。
+- 用户随后报告 Docker 已安装，但当前 Codex 终端仍无法解析 `docker`；桌面快捷方式目标位于已不存在的沙箱用户目录，标准安装目录也未发现可执行文件。可能需要重启 Codex/终端刷新安装状态，或确认 Docker Desktop 实际安装位置。
 - Codex 工作区提供独立 Python 3.12.13，可用于 Docker 安装前的后端单元测试与开发；正式项目仍以 Python 3.12 和锁定依赖为准，不依赖系统 Anaconda Python 3.9。
 - `react-resizable-panels` 官方当前版本 4.x 使用 `Group`、`Panel`、`Separator`，并支持 `defaultLayout` 与键盘可访问分隔条；首个前端计划按该接口实现三块可拖动区域。
+- 当前仓库是 `main` 分支的普通检出，不是隔离 worktree；开始业务代码前需按开发流程获得用户同意后创建项目内隔离 worktree。
 
 ## Resources
 
