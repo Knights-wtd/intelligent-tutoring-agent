@@ -14,17 +14,19 @@ concurrency:
 jobs:
   api:
     name: API
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:
       run:
         working-directory: apps/api
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
           cache: pip
@@ -32,13 +34,15 @@ jobs:
             apps/api/pyproject.toml
             apps/api/requirements.lock
             apps/api/build-requirements.lock
+            apps/api/dev-requirements.lock
 
       - name: Install API dependencies
         run: |
           python -m pip install --requirement build-requirements.lock
           python -m pip install --requirement requirements.lock
-          python -m pip install --editable ".[dev]" --no-deps
-          python -m pip install "httpx>=0.28,<1" "pytest>=8.4,<9" "pytest-cov>=6.2,<7" "ruff>=0.12,<1"
+          python -m pip install --requirement dev-requirements.lock
+          python -m pip install --editable . --no-deps --no-build-isolation
+          python -m pip check
 
       - name: Lint API
         run: python -m ruff check src tests
@@ -48,20 +52,22 @@ jobs:
 
   web:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
         with:
           version: 11.19.0
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22.22.2
           cache: pnpm
