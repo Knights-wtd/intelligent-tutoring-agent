@@ -106,6 +106,20 @@ def test_registration_normalizes_email_and_rejects_duplicates_and_invalid_input(
     engine.dispose()
 
 
+def test_validation_errors_never_echo_password_when_another_field_is_invalid() -> None:
+    client, engine = make_client()
+    password = "Correct horse battery staple 9"
+
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "learner@example.com", "password": password},
+    )
+
+    assert response.status_code == 422
+    assert password not in response.text
+    engine.dispose()
+
+
 def test_login_does_not_disclose_whether_identity_or_password_failed() -> None:
     client, engine = make_client()
     client.post("/api/v1/auth/register", json=VALID_REGISTRATION)

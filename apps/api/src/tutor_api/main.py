@@ -25,21 +25,10 @@ def create_app(
         request: Request, error: RequestValidationError
     ) -> JSONResponse:
         del request
-        errors = []
-        for field_error in error.errors():
-            location = field_error.get("loc", ())
-            if any(
-                isinstance(part, str) and "password" in part.casefold() for part in location
-            ):
-                errors.append(
-                    {
-                        key: value
-                        for key, value in field_error.items()
-                        if key not in {"input", "ctx"}
-                    }
-                )
-            else:
-                errors.append(field_error)
+        errors = [
+            {key: field_error[key] for key in ("type", "loc", "msg") if key in field_error}
+            for field_error in error.errors()
+        ]
         return JSONResponse(status_code=422, content=jsonable_encoder({"detail": errors}))
 
     app.add_middleware(
