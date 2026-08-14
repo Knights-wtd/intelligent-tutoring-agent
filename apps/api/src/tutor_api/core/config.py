@@ -17,6 +17,7 @@ _DEVELOPMENT_OBJECT_SECRETS = {
     "replace-with-long-random-object-app-secret",
 }
 _INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
+_COOKIE_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
 def _parse_absolute_url(value: str) -> SplitResult | None:
@@ -62,6 +63,22 @@ class Settings(BaseSettings):
     object_storage_access_key: str = "textbook-local"
     object_storage_secret_key: SecretStr = SecretStr("replace-for-non-local-use")
     object_storage_bucket: str = "textbook-assets"
+    session_cookie_name: str = "session"
+    session_ttl_seconds: int = 604800
+
+    @field_validator("session_cookie_name")
+    @classmethod
+    def validate_session_cookie_name(cls, value: str) -> str:
+        if not _COOKIE_NAME.fullmatch(value):
+            raise ValueError("SESSION_COOKIE_NAME must be a valid cookie token")
+        return value
+
+    @field_validator("session_ttl_seconds")
+    @classmethod
+    def validate_session_ttl_seconds(cls, value: int) -> int:
+        if not 3600 <= value <= 2_592_000:
+            raise ValueError("SESSION_TTL_SECONDS must be between 3600 and 2592000")
+        return value
 
     @field_validator("web_origin")
     @classmethod

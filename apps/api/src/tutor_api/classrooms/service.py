@@ -120,10 +120,26 @@ def get_member_classroom(
     return classroom, space, membership
 
 
+def _get_mutation_membership(
+    session: Session, actor: User, classroom_id: UUID
+) -> ClassroomMembership:
+    if session.get(Classroom, classroom_id) is None:
+        raise _not_found()
+    membership = session.scalar(
+        select(ClassroomMembership).where(
+            ClassroomMembership.classroom_id == classroom_id,
+            ClassroomMembership.user_id == actor.id,
+        )
+    )
+    if membership is None:
+        raise _forbidden()
+    return membership
+
+
 def update_member(
     session: Session, actor: User, classroom_id: UUID, user_id: UUID, role: str | None, remove: bool
 ) -> ClassroomMembership | None:
-    _, _, actor_membership = get_member_classroom(session, actor, classroom_id)
+    actor_membership = _get_mutation_membership(session, actor, classroom_id)
     if actor_membership.role != ClassroomRole.OWNER:
         raise _forbidden()
     target = session.scalar(
@@ -146,7 +162,7 @@ def update_member(
 def create_invite(
     session: Session, actor: User, classroom_id: UUID, expires_in_hours: int, max_uses: int
 ) -> tuple[str, ClassroomInvite]:
-    _, _, membership = get_member_classroom(session, actor, classroom_id)
+    membership = _get_mutation_membership(session, actor, classroom_id)
     if membership.role not in {ClassroomRole.OWNER, ClassroomRole.TEACHER}:
         raise _forbidden()
     code, code_digest = _new_invite_code()

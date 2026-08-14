@@ -32,6 +32,9 @@ COPY apps/api/requirements.lock ./requirements.lock
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.lock
 
+COPY apps/api/alembic.ini ./alembic.ini
+COPY apps/api/migrations ./migrations
+
 COPY --from=build /wheels /wheels
 RUN pip install --no-deps /wheels/*.whl \
     && chown -R tutor:tutor /app
@@ -43,4 +46,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=10 \
     CMD ["python", "-c", "import os, urllib.request; port = int(os.environ.get('API_PORT', '8000')); urllib.request.urlopen(f'http://127.0.0.1:{port}/api/v1/health', timeout=2)"]
 
-CMD ["sh", "-c", "exec uvicorn tutor_api.main:app --host \"$API_HOST\" --port \"$API_PORT\""]
+CMD ["sh", "-c", "python -m alembic -c alembic.ini upgrade head && exec uvicorn tutor_api.main:app --host \"$API_HOST\" --port \"$API_PORT\""]

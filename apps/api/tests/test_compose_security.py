@@ -38,6 +38,34 @@ def test_api_receives_only_scoped_object_storage_credentials() -> None:
     assert "MINIO_ROOT_" not in api
 
 
+def test_api_receives_non_secret_session_settings_from_the_environment() -> None:
+    environment = _environment_example()
+    compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    api = _service_block(compose, "api", "web")
+
+    assert environment["SESSION_COOKIE_NAME"] == "session"
+    assert environment["SESSION_TTL_SECONDS"] == "604800"
+    assert "SESSION_COOKIE_NAME:" in api
+    assert "SESSION_TTL_SECONDS:" in api
+
+
+def test_api_image_includes_and_applies_database_migrations_before_starting() -> None:
+    dockerfile = (REPOSITORY_ROOT / "apps" / "api" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY apps/api/migrations ./migrations" in dockerfile
+    assert "COPY apps/api/alembic.ini ./alembic.ini" in dockerfile
+    assert "python -m alembic -c alembic.ini upgrade head" in dockerfile
+
+
+def test_migrations_use_the_runtime_database_url_when_it_is_provided() -> None:
+    migration_environment = (
+        REPOSITORY_ROOT / "apps" / "api" / "migrations" / "env.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'os.environ.get("DATABASE_URL")' in migration_environment
+    assert 'config.set_main_option("sqlalchemy.url", database_url)' in migration_environment
+
+
 def test_minio_initializer_provisions_bucket_scoped_application_policy() -> None:
     compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
     initializer = _service_block(compose, "minio-init", "api")

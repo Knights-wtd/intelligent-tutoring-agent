@@ -295,3 +295,34 @@ def test_settings_do_not_expose_url_credentials_in_repr_or_errors() -> None:
     assert all(redis_password not in error for error in errors)
     assert all(database_password not in error for error in errors)
     assert all(object_password not in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "session_cookie_name",
+    [
+        pytest.param("", id="missing"),
+        pytest.param("contains space", id="space"),
+        pytest.param("session;unsafe", id="separator"),
+    ],
+)
+def test_settings_reject_invalid_session_cookie_names(session_cookie_name: str) -> None:
+    with pytest.raises(ValueError, match="SESSION_COOKIE_NAME"):
+        Settings(
+            **(
+                SAFE_PRODUCTION_SETTINGS
+                | {"session_cookie_name": session_cookie_name}
+            )
+        )
+
+
+@pytest.mark.parametrize("session_ttl_seconds", [3599, 2_592_001])
+def test_settings_reject_session_ttl_outside_supported_range(
+    session_ttl_seconds: int,
+) -> None:
+    with pytest.raises(ValueError, match="SESSION_TTL_SECONDS"):
+        Settings(
+            **(
+                SAFE_PRODUCTION_SETTINGS
+                | {"session_ttl_seconds": session_ttl_seconds}
+            )
+        )

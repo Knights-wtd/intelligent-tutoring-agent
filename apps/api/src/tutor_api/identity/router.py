@@ -3,7 +3,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -22,10 +22,6 @@ from tutor_api.identity.schemas import (
 from tutor_api.spaces.models import Space, SpaceKind
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
-_SESSION_COOKIE_NAME = "session"
-_SESSION_LIFETIME = timedelta(days=7)
-
-
 def _session_factory(request: Request):
     factory = request.app.state.session_factory
     if factory is None:
@@ -34,24 +30,25 @@ def _session_factory(request: Request):
 
 
 def _set_session_cookie(response: Response, request: Request, token: str) -> None:
+    settings = request.app.state.settings
     response.set_cookie(
-        key=_SESSION_COOKIE_NAME,
+        key=settings.session_cookie_name,
         value=token,
         httponly=True,
         samesite="lax",
-        secure=request.app.state.settings.app_env == "production",
-        max_age=int(_SESSION_LIFETIME.total_seconds()),
+        secure=settings.app_env == "production",
+        max_age=settings.session_ttl_seconds,
         path="/",
     )
 
 
-def _create_session(user_id, session) -> str:
+def _create_session(user_id, session, session_ttl_seconds: int) -> str:
     token = secrets.token_urlsafe(32)
     session.add(
         UserSession(
             user_id=user_id,
             token_digest=hashlib.sha256(token.encode()).hexdigest(),
-            expires_at=datetime.now(UTC) + _SESSION_LIFETIME,
+            expires_at=datetime.now(UTC) + timedelta(seconds=session_ttl_seconds),
         )
     )
     return token
@@ -62,8 +59,9 @@ def _unauthorized() -> HTTPException:
 
 
 def get_current_user(
-    request: Request, session_token: str | None = Cookie(default=None, alias=_SESSION_COOKIE_NAME)
+    request: Request,
 ) -> User:
+    session_token = request.cookies.get(request.app.state.settings.session_cookie_name)
     if not session_token:
         raise _unauthorized()
     digest = hashlib.sha256(session_token.encode()).hexdigest()
@@ -104,7 +102,9 @@ def register(
             personal_space = Space(owner_id=user.id, kind=SpaceKind.PERSONAL, name="我的空间")
             session.add(personal_space)
             session.flush()
-            token = _create_session(user.id, session)
+            token = _create_session(
+                user.id, session, request.app.state.settings.session_ttl_seconds
+            )
             result = RegistrationResponse(
                 user=UserSummary(id=user.id, email=user.email, username=user.username),
                 personal_space=SpaceSummary(
@@ -125,7 +125,7 @@ def login(payload: LoginRequest, request: Request, response: Response) -> LoginR
         user = session.scalar(select(User).where(User.email == payload.email))
         if user is None or not verify_password(payload.password, user.password_hash):
             raise _unauthorized()
-        token = _create_session(user.id, session)
+        token = _create_session(user.id, session, request.app.state.settings.session_ttl_seconds)
         result = LoginResponse(
             user=UserSummary(id=user.id, email=user.email, username=user.username)
         )
@@ -161,8 +161,9 @@ def me(request: Request, current_user: CurrentUser) -> CurrentUserResponse:
 def logout(
     request: Request,
     response: Response,
-    session_token: str | None = Cookie(default=None, alias=_SESSION_COOKIE_NAME),
 ) -> None:
+    settings = request.app.state.settings
+    session_token = request.cookies.get(settings.session_cookie_name)
     if session_token:
         digest = hashlib.sha256(session_token.encode()).hexdigest()
         with session_scope(_session_factory(request)) as session:
@@ -171,4 +172,9 @@ def logout(
             )
             if user_session is not None and user_session.revoked_at is None:
                 user_session.revoked_at = datetime.now(UTC)
-    response.delete_cookie(key=_SESSION_COOKIE_NAME, httponly=True, samesite="lax", path="/")
+    response.delete_cookie(
+        key=settings.session_cookie_name,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )

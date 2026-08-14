@@ -142,7 +142,7 @@ git commit -m "feat: add identity and classroom schema"
 
 ### Task 3: Implement registration, opaque sessions, and logout
 
-**Status:** in_progress
+**Status:** complete
 
 **Files:**
 - Create: `apps/api/src/tutor_api/identity/{schemas.py,repository.py,service.py,router.py}`
@@ -197,6 +197,8 @@ git commit -m "feat: add revocable cookie authentication"
 
 ### Task 4: Expose personal spaces and enforce classroom roles
 
+**Status:** complete
+
 **Files:**
 - Create: `apps/api/src/tutor_api/spaces/{schemas.py,service.py,router.py}`, `apps/api/src/tutor_api/classrooms/{schemas.py,service.py,router.py}`
 - Modify: `apps/api/src/tutor_api/main.py`
@@ -246,6 +248,8 @@ git commit -m "feat: add personal spaces and classroom permissions"
 ```
 
 ### Task 5: Connect the C3 shell to authenticated space summaries
+
+**Status:** complete
 
 **Files:**
 - Create: `apps/web/src/components/auth/{auth-form.tsx,auth-form.test.tsx}`, `apps/web/src/lib/api.ts`
@@ -301,6 +305,8 @@ git commit -m "feat: connect workspace to authenticated spaces"
 ```
 
 ### Task 6: Verify migrations, API behavior, browser flow, and documentation
+
+**Status:** complete
 
 **Files:**
 - Modify: `README.md`, `.env.example`, `.github/workflows/quality.yml`

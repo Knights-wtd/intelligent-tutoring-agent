@@ -47,7 +47,7 @@ Phase 4：基础平台实现
 ### Phase 4：基础平台实现
 
 - [x] 建立前端、后端、数据库、任务队列和对象存储抽象
-- [ ] 实现注册登录、用户隔离、个人空间和班级权限
+- [x] 实现注册登录、用户隔离、个人空间和班级权限
 - [ ] 实现管理员模型配置、用户模型选择、钱包和流水
 - **Status:** in_progress
 
@@ -113,6 +113,10 @@ Phase 4：基础平台实现
 | SQLite 架构测试未触发个人空间部分唯一索引 | 1 | 发现 SQLAlchemy 默认保存枚举名称；统一改为保存小写枚举值以匹配索引谓词 |
 | 迁移文件 `compileall` 因现有 `__pycache__` 权限受限失败 | 1 | 改用不写入字节码缓存的 AST 语法解析验证 |
 | 从仓库根目录运行 Alembic 时找不到相对 `migrations` 路径 | 1 | 将迁移路径改为基于 Alembic 配置文件位置的 `%(here)s/migrations` |
+| FastAPI 测试客户端写入 SQLite 内存库时提示 `no such table: users` | 1 | 根因是跨线程新连接不共享内存库；测试模式 SQLite 改用 `StaticPool` 和 `check_same_thread=False` |
+| 隔离 Docker 验收的 MinIO 默认端口与已有服务冲突 | 2 | 为 Compose 的 MinIO 映射增加可配置主机端口，验收环境改用独立高位端口 |
+| Docker 容器的 Alembic 使用硬编码连接串导致迁移认证失败 | 1 | 迁移环境优先读取运行时 `DATABASE_URL`，并以容器迁移和真实 API 验收复核 |
+| 工作区覆盖率与前端构建缓存写入受限 | 2 | 覆盖率输出改到临时目录；前端生产构建在获授权的正常权限上下文中完成 |
 
 ## Notes
 

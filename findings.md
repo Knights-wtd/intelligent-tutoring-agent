@@ -158,6 +158,17 @@
 - 本地 ZIP 确认是完整源码归档（7,151 个条目）且带 Apache-2.0 许可文件；后续若拟直接复用任何文件，必须先逐文件核对许可、依赖许可和 NOTICE。当前阶段不引入其代码。
 - 本机已安装并运行过 Obsidian；C3 工作台继续保持与其一致的“空间切换 → 当前空间内容 → 主工作区”信息层级，但不依赖 Obsidian 客户端或其本地数据。
 
+## Skill Discovery Review（2026-08-14）
+
+- 应用户请求检索了 `fastapi sqlalchemy testing` 技能。候选中安装量最高的是 `bobmatnyc/claude-mpm-skills@sqlalchemy-orm`（883 次）和 `sickn33/agentic-awesome-skills@python-fastapi-development`（501 次）；前者来源仓库规模较小，后者虽有约 43.9k GitHub stars，但属于广泛技能目录而非针对当前问题的窄专用方案。
+- 当前环境已具备高安装量的 TDD 与系统化排错技能，足以处理本阶段问题，因此不额外安装第三方技能，避免不必要地扩展可信执行面。
+
+## Identity and Classroom Review（2026-08-14）
+
+- 独立审查确认：邀请码仅在班级创建响应中明文返回一次，数据库只保存 SHA-256 摘要；所有者不可被降级或移除；非成员读取班级仍返回 404。
+- 审查发现写操作的状态码边界缺陷：非成员在已存在班级上变更成员或创建邀请码会因复用读取授权逻辑而得到 404，违反“已认证但未授权的变更返回 403”的约定。已先添加学生与非成员边界测试，再把写操作授权改为先辨认班级存在性、后以 403 拒绝非成员；读取逻辑保持 404。
+- SQLite 的 `SELECT ... FOR UPDATE` 不具备 PostgreSQL 等价行锁行为，因此邀请码并发消费必须在最终 Docker/PostgreSQL 验收中使用独立数据库连接验证；不能以 SQLite 串行测试替代。
+
 ## Resources
 
 - DeepTutor 官方仓库：https://github.com/HKUDS/DeepTutor

@@ -47,6 +47,9 @@ jobs:
       - name: Lint API
         run: python -m ruff check src tests
 
+      - name: Validate Alembic migrations
+        run: python -m alembic -c alembic.ini upgrade head --sql
+
       - name: Test API with coverage
         run: python -m pytest --cov=tutor_api --cov-report=term-missing --cov-fail-under=90
 

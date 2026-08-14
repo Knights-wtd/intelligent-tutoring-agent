@@ -183,3 +183,49 @@ def test_teacher_cannot_change_roles_but_can_create_bounded_invites() -> None:
     assert invite.json()["code"]
     assert invalid.status_code == 422
     engine.dispose()
+
+
+def test_student_cannot_change_members_or_create_invites() -> None:
+    owner, engine = make_client()
+    register(owner, "owner")
+    classroom = create_classroom(owner)
+    student = TestClient(owner.app)
+    student_info = register(student, "student")["user"]
+    assert student.post(
+        "/api/v1/classrooms/join", json={"code": classroom["invite_code"]}
+    ).status_code == 200
+
+    role_change = student.patch(
+        f"/api/v1/classrooms/{classroom['id']}/members/{student_info['id']}",
+        json={"role": "teacher"},
+    )
+    invite = student.post(
+        f"/api/v1/classrooms/{classroom['id']}/invites",
+        json={"expires_in_hours": 24, "max_uses": 1},
+    )
+
+    assert role_change.status_code == 403
+    assert invite.status_code == 403
+    engine.dispose()
+
+
+def test_outsider_mutations_are_forbidden_without_exposing_classroom_reads() -> None:
+    owner, engine = make_client()
+    register(owner, "owner")
+    classroom = create_classroom(owner)
+    outsider = TestClient(owner.app)
+    outsider_info = register(outsider, "outsider")["user"]
+
+    role_change = outsider.patch(
+        f"/api/v1/classrooms/{classroom['id']}/members/{outsider_info['id']}",
+        json={"role": "teacher"},
+    )
+    invite = outsider.post(
+        f"/api/v1/classrooms/{classroom['id']}/invites",
+        json={"expires_in_hours": 24, "max_uses": 1},
+    )
+
+    assert outsider.get(f"/api/v1/classrooms/{classroom['id']}").status_code == 404
+    assert role_change.status_code == 403
+    assert invite.status_code == 403
+    engine.dispose()
