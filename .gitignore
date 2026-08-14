@@ -22,3 +22,8 @@ storage/
 .superpowers/brainstorm/*/state/
 .superpowers/references/
 .worktrees/
+
+apps/api/.pytest_cache/
+apps/api/.ruff_cache/
+apps/web/coverage/
+apps/web/.next/
