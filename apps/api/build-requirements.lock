@@ -1,0 +1,7 @@
+# Exact PEP 517 build environment for the application wheel.
+hatchling==1.32.0
+packaging==26.3
+pathspec==1.1.1
+pluggy==1.6.0
+tomlkit==0.15.1
+trove-classifiers==2026.6.1.19
