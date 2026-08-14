@@ -48,7 +48,7 @@ class Settings(BaseSettings):
             or parsed.path != "/"
             or parsed.query is not None
             or parsed.fragment is not None
-            or host == "*"
+            or "*" in host
             or value.casefold() not in {origin.casefold() for origin in accepted_origins}
         ):
             raise ValueError(error_message)

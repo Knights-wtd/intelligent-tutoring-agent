@@ -14,6 +14,8 @@ from tutor_api.core.config import Settings
         pytest.param("https://example.com#fragment", id="fragment"),
         pytest.param("https://%zz", id="malformed-percent-escape"),
         pytest.param("https://example\\evil.com", id="backslash"),
+        pytest.param("https://*.example.com", id="wildcard-subdomain"),
+        pytest.param("https://example.*", id="wildcard-top-level-domain"),
     ],
 )
 def test_settings_rejects_unsafe_web_origins(web_origin: str) -> None:
