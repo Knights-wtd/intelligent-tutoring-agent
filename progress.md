@@ -1,5 +1,16 @@
 # Progress Log
 
+## Session: 2026-08-14 · Platform Foundation
+
+- **Status:** in_progress
+- Actions taken:
+  - 用户授权开始完成项目，并同意按既定隔离开发流程执行。
+  - 创建 `.worktrees/platform-foundation`，分支为 `feature/platform-foundation`。
+  - Docker Desktop 已验证：Client/Server 29.7.2，Compose v5.3.1。
+  - 开始执行平台基础骨架详细计划，采用测试先行和逐任务双重审查。
+  - 完成 monorepo 配置、非秘密环境变量契约和构建缓存忽略规则；规格与代码质量复核均通过。
+  - 控制器首次提交 worktree 进度记录时 `.git/worktrees` 写入被沙箱拒绝，改为经授权执行 Git 元数据写入。
+
 ## Session: 2026-08-13
 
 ### Phase 1：需求发现与产品边界
