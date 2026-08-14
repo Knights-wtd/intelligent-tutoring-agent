@@ -127,11 +127,22 @@ class Settings(BaseSettings):
             or _is_local_host(object_endpoint.hostname, {"minio"})
         ):
             errors.append("OBJECT_STORAGE_ENDPOINT must use a non-local HTTP(S) endpoint")
-        if self.object_storage_access_key.casefold() in _DEVELOPMENT_OBJECT_ACCESS_KEYS:
+        object_access_key = self.object_storage_access_key
+        trimmed_object_access_key = object_access_key.strip()
+        if object_access_key != trimmed_object_access_key or len(trimmed_object_access_key) < 3:
+            errors.append(
+                "OBJECT_STORAGE_ACCESS_KEY must be trimmed and at least 3 characters"
+            )
+        if trimmed_object_access_key.casefold() in _DEVELOPMENT_OBJECT_ACCESS_KEYS:
             errors.append("OBJECT_STORAGE_ACCESS_KEY must be replaced")
+        object_secret_key = self.object_storage_secret_key.get_secret_value()
+        trimmed_object_secret_key = object_secret_key.strip()
+        if object_secret_key != trimmed_object_secret_key or len(trimmed_object_secret_key) < 8:
+            errors.append(
+                "OBJECT_STORAGE_SECRET_KEY must be trimmed and at least 8 characters"
+            )
         if (
-            self.object_storage_secret_key.get_secret_value().casefold()
-            in _DEVELOPMENT_OBJECT_SECRETS
+            trimmed_object_secret_key.casefold() in _DEVELOPMENT_OBJECT_SECRETS
         ):
             errors.append("OBJECT_STORAGE_SECRET_KEY must be replaced")
         if self.web_origin.startswith("http://"):

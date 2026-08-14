@@ -170,6 +170,32 @@ def test_production_rejects_development_object_access_keys(
 
 
 @pytest.mark.parametrize(
+    "object_storage_access_key",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace-only"),
+        pytest.param("ab", id="too-short"),
+        pytest.param(" abc", id="leading-whitespace"),
+        pytest.param("abc ", id="trailing-whitespace"),
+    ],
+)
+def test_production_rejects_invalid_object_access_key_lengths(
+    object_storage_access_key: str,
+) -> None:
+    settings = Settings(
+        **(
+            SAFE_PRODUCTION_SETTINGS
+            | {"object_storage_access_key": object_storage_access_key}
+        )
+    )
+
+    assert (
+        "OBJECT_STORAGE_ACCESS_KEY must be trimmed and at least 3 characters"
+        in settings.production_errors()
+    )
+
+
+@pytest.mark.parametrize(
     "object_storage_secret_key",
     [
         "replace-for-non-local-use",
@@ -191,6 +217,47 @@ def test_production_rejects_placeholder_object_secrets(
     assert "OBJECT_STORAGE_SECRET_KEY must be replaced" in errors
     assert object_storage_secret_key not in repr(settings)
     assert all(object_storage_secret_key not in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "object_storage_secret_key",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("        ", id="whitespace-only"),
+        pytest.param("1234567", id="too-short"),
+        pytest.param(" 12345678", id="leading-whitespace"),
+        pytest.param("12345678 ", id="trailing-whitespace"),
+    ],
+)
+def test_production_rejects_invalid_object_secret_lengths(
+    object_storage_secret_key: str,
+) -> None:
+    settings = Settings(
+        **(
+            SAFE_PRODUCTION_SETTINGS
+            | {"object_storage_secret_key": object_storage_secret_key}
+        )
+    )
+
+    errors = settings.production_errors()
+    assert "OBJECT_STORAGE_SECRET_KEY must be trimmed and at least 8 characters" in errors
+    if object_storage_secret_key:
+        assert object_storage_secret_key not in repr(settings)
+        assert all(object_storage_secret_key not in error for error in errors)
+
+
+def test_production_accepts_minimum_length_object_credentials() -> None:
+    settings = Settings(
+        **(
+            SAFE_PRODUCTION_SETTINGS
+            | {
+                "object_storage_access_key": "abc",
+                "object_storage_secret_key": "12345678",
+            }
+        )
+    )
+
+    assert settings.production_errors() == []
 
 
 def test_production_rejects_http_web_origin_one_fallback_at_a_time() -> None:
