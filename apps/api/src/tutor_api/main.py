@@ -1,5 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.core.config import Settings, get_settings
@@ -16,6 +19,29 @@ def create_app(
     app = FastAPI(title="Textbook Tutor API", version="0.1.0")
     app.state.settings = active_settings
     app.state.session_factory = session_factory
+
+    @app.exception_handler(RequestValidationError)
+    async def redact_validation_passwords(
+        request: Request, error: RequestValidationError
+    ) -> JSONResponse:
+        del request
+        errors = []
+        for field_error in error.errors():
+            location = field_error.get("loc", ())
+            if any(
+                isinstance(part, str) and "password" in part.casefold() for part in location
+            ):
+                errors.append(
+                    {
+                        key: value
+                        for key, value in field_error.items()
+                        if key not in {"input", "ctx"}
+                    }
+                )
+            else:
+                errors.append(field_error)
+        return JSONResponse(status_code=422, content=jsonable_encoder({"detail": errors}))
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[active_settings.web_origin],

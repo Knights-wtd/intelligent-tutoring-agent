@@ -66,7 +66,10 @@ def test_me_returns_the_current_user_from_a_valid_session() -> None:
     response = client.get("/api/v1/auth/me")
 
     assert response.status_code == 200
-    assert response.json() == {"user": registered.json()["user"]}
+    assert response.json() == {
+        "user": registered.json()["user"],
+        "personal_space": registered.json()["personal_space"],
+    }
     engine.dispose()
 
 
@@ -99,6 +102,7 @@ def test_registration_normalizes_email_and_rejects_duplicates_and_invalid_input(
     assert first.json()["user"]["email"] == "learner@example.com"
     assert duplicate.status_code == 409
     assert invalid.status_code == 422
+    assert "too-short" not in invalid.text
     engine.dispose()
 
 

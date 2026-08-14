@@ -61,3 +61,7 @@ class RegistrationResponse(BaseModel):
 
 class LoginResponse(BaseModel):
     user: UserSummary
+
+
+class CurrentUserResponse(LoginResponse):
+    personal_space: SpaceSummary

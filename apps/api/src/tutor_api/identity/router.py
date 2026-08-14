@@ -11,6 +11,7 @@ from tutor_api.core.database import session_scope
 from tutor_api.core.security import hash_password, verify_password
 from tutor_api.identity.models import User, UserSession
 from tutor_api.identity.schemas import (
+    CurrentUserResponse,
     LoginRequest,
     LoginResponse,
     RegistrationRequest,
@@ -132,12 +133,27 @@ def login(payload: LoginRequest, request: Request, response: Response) -> LoginR
     return result
 
 
-@router.get("/me", response_model=LoginResponse)
-def me(current_user: CurrentUser) -> LoginResponse:
-    return LoginResponse(
+@router.get("/me", response_model=CurrentUserResponse)
+def me(request: Request, current_user: CurrentUser) -> CurrentUserResponse:
+    with session_scope(_session_factory(request)) as session:
+        personal_space = session.scalar(
+            select(Space).where(
+                Space.owner_id == current_user.id,
+                Space.kind == SpaceKind.PERSONAL,
+            )
+        )
+        if personal_space is None:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        personal_space_summary = SpaceSummary(
+            id=personal_space.id,
+            kind=personal_space.kind.value,
+            name=personal_space.name,
+        )
+    return CurrentUserResponse(
         user=UserSummary(
             id=current_user.id, email=current_user.email, username=current_user.username
-        )
+        ),
+        personal_space=personal_space_summary,
     )
 
 
