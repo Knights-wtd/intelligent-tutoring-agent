@@ -13,6 +13,76 @@ SAFE_PRODUCTION_SETTINGS = {
 }
 
 
+def test_settings_parse_non_secret_provider_profiles() -> None:
+    settings = Settings(
+        provider_profiles_json=(
+            '[{"id":"openai-gpt-4o-mini","provider":"openai","model":"gpt-4o-mini",'
+            '"display_name":"OpenAI GPT-4o mini","supports_usage":true,'
+            '"enabled_by_default":true}]'
+        )
+    )
+
+    assert settings.provider_profiles[0].id == "openai-gpt-4o-mini"
+    assert settings.provider_profiles[0].provider == "openai"
+    assert settings.provider_profiles[0].model == "gpt-4o-mini"
+    assert settings.provider_profiles[0].display_name == "OpenAI GPT-4o mini"
+    assert settings.provider_profiles[0].supports_usage is True
+    assert settings.provider_profiles[0].enabled_by_default is True
+
+
+@pytest.mark.parametrize(
+    "provider_profiles_json",
+    [
+        pytest.param("not-json", id="invalid-json"),
+        pytest.param(
+            '[{"id":"duplicate","provider":"openai","model":"gpt-4o-mini",'
+            '"display_name":"First","supports_usage":true,"enabled_by_default":true},'
+            '{"id":"duplicate","provider":"anthropic","model":"claude-haiku",'
+            '"display_name":"Second","supports_usage":false,"enabled_by_default":false}]',
+            id="duplicate-ids",
+        ),
+        pytest.param(
+            '[{"id":" ","provider":"openai","model":"gpt-4o-mini",'
+            '"display_name":"GPT-4o mini","supports_usage":true,'
+            '"enabled_by_default":true}]',
+            id="blank-id",
+        ),
+    ],
+)
+def test_settings_reject_invalid_provider_profiles(
+    provider_profiles_json: str,
+) -> None:
+    with pytest.raises(ValueError, match="PROVIDER_PROFILES_JSON|provider profile fields"):
+        Settings(provider_profiles_json=provider_profiles_json)
+
+
+def test_settings_normalizes_platform_admin_emails() -> None:
+    settings = Settings(
+        platform_admin_emails=" Admin@Example.com, admin@example.com , owner@example.com "
+    )
+
+    assert settings.platform_admin_emails == ("admin@example.com", "owner@example.com")
+
+
+@pytest.mark.parametrize("platform_admin_emails", ["not-an-email", "admin@example.com, "])
+def test_settings_reject_invalid_platform_admin_emails(platform_admin_emails: str) -> None:
+    with pytest.raises(ValueError, match="PLATFORM_ADMIN_EMAILS"):
+        Settings(platform_admin_emails=platform_admin_emails)
+
+
+def test_settings_repr_contains_no_provider_api_key_or_base_url() -> None:
+    settings = Settings(
+        provider_profiles_json=(
+            '[{"id":"openai-gpt-4o-mini","provider":"openai","model":"gpt-4o-mini",'
+            '"display_name":"OpenAI GPT-4o mini","supports_usage":true,'
+            '"enabled_by_default":true}]'
+        )
+    )
+
+    assert "api_key" not in repr(settings).casefold()
+    assert "base_url" not in repr(settings).casefold()
+
+
 @pytest.mark.parametrize(
     "web_origin",
     [

@@ -49,6 +49,24 @@ def test_api_receives_non_secret_session_settings_from_the_environment() -> None
     assert "SESSION_TTL_SECONDS:" in api
 
 
+def test_api_receives_only_non_secret_provider_runtime_configuration() -> None:
+    environment = _environment_example()
+    compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    api = _service_block(compose, "api", "web")
+    web = _service_block(compose, "web", "volumes")
+
+    assert '"id":"openai-gpt-4o-mini"' in environment["PROVIDER_PROFILES_JSON"]
+    assert environment["PLATFORM_ADMIN_EMAILS"] == "admin@example.com"
+    assert environment["OPENAI_API_KEY"] == ""
+    assert environment["ANTHROPIC_API_KEY"] == ""
+    assert "PROVIDER_PROFILES_JSON:" in api
+    assert "PLATFORM_ADMIN_EMAILS:" in api
+    assert "API_KEY" not in api
+    assert "PROVIDER_BASE_URL" not in api
+    assert "PROVIDER_PROFILES_JSON" not in web
+    assert "PLATFORM_ADMIN_EMAILS" not in web
+
+
 def test_api_image_includes_and_applies_database_migrations_before_starting() -> None:
     dockerfile = (REPOSITORY_ROOT / "apps" / "api" / "Dockerfile").read_text(encoding="utf-8")
 

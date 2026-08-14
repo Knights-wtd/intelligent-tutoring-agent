@@ -1,11 +1,22 @@
+import json
 import re
 from functools import lru_cache
 from ipaddress import ip_address
-from typing import Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import SplitResult, urlsplit
 
-from pydantic import Field, HttpUrl, SecretStr, TypeAdapter, ValidationError, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    SecretStr,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 _POSTGRESQL_SCHEMES = {"postgres", "postgresql", "postgresql+psycopg"}
@@ -18,6 +29,27 @@ _DEVELOPMENT_OBJECT_SECRETS = {
 }
 _INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _COOKIE_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_EMAIL_ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class ProviderProfileConfig(BaseModel):
+    """A non-secret model profile exposed by the server runtime configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    provider: str
+    model: str
+    display_name: str
+    supports_usage: bool
+    enabled_by_default: bool
+
+    @field_validator("id", "provider", "model", "display_name")
+    @classmethod
+    def validate_non_blank_profile_fields(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("provider profile fields must not be blank")
+        return value
 
 
 def _parse_absolute_url(value: str) -> SplitResult | None:
@@ -51,7 +83,7 @@ def _is_local_host(host: str, development_names: set[str]) -> bool:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
     app_env: Literal["development", "test", "production"] = "development"
     api_host: str = "0.0.0.0"
@@ -65,6 +97,52 @@ class Settings(BaseSettings):
     object_storage_bucket: str = "textbook-assets"
     session_cookie_name: str = "session"
     session_ttl_seconds: int = 604800
+    provider_profiles: Annotated[tuple[ProviderProfileConfig, ...], NoDecode] = Field(
+        default=(),
+        validation_alias=AliasChoices("PROVIDER_PROFILES_JSON", "provider_profiles_json"),
+        repr=False,
+    )
+    platform_admin_emails: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=(), validation_alias="PLATFORM_ADMIN_EMAILS"
+    )
+
+    @field_validator("provider_profiles", mode="before")
+    @classmethod
+    def parse_provider_profiles(cls, value: Any) -> Any:
+        if isinstance(value, tuple):
+            return value
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as error:
+                raise ValueError("PROVIDER_PROFILES_JSON must contain valid JSON") from error
+        if not isinstance(value, list):
+            raise ValueError("PROVIDER_PROFILES_JSON must be a JSON array")
+        return value
+
+    @field_validator("provider_profiles")
+    @classmethod
+    def validate_unique_provider_profile_ids(
+        cls, value: tuple[ProviderProfileConfig, ...]
+    ) -> tuple[ProviderProfileConfig, ...]:
+        ids = [profile.id for profile in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("PROVIDER_PROFILES_JSON must not contain duplicate profile IDs")
+        return value
+
+    @field_validator("platform_admin_emails", mode="before")
+    @classmethod
+    def parse_platform_admin_emails(cls, value: Any) -> tuple[str, ...]:
+        if isinstance(value, tuple):
+            return value
+        if not isinstance(value, str):
+            raise ValueError("PLATFORM_ADMIN_EMAILS must be a comma-separated string")
+        if not value:
+            return ()
+        emails = tuple(email.strip().casefold() for email in value.split(","))
+        if any(not email or not _EMAIL_ADDRESS.fullmatch(email) for email in emails):
+            raise ValueError("PLATFORM_ADMIN_EMAILS must contain valid email addresses")
+        return tuple(dict.fromkeys(emails))
 
     @field_validator("session_cookie_name")
     @classmethod
