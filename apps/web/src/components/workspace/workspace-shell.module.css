@@ -1,7 +1,8 @@
 .shell {
   display: flex;
   height: 100dvh;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
   background: #111318;
   color: #e8e9ef;
 }
@@ -16,6 +17,9 @@
   flex-direction: column;
   align-items: center;
   gap: 10px;
+  position: sticky;
+  left: 0;
+  z-index: 2;
 }
 
 .brand,
@@ -47,11 +51,15 @@
 }
 
 .brand:hover,
-.spaceButton:hover,
+.spaceButton:hover {
+  border-color: #877ae6;
+}
+
 .brand:focus-visible,
 .spaceButton:focus-visible {
   border-color: #877ae6;
-  outline: none;
+  outline: 2px solid #c3bcff;
+  outline-offset: 2px;
 }
 
 .visuallyHidden {
@@ -67,8 +75,8 @@
 }
 
 .panelGroup {
-  flex: 1;
-  min-width: 0;
+  flex: 1 0 1080px;
+  min-width: 1080px;
 }
 
 .separator {
@@ -220,6 +228,8 @@
 
 .answer {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   border: 1px solid #303540;
   border-radius: 12px;
   background: #20242c;

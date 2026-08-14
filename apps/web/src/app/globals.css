@@ -11,7 +11,7 @@ body {
 }
 
 body {
-  font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+  font-family: var(--font-geist-sans), "Microsoft YaHei", system-ui, sans-serif;
 }
 
 button,

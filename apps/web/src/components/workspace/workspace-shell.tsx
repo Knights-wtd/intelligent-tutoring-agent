@@ -73,14 +73,14 @@ export function WorkspaceShell() {
 
         <Panel id="center" minSize="30%">
           <section aria-label="知识工作区" className={styles.centerPane}>
-            <div className={styles.tabs} role="tablist" aria-label="知识内容视图">
-              <button className={styles.selectedTab} type="button" role="tab" aria-selected="true">
+            <div className={styles.tabs} aria-label="知识内容视图">
+              <button className={styles.selectedTab} type="button" aria-pressed="true">
                 知识图谱
               </button>
-              <button type="button" role="tab" aria-selected="false">
+              <button type="button" aria-pressed="false">
                 教材原页
               </button>
-              <button type="button" role="tab" aria-selected="false">
+              <button type="button" aria-pressed="false">
                 AI 笔记
               </button>
             </div>
