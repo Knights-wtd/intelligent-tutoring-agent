@@ -1,6 +1,6 @@
 # AI 教材家教平台
 
-这是当前平台基础里程碑的本地使用说明。当前版本已经具备 FastAPI 健康服务、Next.js C3 可调整大小工作区、PostgreSQL/pgvector、带密码认证的 Redis、MinIO、Docker 服务拓扑，以及自动化测试和 CI。账号、班级、计费和知识入库属于后续里程碑，当前版本尚未提供。
+这是当前平台基础里程碑的本地使用说明。当前版本已经具备 FastAPI 健康服务、Next.js 三栏可调整宽度的学习工作区、PostgreSQL/pgvector、带密码认证的 Redis、MinIO、Docker 服务拓扑，以及自动化测试和 CI。账号、班级、计费和知识入库属于后续里程碑，当前版本尚未提供。
 
 ## 使用 Docker 启动
 
@@ -19,7 +19,7 @@ Copy-Item .env.example .env
 - `REDIS_PASSWORD` 必须与 `REDIS_URL` 中的 Redis 密码一致。
 - `OBJECT_STORAGE_SECRET_KEY` 必须与 `MINIO_ROOT_PASSWORD` 完全相同。
 
-写入 `DATABASE_URL` 或 `REDIS_URL` 的密码必须是 URL 安全的；如果包含特殊字符，请先进行百分号编码。不要提交或分享真实密码；`.env` 已被 Git 忽略，只保留在本机。
+本地密码建议只使用英文字母、数字、下划线（`_`）和连字符（`-`）。这样可以避免 Docker Compose 变量插值和 URL 内密码编码产生不一致。不要在这里使用需要额外转义或百分号编码的任意特殊字符。不要提交或分享真实密码；`.env` 已被 Git 忽略，只保留在本机。
 
 ```powershell
 docker compose --env-file .env up --build -d
@@ -99,15 +99,38 @@ pnpm build:web
 
 ## 常见问题
 
-- Docker 命令无法连接：启动 Docker Desktop，等待其显示引擎已就绪，再重试。
-- 本地端口被占用：当前配置默认使用 `3000`、`8000`、`9000` 和 `9001`。停止占用端口的程序后重启；不要只改一个地址而忽略 `.env`、跨域来源和浏览器端 API 地址之间的对应关系。
-- 修改 `.env` 后没有生效：重新创建容器；涉及 `NEXT_PUBLIC_API_BASE_URL` 时还要重建 Web。
+### Docker 命令无法连接
+
+启动 Docker Desktop，等待其显示引擎已就绪，再重试。
+
+### 本地端口被占用
+
+当前配置默认使用 `3000`、`8000`、`9000` 和 `9001`。停止占用端口的程序后重启；不要只改一个地址而忽略 `.env`、跨域来源和浏览器端 API 地址之间的对应关系。
+
+### 一般环境变量或应用变更没有生效
+
+重新创建并构建容器；涉及 `NEXT_PUBLIC_API_BASE_URL` 时必须重建 Web。
 
 ```powershell
 docker compose --env-file .env up --build -d --force-recreate
 ```
 
-- 检查服务状态：先查看容器健康状态，再直接请求 API 健康端点。
+### 首次启动后修改了 PostgreSQL 密码
+
+已有 PostgreSQL 数据卷初始化完成后，修改 `.env` 中的 `POSTGRES_PASSWORD` 不会更改数据库中现有角色的密码。建议首次启动后不要再修改该值；如果误改，请恢复原来的 `.env` 值。
+
+只有在本机数据完全可以丢弃的测试环境中，才可以删除所有数据卷并重新初始化：
+
+> **警告：** 以下操作会永久删除本机由此 Compose 项目保存的 PostgreSQL、Redis 和 MinIO 数据，无法撤销。确认这些数据不再需要后才能执行。
+
+```powershell
+docker compose --env-file .env down --volumes
+docker compose --env-file .env up --build -d
+```
+
+### 检查服务状态
+
+先查看容器健康状态，再直接请求 API 健康端点。
 
 ```powershell
 docker compose --env-file .env ps
