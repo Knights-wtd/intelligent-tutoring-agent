@@ -53,7 +53,7 @@ The leftmost space rail is fixed. The content tree, center workspace, and AI tut
 - Create: `.env.example`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: Add the root pnpm scripts**
+- [x] **Step 1: Add the root pnpm scripts**
 
 Create `package.json`:
 
@@ -78,7 +78,7 @@ packages:
   - apps/web
 ```
 
-- [ ] **Step 2: Define every non-secret local setting**
+- [x] **Step 2: Define every non-secret local setting**
 
 Create `.env.example`:
 
@@ -107,7 +107,7 @@ apps/web/coverage/
 apps/web/.next/
 ```
 
-- [ ] **Step 3: Verify the configuration has no real provider secrets**
+- [x] **Step 3: Verify the configuration has no real provider secrets**
 
 Run:
 
@@ -117,7 +117,7 @@ rg -n "sk-|dashscope|deepseek.*key" .env.example
 
 Expected: no matches and exit code 1.
 
-- [ ] **Step 4: Commit the repository contract**
+- [x] **Step 4: Commit the repository contract**
 
 ```powershell
 git add package.json pnpm-workspace.yaml .env.example .gitignore
@@ -135,7 +135,7 @@ git commit -m "chore: define platform workspace contract"
 - Create: `apps/api/tests/test_config.py`
 - Create: `apps/api/tests/test_health.py`
 
-- [ ] **Step 1: Create the Python package metadata**
+- [x] **Step 1: Create the Python package metadata**
 
 Create `apps/api/pyproject.toml`:
 
@@ -182,7 +182,7 @@ select = ["E", "F", "I", "B", "UP"]
 
 Create empty `apps/api/src/tutor_api/__init__.py` and `apps/api/src/tutor_api/core/__init__.py`.
 
-- [ ] **Step 2: Write failing configuration tests**
+- [x] **Step 2: Write failing configuration tests**
 
 Create `apps/api/tests/test_config.py`:
 
@@ -214,7 +214,7 @@ Run:
 
 Expected: FAIL because `tutor_api.core.config` does not exist.
 
-- [ ] **Step 3: Implement validated settings**
+- [x] **Step 3: Implement validated settings**
 
 Create `apps/api/src/tutor_api/core/config.py`:
 
@@ -257,7 +257,7 @@ def get_settings() -> Settings:
 
 Run the configuration test again. Expected: 2 passed.
 
-- [ ] **Step 4: Write the failing health endpoint test**
+- [x] **Step 4: Write the failing health endpoint test**
 
 Create `apps/api/tests/test_health.py`:
 
@@ -284,7 +284,7 @@ Run:
 
 Expected: FAIL because `tutor_api.main` does not exist.
 
-- [ ] **Step 5: Implement the API factory and health route**
+- [x] **Step 5: Implement the API factory and health route**
 
 Create `apps/api/src/tutor_api/main.py`:
 
@@ -326,7 +326,7 @@ Run:
 
 Expected: 3 passed; Ruff reports no errors.
 
-- [ ] **Step 6: Commit the API slice**
+- [x] **Step 6: Commit the API slice**
 
 ```powershell
 git add apps/api
@@ -342,7 +342,7 @@ git commit -m "feat: add validated FastAPI foundation"
 - Modify: `apps/web/package.json`
 - Modify: `apps/web/src/app/page.tsx`
 
-- [ ] **Step 1: Generate the app using the current stable scaffold**
+- [x] **Step 1: Generate the app using the current stable scaffold**
 
 Run:
 
@@ -354,7 +354,7 @@ pnpm --dir apps/web add -D vitest jsdom @testing-library/react @testing-library/
 
 Expected: `apps/web/package.json`, `src/app`, and `pnpm-lock.yaml` exist; dependency installation succeeds.
 
-- [ ] **Step 2: Add deterministic test scripts**
+- [x] **Step 2: Add deterministic test scripts**
 
 Add these keys to `apps/web/package.json` under `scripts`:
 
@@ -397,7 +397,7 @@ class TestResizeObserver {
 globalThis.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
 ```
 
-- [ ] **Step 3: Replace the generated landing page with an explicit temporary entry**
+- [x] **Step 3: Replace the generated landing page with an explicit temporary entry**
 
 Replace `apps/web/src/app/page.tsx` with:
 
@@ -416,7 +416,7 @@ pnpm --dir apps/web build
 
 Expected: both commands succeed.
 
-- [ ] **Step 4: Commit the web scaffold**
+- [x] **Step 4: Commit the web scaffold**
 
 ```powershell
 git add apps/web pnpm-lock.yaml package.json pnpm-workspace.yaml
@@ -432,7 +432,7 @@ git commit -m "feat: scaffold tested Next.js workspace"
 - Modify: `apps/web/src/app/page.tsx`
 - Modify: `apps/web/src/app/globals.css`
 
-- [ ] **Step 1: Write the failing structural test**
+- [x] **Step 1: Write the failing structural test**
 
 Create `apps/web/src/components/workspace/workspace-shell.test.tsx`:
 
@@ -473,7 +473,7 @@ pnpm --dir apps/web test -- workspace-shell.test.tsx
 
 Expected: FAIL because `workspace-shell.tsx` does not exist.
 
-- [ ] **Step 2: Implement the four-column shell**
+- [x] **Step 2: Implement the four-column shell**
 
 Create `apps/web/src/components/workspace/workspace-shell.tsx`:
 
@@ -524,7 +524,7 @@ export function WorkspaceShell() {
 }
 ```
 
-- [ ] **Step 3: Apply the approved dark Obsidian-like visual hierarchy**
+- [x] **Step 3: Apply the approved dark Obsidian-like visual hierarchy**
 
 Create `apps/web/src/components/workspace/workspace-shell.module.css`:
 
@@ -557,7 +557,7 @@ Create `apps/web/src/components/workspace/workspace-shell.module.css`:
 @media (max-width: 900px) { .spaceRail { width: 54px; flex-basis: 54px; } }
 ```
 
-- [ ] **Step 4: Make the workspace the application entry**
+- [x] **Step 4: Make the workspace the application entry**
 
 Replace `apps/web/src/app/page.tsx` with:
 
@@ -590,7 +590,7 @@ pnpm --dir apps/web build
 
 Expected: 2 tests pass; lint and production build succeed.
 
-- [ ] **Step 5: Commit the C3 shell**
+- [x] **Step 5: Commit the C3 shell**
 
 ```powershell
 git add apps/web/src
@@ -604,7 +604,7 @@ git commit -m "feat: add resizable C3 learning workspace"
 - Create: `apps/web/Dockerfile`
 - Create: `compose.yaml`
 
-- [ ] **Step 1: Create the API image**
+- [x] **Step 1: Create the API image**
 
 Create `apps/api/Dockerfile`:
 
@@ -619,7 +619,7 @@ EXPOSE 8000
 CMD ["uvicorn", "tutor_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-- [ ] **Step 2: Create the web image**
+- [x] **Step 2: Create the web image**
 
 Create `apps/web/Dockerfile`:
 
@@ -642,7 +642,7 @@ EXPOSE 3000
 CMD ["pnpm", "start"]
 ```
 
-- [ ] **Step 3: Define the local service graph**
+- [x] **Step 3: Define the local service graph**
 
 Create `compose.yaml`:
 
@@ -710,7 +710,7 @@ volumes:
   minio-data:
 ```
 
-- [ ] **Step 4: Validate according to actual Docker availability**
+- [x] **Step 4: Validate according to actual Docker availability**
 
 Run:
 
@@ -728,7 +728,7 @@ docker compose build api web
 
 Expected after installation: configuration validation and both builds succeed. Delete `.env` only if it contains no user-supplied values; otherwise leave it untouched and untracked.
 
-- [ ] **Step 5: Commit container definitions**
+- [x] **Step 5: Commit container definitions**
 
 ```powershell
 git add apps/api/Dockerfile apps/web/Dockerfile compose.yaml
@@ -740,7 +740,7 @@ git commit -m "chore: add local container topology"
 **Files:**
 - Create: `.github/workflows/quality.yml`
 
-- [ ] **Step 1: Create the workflow**
+- [x] **Step 1: Create the workflow**
 
 Create `.github/workflows/quality.yml`:
 
@@ -775,7 +775,7 @@ jobs:
       - run: pnpm --dir apps/web build
 ```
 
-- [ ] **Step 2: Run the same gates locally**
+- [x] **Step 2: Run the same gates locally**
 
 Run:
 
@@ -789,7 +789,7 @@ pnpm --dir apps/web build
 
 Expected: every command exits 0; API coverage is at least 90%.
 
-- [ ] **Step 3: Commit quality gates**
+- [x] **Step 3: Commit quality gates**
 
 ```powershell
 git add .github/workflows/quality.yml
@@ -801,7 +801,7 @@ git commit -m "ci: enforce API and web quality gates"
 **Files:**
 - Create: `README.md`
 
-- [ ] **Step 1: Write the local handoff**
+- [x] **Step 1: Write the local handoff**
 
 Create `README.md`:
 
@@ -839,7 +839,7 @@ docker compose up --build
 `.env` 只保存在本机。不要把真实 API Key 提交到 Git。
 ````
 
-- [ ] **Step 2: Check that user-facing documentation does not expose internal workflow noise**
+- [x] **Step 2: Check that user-facing documentation does not expose internal workflow noise**
 
 Run:
 
@@ -849,7 +849,7 @@ rg -n "Agent Loop|Embedding 步骤|OCR 步骤|API_KEY=" README.md apps/web/src
 
 Expected: no matches and exit code 1.
 
-- [ ] **Step 3: Commit the handoff**
+- [x] **Step 3: Commit the handoff**
 
 ```powershell
 git add README.md
@@ -861,7 +861,7 @@ git commit -m "docs: add local foundation startup guide"
 **Files:**
 - Modify only files required to fix failures discovered by the commands below.
 
-- [ ] **Step 1: Run the clean quality suite**
+- [x] **Step 1: Run the clean quality suite**
 
 ```powershell
 & 'apps\api\.venv\Scripts\python.exe' -m ruff check apps/api/src apps/api/tests
@@ -873,7 +873,7 @@ pnpm --dir apps/web build
 
 Expected: all checks pass.
 
-- [ ] **Step 2: Verify the API without Docker**
+- [x] **Step 2: Verify the API without Docker**
 
 Start the API in a background terminal:
 
@@ -889,7 +889,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v1/health
 
 Expected: `status` is `ok` and `service` is `textbook-tutor-api`. Stop the foreground API with Ctrl+C.
 
-- [ ] **Step 3: Verify the web workspace manually**
+- [x] **Step 3: Verify the web workspace manually**
 
 Run:
 
@@ -899,7 +899,7 @@ pnpm --dir apps/web dev
 
 Open `http://localhost:3000`. Expected: the far-left rail contains personal/class spaces; the second pane contains the current-space tree; both separators resize the tree, center, and tutor areas; no internal ingestion or Agent steps are shown. Stop the dev server with Ctrl+C.
 
-- [ ] **Step 4: Inspect repository state and commit only verified fixes**
+- [x] **Step 4: Inspect repository state and commit only verified fixes**
 
 ```powershell
 git status --short
@@ -917,4 +917,4 @@ If no fixes were needed, do not create an empty commit.
 
 ## Completion boundary
 
-This plan is complete only when API tests, web tests, lint, and web build pass; the local API health endpoint responds; and the approved C3 shell is visible and resizable. Docker build verification remains explicitly pending until Docker Desktop is installed and running. The next detailed plan adds opaque-session authentication, personal-space bootstrap, classroom membership, invitation codes, and server-enforced permissions on top of this verified foundation.
+This plan is complete: API tests, web tests, lint, production build, browser layout and resize checks, Docker image builds, isolated fresh-volume startup, service health checks, MinIO least-privilege checks, and API/Web responses all passed. The next detailed plan adds opaque-session authentication, personal-space bootstrap, classroom membership, invitation codes, and server-enforced permissions on top of this verified foundation.

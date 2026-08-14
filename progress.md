@@ -2,7 +2,7 @@
 
 ## Session: 2026-08-14 · Platform Foundation
 
-- **Status:** in_progress
+- **Status:** complete
 - Actions taken:
   - 用户授权开始完成项目，并同意按既定隔离开发流程执行。
   - 创建 `.worktrees/platform-foundation`，分支为 `feature/platform-foundation`。
@@ -22,6 +22,10 @@
   - 完成持续集成质量门禁：第三方构建组件锁定到不可变提交，Python 测试与检查依赖精确锁定，Runner 固定版本并禁用检出凭据持久化。
   - API 25 项测试通过、覆盖率 98.48%，Web 6 项测试、Lint 与生产构建通过；持续集成规格及质量复核均通过。
   - 完成本机启动与使用说明，覆盖 Docker/非 Docker 启动、质量检查、端口与配置排障、镜像维护及持久数据安全警告；规格与质量复核通过。
+  - 最终安全审查补齐生产环境失效保护：拒绝 SQLite、本地/未认证 Redis、本地对象存储、占位或空白凭据等开发回退配置。
+  - MinIO 管理员与应用身份完全分离；应用策略仅允许指定存储桶操作，重复初始化成功，应用身份无法执行管理员命令，API 不含管理员环境变量。
+  - 最新验收结果：API 65 项测试通过、覆盖率 96.64%；Web 6 项测试、Lint 与生产构建通过；隔离 Docker 项目全部服务健康，API 与 Web 均返回 200。
+  - 最终独立代码审查无 Critical/Important/Minor 阻断项，平台基础里程碑获准进入下一阶段。
 
 ## Session: 2026-08-13
 
@@ -114,13 +118,15 @@
 | 2026-08-14 | WSL 安装后 Docker 数据目录已出现，但主程序和 CLI 仍不存在 | 3 | 需要在当前用户账户下重新运行 Docker Desktop Installer；安装完成并启动引擎后再验证 |
 | 2026-08-14 | Docker CLI 已安装但沙箱内执行用户目录程序被拒绝访问 | 4 | 经用户授权在沙箱外使用实际安装路径验证，Client/Server 29.7.2、Compose v5.3.1 均正常 |
 | 2026-08-14 | 更新 Docker 验证记录时首次补丁上下文未匹配 | 1 | 读取实际行后缩小补丁上下文并完成更新 |
+| 2026-08-14 | Windows 权限上下文锁定 `.next` 与 Ruff/Pytest 缓存，导致构建或缓存写入被拒绝 | 2 | 只清理可再生前端构建目录，并以 `--no-cache`、`-p no:cacheprovider` 和临时覆盖率路径完成复验 |
+| 2026-08-14 | 删除旧测试数据卷的请求因无法证明数据为空而被安全策略拒绝 | 1 | 保留旧卷不动，停止旧容器并使用独立 Compose 项目和全新数据卷完成无损验收 |
 
 ## 5-Question Reboot Check
 
 | Question | Answer |
 |---|---|
-| Where am I? | Phase 2：架构与正式设计 |
-| Where am I going? | 完成设计文档、用户审核、实施计划、实现与验收 |
+| Where am I? | Phase 4：基础平台实现；平台基础里程碑已完成 |
+| Where am I going? | 实现注册登录、用户隔离、个人空间和班级权限 |
 | What's the goal? | 构建多用户、个人/班级知识库、可追溯答疑、长期记忆和按量计费的学习 Agent 平台 |
 | What have I learned? | 见 `findings.md` |
-| What have I done? | 完成需求确认、DeepTutor 调研、C3 界面确认和技术路线选择 |
+| What have I done? | 完成前后端骨架、C3 工作台、Docker 服务、最小权限存储、CI、使用说明与最终验收 |
