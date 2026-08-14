@@ -1,9 +1,10 @@
 from functools import lru_cache
 from typing import Literal
-from urllib.parse import urlsplit
 
-from pydantic import SecretStr, field_validator
+from pydantic import HttpUrl, SecretStr, TypeAdapter, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 
 
 class Settings(BaseSettings):
@@ -25,19 +26,26 @@ class Settings(BaseSettings):
     def validate_web_origin(cls, value: str) -> str:
         error_message = "WEB_ORIGIN must be a single absolute HTTP(S) origin"
         try:
-            parsed = urlsplit(value)
-            _ = parsed.port
-        except ValueError as error:
+            parsed = _HTTP_URL_ADAPTER.validate_python(value)
+        except ValidationError as error:
             raise ValueError(error_message) from error
+
+        host = parsed.host
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        canonical_origin = f"{parsed.scheme}://{host}"
+        canonical_origins = {canonical_origin}
+        if parsed.port is not None:
+            canonical_origins.add(f"{canonical_origin}:{parsed.port}")
+
         if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.hostname
-            or parsed.username is not None
+            parsed.username is not None
             or parsed.password is not None
-            or bool(parsed.path or parsed.query or parsed.fragment)
-            or value != value.strip()
-            or any(character.isspace() for character in value)
-            or "*" in parsed.netloc
+            or parsed.path != "/"
+            or parsed.query is not None
+            or parsed.fragment is not None
+            or host == "*"
+            or value.casefold() not in {origin.casefold() for origin in canonical_origins}
         ):
             raise ValueError(error_message)
         return value

@@ -12,6 +12,8 @@ from tutor_api.core.config import Settings
         pytest.param("https://example.com/path", id="path"),
         pytest.param("https://example.com?debug=true", id="query"),
         pytest.param("https://example.com#fragment", id="fragment"),
+        pytest.param("https://%zz", id="malformed-percent-escape"),
+        pytest.param("https://example\\evil.com", id="backslash"),
     ],
 )
 def test_settings_rejects_unsafe_web_origins(web_origin: str) -> None:
@@ -20,6 +22,20 @@ def test_settings_rejects_unsafe_web_origins(web_origin: str) -> None:
         match=r"WEB_ORIGIN must be a single absolute HTTP\(S\) origin",
     ):
         Settings(web_origin=web_origin)
+
+
+@pytest.mark.parametrize(
+    "web_origin",
+    [
+        "http://localhost:3000",
+        "https://example.com",
+        "https://example.com:8443",
+    ],
+)
+def test_settings_accepts_canonical_web_origins(web_origin: str) -> None:
+    settings = Settings(web_origin=web_origin)
+
+    assert settings.web_origin == web_origin
 
 
 def test_settings_reject_non_local_default_object_secret() -> None:
