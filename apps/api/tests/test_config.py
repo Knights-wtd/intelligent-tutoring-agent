@@ -25,17 +25,20 @@ def test_settings_rejects_unsafe_web_origins(web_origin: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "web_origin",
+    ("web_origin", "expected_origin"),
     [
-        "http://localhost:3000",
-        "https://example.com",
-        "https://example.com:8443",
+        ("http://localhost:3000", "http://localhost:3000"),
+        ("https://example.com", "https://example.com"),
+        ("HTTPS://EXAMPLE.COM", "https://example.com"),
+        ("https://example.com:443", "https://example.com"),
+        ("http://example.com:80", "http://example.com"),
+        ("https://example.com:8443", "https://example.com:8443"),
     ],
 )
-def test_settings_accepts_canonical_web_origins(web_origin: str) -> None:
+def test_settings_canonicalizes_web_origins(web_origin: str, expected_origin: str) -> None:
     settings = Settings(web_origin=web_origin)
 
-    assert settings.web_origin == web_origin
+    assert settings.web_origin == expected_origin
 
 
 def test_settings_reject_non_local_default_object_secret() -> None:

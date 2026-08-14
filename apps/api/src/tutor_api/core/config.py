@@ -33,10 +33,14 @@ class Settings(BaseSettings):
         host = parsed.host
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
-        canonical_origin = f"{parsed.scheme}://{host}"
-        canonical_origins = {canonical_origin}
-        if parsed.port is not None:
-            canonical_origins.add(f"{canonical_origin}:{parsed.port}")
+        origin_without_port = f"{parsed.scheme}://{host}"
+        default_port = 80 if parsed.scheme == "http" else 443
+        if parsed.port in {None, default_port}:
+            canonical_origin = origin_without_port
+            accepted_origins = {canonical_origin, f"{canonical_origin}:{default_port}"}
+        else:
+            canonical_origin = f"{origin_without_port}:{parsed.port}"
+            accepted_origins = {canonical_origin}
 
         if (
             parsed.username is not None
@@ -45,10 +49,10 @@ class Settings(BaseSettings):
             or parsed.query is not None
             or parsed.fragment is not None
             or host == "*"
-            or value.casefold() not in {origin.casefold() for origin in canonical_origins}
+            or value.casefold() not in {origin.casefold() for origin in accepted_origins}
         ):
             raise ValueError(error_message)
-        return value
+        return canonical_origin
 
     def production_errors(self) -> list[str]:
         if self.app_env != "production":

@@ -44,6 +44,19 @@ def test_cors_preflight_allows_exact_configured_origin() -> None:
     assert response.headers["access-control-allow-origin"] == settings.web_origin
 
 
+def test_cors_preflight_allows_canonicalized_configured_origin() -> None:
+    settings = Settings(web_origin="HTTPS://EXAMPLE.COM:443")
+    browser_origin = "https://example.com"
+
+    with TestClient(create_app(settings)) as client:
+        response = client.options(
+            "/api/v1/health",
+            headers=preflight_headers(browser_origin),
+        )
+
+    assert response.headers.get("access-control-allow-origin") == browser_origin
+
+
 def test_cors_preflight_does_not_allow_attacker_origin() -> None:
     settings = Settings(web_origin="https://tutor.example.com")
 
