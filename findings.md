@@ -122,6 +122,15 @@
 | 初版 C2 将个人/班级空间放在内容树中 | C3 改为最左栏空间切换，第二栏只显示空间内容 |
 | 用户最初希望 Tencent Memory 保存开发上下文 | 查明当前 Skill 仅适用于 OpenClaw后，用户改用文件规划 |
 
+## Local Environment Check（2026-08-14）
+
+- Node.js 已安装：v24.18.0。
+- pnpm 可用：v11.19.0。
+- 系统 Python 为 3.9.13，不作为本项目目标运行时；后端统一使用 Python 3.12 容器或后续安装的独立运行时。
+- Docker 和 uv 当前未安装。实施计划必须先完成 Docker Desktop/Compose 可用性检查；在此之前可以先生成代码和运行不依赖容器的前端检查，但不能宣称本机端到端环境完成。
+- Codex 工作区提供独立 Python 3.12.13，可用于 Docker 安装前的后端单元测试与开发；正式项目仍以 Python 3.12 和锁定依赖为准，不依赖系统 Anaconda Python 3.9。
+- `react-resizable-panels` 官方当前版本 4.x 使用 `Group`、`Panel`、`Separator`，并支持 `defaultLayout` 与键盘可访问分隔条；首个前端计划按该接口实现三块可拖动区域。
+
 ## Resources
 
 - DeepTutor 官方仓库：https://github.com/HKUDS/DeepTutor
@@ -130,6 +139,9 @@
 - 已确认 C3 原型：`E:/项目/知识库课本/.superpowers/brainstorm/platform-design/content/workspace-c3-space-navigation.html`
 - planning-with-files Skill：`C:/Users/asus/.agents/skills/planning-with-files/SKILL.md`
 - memory-tencentdb Skill：`C:/Users/asus/.codex/skills/memory-tencentdb/SKILL.md`
+- 正式设计：`E:/项目/知识库课本/docs/superpowers/specs/2026-08-14-textbook-agent-platform-design.md`
+- 实施路线图：`E:/项目/知识库课本/docs/superpowers/plans/2026-08-14-textbook-agent-platform-roadmap.md`
+- 首个详细计划：`E:/项目/知识库课本/docs/superpowers/plans/2026-08-14-platform-foundation-plan.md`
 
 ## Visual/Browser Findings
 

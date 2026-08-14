@@ -45,6 +45,12 @@
   - 提出错误恢复、测试、Docker 本机部署与首版验收标准，等待用户确认。
   - 用户确认错误处理、测试、部署和验收设计。
   - 将六部分确认内容整理为正式设计文档，并完成占位项、需求覆盖与章节完整性自检。
+  - 用户正式确认设计稿，Phase 2 完成并进入详细实施计划阶段。
+  - 检查本机开发环境：Node.js 与 pnpm 可用，Docker 与 uv 缺失，系统 Python 版本为 3.9.13。
+  - 确认 Codex 工作区自带 Python 3.12.13，可在 Docker 安装前支持后端开发和测试。
+  - 使用 writing-plans 将整体范围拆分为六个可独立验收的里程碑，并建立设计覆盖矩阵。
+  - 完成首个“平台基础骨架”详细实施计划，包含精确文件、测试先行步骤、命令、预期结果和小提交边界。
+  - 自检实施计划：无 TODO/TBD/泛化占位步骤，Markdown 围栏成对，前后端类型与路径一致；Docker 缺失被明确保留为外部前置条件。
 - Files created/modified:
   - `task_plan.md`
   - `findings.md`
@@ -55,6 +61,8 @@
   - `.superpowers/brainstorm/platform-design/content/agent-memory-v1.html`
   - `.superpowers/brainstorm/platform-design/content/billing-config-v1.html`
   - `docs/superpowers/specs/2026-08-14-textbook-agent-platform-design.md`
+  - `docs/superpowers/plans/2026-08-14-textbook-agent-platform-roadmap.md`
+  - `docs/superpowers/plans/2026-08-14-platform-foundation-plan.md`
 
 ## Test Results
 
