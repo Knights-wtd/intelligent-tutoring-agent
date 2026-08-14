@@ -53,6 +53,7 @@
   - 自检实施计划：无 TODO/TBD/泛化占位步骤，Markdown 围栏成对，前后端类型与路径一致；Docker 缺失被明确保留为外部前置条件。
   - 用户报告 Docker 安装完成；验证发现当前 Codex 终端仍找不到 Docker 可执行文件，暂不把 Docker 端到端验证标记为通过。
   - 检查 Git 隔离状态：当前位于普通 `main` 检出，尚未创建业务实现 worktree。
+  - Docker Desktop 最终验证通过：CLI、Compose 和 Linux 容器引擎均可用。
 - Files created/modified:
   - `task_plan.md`
   - `findings.md`
@@ -88,6 +89,8 @@
 | 2026-08-14 | Docker 安装后当前 Codex 进程尚未刷新 PATH，直接调用 `docker` 找不到命令 | 1 | 从 Docker Desktop 标准安装目录定位可执行文件并使用绝对路径验证，不修改用户全局 PATH |
 | 2026-08-14 | 重启后 Docker 仍不可用；桌面快捷方式目标不存在，Windows 应用检查又遇到 EPERM | 2 | 确认不是单纯 PATH 刷新问题；保留 Docker 验证为未通过，优先检查安装包/安装位置或由用户重新安装到当前账户 |
 | 2026-08-14 | WSL 安装后 Docker 数据目录已出现，但主程序和 CLI 仍不存在 | 3 | 需要在当前用户账户下重新运行 Docker Desktop Installer；安装完成并启动引擎后再验证 |
+| 2026-08-14 | Docker CLI 已安装但沙箱内执行用户目录程序被拒绝访问 | 4 | 经用户授权在沙箱外使用实际安装路径验证，Client/Server 29.7.2、Compose v5.3.1 均正常 |
+| 2026-08-14 | 更新 Docker 验证记录时首次补丁上下文未匹配 | 1 | 读取实际行后缩小补丁上下文并完成更新 |
 
 ## 5-Question Reboot Check
 
