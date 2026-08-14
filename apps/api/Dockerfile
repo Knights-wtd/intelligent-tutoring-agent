@@ -1,4 +1,5 @@
-FROM python:3.12-slim-bookworm AS build
+# Keep the readable tag; update its digest deliberately with each version bump.
+FROM python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134 AS build
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -14,7 +15,7 @@ COPY apps/api/pyproject.toml ./pyproject.toml
 COPY apps/api/src ./src
 RUN python -m pip wheel --no-build-isolation --no-deps --wheel-dir /wheels .
 
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134 AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

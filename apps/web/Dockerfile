@@ -1,4 +1,5 @@
-FROM node:22.22.2-bookworm-slim AS build
+# Keep the readable tag; update its digest deliberately with each version bump.
+FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS build
 
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH
@@ -21,7 +22,7 @@ ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
 RUN pnpm --dir apps/web build
 
-FROM node:22.22.2-bookworm-slim AS runtime
+FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS runtime
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
