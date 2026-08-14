@@ -12,6 +12,8 @@
   - 控制器首次提交 worktree 进度记录时 `.git/worktrees` 写入被沙箱拒绝，改为经授权执行 Git 元数据写入。
   - 完成 FastAPI 配置、生产环境失效保护、严格 CORS 来源校验和公开健康接口；25 项测试与 Ruff 通过。
   - 后端规格复核通过，代码质量复核无 Critical/Important 问题；保留两项非阻断测试断言加固建议供最终验收处理。
+  - 完成 Next.js 16、TypeScript、Vitest、Testing Library 与可拖动面板依赖的前端脚手架。
+  - 统一 Node 22/24 运行契约并加入显式测试清理；前端测试、Lint、生产构建及双重复核均通过。
 
 ## Session: 2026-08-13
 
