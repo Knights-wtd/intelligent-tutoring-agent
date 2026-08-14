@@ -13,13 +13,17 @@ Copy-Item .env.example .env
 
 将 `<project checkout>` 替换为你本机的项目检出目录；其余命令都从该目录运行。
 
-打开 `.env`，将其中所有 `replace-for-non-local-use` 占位值替换为你自己的本地密码，并保持以下对应关系：
+打开 `.env`，将其中每一个 `replace-with-long-random-...` 占位值分别替换为不同的长随机值，并保持以下对应关系：
 
 - `POSTGRES_PASSWORD` 必须与 `DATABASE_URL` 中的 PostgreSQL 密码一致。
 - `REDIS_PASSWORD` 必须与 `REDIS_URL` 中的 Redis 密码一致。
-- `OBJECT_STORAGE_SECRET_KEY` 必须与 `MINIO_ROOT_PASSWORD` 完全相同。
+- `OBJECT_STORAGE_SECRET_KEY` 是应用身份的密钥；初始化器和 API 使用的是同一个环境变量，因此两处会自动保持一致。
+- `OBJECT_STORAGE_SECRET_KEY` 绝不能等于管理员身份的 `MINIO_ROOT_PASSWORD`。
+- 应用访问键 `OBJECT_STORAGE_ACCESS_KEY` 必须不同于管理员用户名 `MINIO_ROOT_USER`。
 
-本地密码建议只使用英文字母、数字、下划线（`_`）和连字符（`-`）。这样可以避免 Docker Compose 变量插值和 URL 内密码编码产生不一致。不要在这里使用需要额外转义或百分号编码的任意特殊字符。不要提交或分享真实密码；`.env` 已被 Git 忽略，只保留在本机。
+每个密码或密钥都应使用英文字母、数字、下划线（`_`）和连字符（`-`）生成独立的长随机值。这样可以避免 Docker Compose 变量插值和 URL 内密码编码产生不一致。不要在这里使用需要额外转义或百分号编码的任意特殊字符，也不要让 PostgreSQL、Redis、MinIO 管理员和对象存储应用身份共享密钥。不要提交或分享真实密码；`.env` 已被 Git 忽略，只保留在本机。
+
+MinIO 初始化器只用 `MINIO_ROOT_USER` 和 `MINIO_ROOT_PASSWORD` 执行管理操作，然后为 `OBJECT_STORAGE_BUCKET` 创建专用策略和应用用户。API 只会收到权限限定到该存储桶的 `OBJECT_STORAGE_ACCESS_KEY` 和 `OBJECT_STORAGE_SECRET_KEY`，不会收到 MinIO 管理员凭据。
 
 ```powershell
 docker compose --env-file .env up --build -d
@@ -118,6 +122,8 @@ docker compose --env-file .env up --build -d --force-recreate
 ### 首次启动后修改了 PostgreSQL 密码
 
 已有 PostgreSQL 数据卷初始化完成后，修改 `.env` 中的 `POSTGRES_PASSWORD` 不会更改数据库中现有角色的密码。建议首次启动后不要再修改该值；如果误改，请恢复原来的 `.env` 值。
+
+示例占位名现在是 `replace-with-long-random-postgres-password`。如果数据卷曾用旧版占位值或其他密码初始化，仅修改 `.env` 或复制新版示例不会重置数据库中的密码；必须恢复初始化时的实际值，或按下方警告在确认数据可丢弃后重建数据卷。
 
 只有在本机数据完全可以丢弃的测试环境中，才可以删除所有数据卷并重新初始化：
 

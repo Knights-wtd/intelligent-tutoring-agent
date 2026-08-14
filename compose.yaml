@@ -50,6 +50,8 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY is required}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY is required}
       OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:?OBJECT_STORAGE_BUCKET is required}
     depends_on:
       minio:
@@ -59,8 +61,20 @@ services:
       - |
         if [ -z "$${MINIO_ROOT_USER:-}" ] ||
            [ -z "$${MINIO_ROOT_PASSWORD:-}" ] ||
+           [ -z "$${OBJECT_STORAGE_ACCESS_KEY:-}" ] ||
+           [ -z "$${OBJECT_STORAGE_SECRET_KEY:-}" ] ||
            [ -z "$${OBJECT_STORAGE_BUCKET:-}" ]; then
           echo "MinIO initialization configuration is incomplete." >&2
+          exit 1
+        fi
+
+        if [ "$${MINIO_ROOT_USER}" = "$${OBJECT_STORAGE_ACCESS_KEY}" ]; then
+          echo "MinIO admin and application access keys must be different." >&2
+          exit 1
+        fi
+
+        if [ "$${MINIO_ROOT_PASSWORD}" = "$${OBJECT_STORAGE_SECRET_KEY}" ]; then
+          echo "MinIO admin and application secret keys must be different." >&2
           exit 1
         fi
 
@@ -76,7 +90,56 @@ services:
         done
 
         mc mb --ignore-existing "local/$${OBJECT_STORAGE_BUCKET}" >/dev/null
-        mc ready local >/dev/null
+        policy_name="textbook-app-bucket-policy"
+        policy_file="/tmp/textbook-app-bucket-policy.json"
+        trap 'rm -f "$${policy_file}"' EXIT
+        cat > "$${policy_file}" <<EOF
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetBucketLocation",
+                "s3:ListBucket",
+                "s3:ListBucketMultipartUploads"
+              ],
+              "Resource": ["arn:aws:s3:::$${OBJECT_STORAGE_BUCKET}"]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:DeleteObject",
+                "s3:AbortMultipartUpload",
+                "s3:ListMultipartUploadParts"
+              ],
+              "Resource": ["arn:aws:s3:::$${OBJECT_STORAGE_BUCKET}/*"]
+            }
+          ]
+        }
+        EOF
+
+        mc admin policy create local "$${policy_name}" "$${policy_file}" >/dev/null
+        attach_policy=true
+        if app_user_info="$$(mc admin user info --json local \
+          "$${OBJECT_STORAGE_ACCESS_KEY}" 2>/dev/null)"; then
+          case "$${app_user_info}" in
+            *'"policyName":"textbook-app-bucket-policy"'*) attach_policy=false ;;
+            *'"policyName":""'*) ;;
+            *)
+              echo "MinIO application user has unexpected policies; refusing to broaden access." >&2
+              exit 1
+              ;;
+          esac
+        fi
+        mc admin user add local \
+          "$${OBJECT_STORAGE_ACCESS_KEY}" "$${OBJECT_STORAGE_SECRET_KEY}" >/dev/null
+        if [ "$${attach_policy}" = true ]; then
+          mc admin policy attach local "$${policy_name}" \
+            --user "$${OBJECT_STORAGE_ACCESS_KEY}" >/dev/null
+        fi
     restart: "no"
 
   api:
