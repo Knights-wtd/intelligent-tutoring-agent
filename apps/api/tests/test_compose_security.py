@@ -55,7 +55,7 @@ def test_api_receives_only_non_secret_provider_runtime_configuration() -> None:
     api = _service_block(compose, "api", "web")
     web = _service_block(compose, "web", "volumes")
 
-    assert '"id":"openai-gpt-4o-mini"' in environment["PROVIDER_PROFILES_JSON"]
+    assert '"id":"example-chat-model"' in environment["PROVIDER_PROFILES_JSON"]
     assert environment["PLATFORM_ADMIN_EMAILS"] == "admin@example.com"
     assert environment["OPENAI_API_KEY"] == ""
     assert environment["ANTHROPIC_API_KEY"] == ""
