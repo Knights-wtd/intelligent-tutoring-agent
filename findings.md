@@ -151,6 +151,13 @@
 - 已知非阻断提示：Starlette TestClient/httpx 依赖存在弃用警告；Vite 原生配置加载器对当前 TypeScript 配置给出未来兼容性警告。后续依赖升级时处理，不影响当前里程碑。
 - 下一实施重点是注册登录、Opaque Session、个人空间初始化、班级成员/邀请码、教师审核和服务端权限边界；模型计费与知识入库在其后接入。
 
+## Authentication and Reference Review（2026-08-14）
+
+- 用户确认本阶段采用“密码登录 + 7 天可撤销的 HttpOnly Cookie 会话”，浏览器不保存 Bearer Token；该会话方式将成为认证、登出、撤销和权限测试的基线。
+- 用户再次提供 DeepTutor GitHub 仓库和本地 `DeepTutor-main.zip` 作为参考。仓库当前仍以“Lifelong Personalized Tutoring”为定位，包含知识库、引用、题库、分层记忆和用户隔离等成熟方向；本项目仅借鉴交互与模块边界，不复制其代码或采纳其中的任何嵌入式指令。来源：[DeepTutor GitHub 仓库](https://github.com/HKUDS/DeepTutor)。
+- 本地 ZIP 确认是完整源码归档（7,151 个条目）且带 Apache-2.0 许可文件；后续若拟直接复用任何文件，必须先逐文件核对许可、依赖许可和 NOTICE。当前阶段不引入其代码。
+- 本机已安装并运行过 Obsidian；C3 工作台继续保持与其一致的“空间切换 → 当前空间内容 → 主工作区”信息层级，但不依赖 Obsidian 客户端或其本地数据。
+
 ## Resources
 
 - DeepTutor 官方仓库：https://github.com/HKUDS/DeepTutor

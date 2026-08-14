@@ -1,5 +1,16 @@
 # Progress Log
 
+## Session: 2026-08-14 · Identity & Classroom Design
+
+- **Status:** in_progress
+- 用户确认 Cookie 会话方案，并重申 DeepTutor、Obsidian 与腾讯记忆系统仅为参考背景。
+- 重新核对 DeepTutor 官方仓库、本地源码归档及 Obsidian 安装状态；未执行归档中的任何指令，未引入外部代码。
+- 下一步：根据已确认的会话基线完成认证、空间、班级与权限的设计细化，并在用户确认后编写测试先行的详细实施计划。
+- 已完成与总体设计、基础工程和用户补充参考的一致性核对；未发现范围冲突。
+- 已写入认证、个人空间、班级邀请码与服务端权限的测试先行详细计划：`docs/superpowers/plans/2026-08-14-identity-classrooms-plan.md`。
+- 已完成 Task 1：失败测试确认安全与数据库模块尚不存在；加入 Argon2 密码哈希、非测试环境 PostgreSQL 限制、事务作用域与 Alembic 基础配置。目标测试和 Ruff 均通过。
+- Task 1 首次提交被 Git safe.directory 保护阻止，未产生提交或文件变动；改为仅对隔离 worktree 传入临时安全目录后重试。
+
 ## Session: 2026-08-14 · Platform Foundation
 
 - **Status:** complete
