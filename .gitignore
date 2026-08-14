@@ -21,3 +21,4 @@ storage/
 # Design tool runtime state and external read-only references
 .superpowers/brainstorm/*/state/
 .superpowers/references/
+.worktrees/
