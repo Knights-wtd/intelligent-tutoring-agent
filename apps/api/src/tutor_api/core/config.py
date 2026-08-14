@@ -35,7 +35,7 @@ _EMAIL_ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 class ProviderProfileConfig(BaseModel):
     """A non-secret model profile exposed by the server runtime configuration."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     id: str
     provider: str
@@ -83,7 +83,9 @@ def _is_local_host(host: str, development_names: set[str]) -> bool:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", hide_input_in_errors=True, populate_by_name=True
+    )
 
     app_env: Literal["development", "test", "production"] = "development"
     api_host: str = "0.0.0.0"
@@ -133,13 +135,15 @@ class Settings(BaseSettings):
     @field_validator("platform_admin_emails", mode="before")
     @classmethod
     def parse_platform_admin_emails(cls, value: Any) -> tuple[str, ...]:
-        if isinstance(value, tuple):
-            return value
-        if not isinstance(value, str):
+        if isinstance(value, str):
+            values = value.split(",") if value else ()
+        elif isinstance(value, (tuple, list)):
+            values = value
+        else:
             raise ValueError("PLATFORM_ADMIN_EMAILS must be a comma-separated string")
-        if not value:
-            return ()
-        emails = tuple(email.strip().casefold() for email in value.split(","))
+        emails = tuple(
+            email.strip().casefold() if isinstance(email, str) else "" for email in values
+        )
         if any(not email or not _EMAIL_ADDRESS.fullmatch(email) for email in emails):
             raise ValueError("PLATFORM_ADMIN_EMAILS must contain valid email addresses")
         return tuple(dict.fromkeys(emails))

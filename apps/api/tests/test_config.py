@@ -56,18 +56,42 @@ def test_settings_reject_invalid_provider_profiles(
         Settings(provider_profiles_json=provider_profiles_json)
 
 
-def test_settings_normalizes_platform_admin_emails() -> None:
-    settings = Settings(
-        platform_admin_emails=" Admin@Example.com, admin@example.com , owner@example.com "
-    )
+@pytest.mark.parametrize(
+    "platform_admin_emails",
+    [
+        " Admin@Example.com, admin@example.com , owner@example.com ",
+        (" Admin@Example.com ", "admin@example.com", " owner@example.com "),
+        [" Admin@Example.com ", "admin@example.com", " owner@example.com "],
+    ],
+)
+def test_settings_normalizes_platform_admin_emails(platform_admin_emails: object) -> None:
+    settings = Settings(platform_admin_emails=platform_admin_emails)
 
     assert settings.platform_admin_emails == ("admin@example.com", "owner@example.com")
 
 
-@pytest.mark.parametrize("platform_admin_emails", ["not-an-email", "admin@example.com, "])
-def test_settings_reject_invalid_platform_admin_emails(platform_admin_emails: str) -> None:
+@pytest.mark.parametrize(
+    "platform_admin_emails",
+    ["not-an-email", "admin@example.com, ", ("not-an-email",), ["admin@example.com", ""]],
+)
+def test_settings_reject_invalid_platform_admin_emails(platform_admin_emails: object) -> None:
     with pytest.raises(ValueError, match="PLATFORM_ADMIN_EMAILS"):
         Settings(platform_admin_emails=platform_admin_emails)
+
+
+def test_settings_hides_provider_profile_input_from_validation_errors() -> None:
+    sentinel_secret = "never-log-provider-profile-secret"
+
+    with pytest.raises(ValueError) as error:
+        Settings(
+            provider_profiles_json=(
+                '[{"id":"","provider":"openai","model":"example-chat-model",'
+                f'"display_name":"Example","api_key":"{sentinel_secret}",'
+                '"supports_usage":true,"enabled_by_default":true}]'
+            )
+        )
+
+    assert sentinel_secret not in str(error.value)
 
 
 def test_settings_repr_contains_no_provider_api_key_or_base_url() -> None:
