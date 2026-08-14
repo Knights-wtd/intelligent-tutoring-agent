@@ -19,6 +19,8 @@
   - 完成 PostgreSQL/pgvector、Redis、MinIO、FastAPI 与 Next.js 的 Docker 编排；应用镜像构建和六服务冷启动通过。
   - 容器端口仅绑定本机，数据库/缓存保持内部访问；Redis 启用认证，MinIO 有限重试并自动创建存储桶，API/Web 非 root 运行。
   - 服务环境变量按最小权限隔离，基础镜像固定标签与摘要，Python 运行/构建依赖精确锁定；API/Web 均返回 200，Docker 双重复核通过。
+  - 完成持续集成质量门禁：第三方构建组件锁定到不可变提交，Python 测试与检查依赖精确锁定，Runner 固定版本并禁用检出凭据持久化。
+  - API 25 项测试通过、覆盖率 98.48%，Web 6 项测试、Lint 与生产构建通过；持续集成规格及质量复核均通过。
 
 ## Session: 2026-08-13
 
