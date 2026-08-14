@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.core.config import Settings, get_settings
+from tutor_api.core.database import create_engine_from_url
 from tutor_api.identity.router import router as identity_router
 
 
@@ -18,7 +19,17 @@ def create_app(
         raise RuntimeError("Invalid production configuration: " + "; ".join(production_errors))
     app = FastAPI(title="Textbook Tutor API", version="0.1.0")
     app.state.settings = active_settings
-    app.state.session_factory = session_factory
+    if session_factory is not None:
+        app.state.session_factory = session_factory
+    elif active_settings.app_env == "test" or active_settings.database_url.startswith(
+        "postgresql+psycopg://"
+    ):
+        engine = create_engine_from_url(
+            active_settings.database_url, app_env=active_settings.app_env
+        )
+        app.state.session_factory = sessionmaker(bind=engine)
+    else:
+        app.state.session_factory = None
 
     @app.exception_handler(RequestValidationError)
     async def redact_validation_passwords(

@@ -38,6 +38,12 @@ def test_register_creates_personal_space_and_session() -> None:
     engine.dispose()
 
 
+def test_app_factory_builds_session_factory_from_a_test_database_url() -> None:
+    app = create_app(Settings(app_env="test", database_url="sqlite://"))
+
+    assert app.state.session_factory is not None
+
+
 def test_login_sets_a_new_session_cookie_for_registered_user() -> None:
     client, engine = make_client()
     client.post("/api/v1/auth/register", json=VALID_REGISTRATION)
