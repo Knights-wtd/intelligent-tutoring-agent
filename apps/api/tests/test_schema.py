@@ -42,6 +42,20 @@ def session() -> Generator[Session, None, None]:
         engine.dispose()
 
 
+def usage_profile(session: Session, key: str) -> ProviderProfile:
+    profile = ProviderProfile(
+        profile_key=key,
+        provider="example",
+        model=f"{key}-model",
+        display_name="示例模型",
+        supports_usage=True,
+        enabled=True,
+    )
+    session.add(profile)
+    session.flush()
+    return profile
+
+
 def test_schema_enforces_one_personal_space_per_owner(session: Session) -> None:
     user = User(email="teacher@example.com", username="teacher", password_hash="hash")
     session.add(user)
@@ -107,15 +121,18 @@ def test_reservation_request_id_is_unique(session: Session) -> None:
     wallet = Wallet(user_id=user.id)
     session.add(wallet)
     session.flush()
+    profile = usage_profile(session, "duplicate-reservation")
     session.add_all(
         [
             WalletReservation(
                 wallet_id=wallet.id,
+                provider_profile_id=profile.id,
                 request_id="request-1",
                 reserved_amount=Decimal("1"),
             ),
             WalletReservation(
                 wallet_id=wallet.id,
+                provider_profile_id=profile.id,
                 request_id="request-1",
                 reserved_amount=Decimal("1"),
             ),
@@ -133,9 +150,11 @@ def test_reservation_state_rejects_unknown_value(session: Session) -> None:
     wallet = Wallet(user_id=user.id)
     session.add(wallet)
     session.flush()
+    profile = usage_profile(session, "invalid-reservation-state")
     session.add(
         WalletReservation(
             wallet_id=wallet.id,
+            provider_profile_id=profile.id,
             request_id="request-invalid-state",
             reserved_amount=Decimal("1"),
             state="unknown",  # type: ignore[arg-type]
@@ -175,7 +194,10 @@ def test_ledger_reservation_must_belong_to_its_wallet(session: Session) -> None:
     session.add_all([first_wallet, second_wallet])
     session.flush()
     reservation = WalletReservation(
-        wallet_id=first_wallet.id, request_id="cross-wallet", reserved_amount=Decimal("1")
+        wallet_id=first_wallet.id,
+        provider_profile_id=usage_profile(session, "cross-wallet").id,
+        request_id="cross-wallet",
+        reserved_amount=Decimal("1"),
     )
     session.add(reservation)
     session.flush()
@@ -308,9 +330,13 @@ def test_reservation_rejects_non_positive_amount(session: Session) -> None:
     wallet = Wallet(user_id=user.id)
     session.add(wallet)
     session.flush()
+    profile = usage_profile(session, "zero-reservation")
     session.add(
         WalletReservation(
-            wallet_id=wallet.id, request_id="zero-reservation", reserved_amount=Decimal("0")
+            wallet_id=wallet.id,
+            provider_profile_id=profile.id,
+            request_id="zero-reservation",
+            reserved_amount=Decimal("0"),
         )
     )
 
@@ -377,6 +403,18 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
                 tuple(constraint["referred_columns"]),
             )
             for constraint in inspector.get_foreign_keys("ledger_entries")
+        }
+    )
+    assert {
+        (("provider_profile_id",), "provider_profiles", ("id",)),
+    }.issubset(
+        {
+            (
+                tuple(constraint["constrained_columns"]),
+                constraint["referred_table"],
+                tuple(constraint["referred_columns"]),
+            )
+            for constraint in inspector.get_foreign_keys("wallet_reservations")
         }
     )
     assert {

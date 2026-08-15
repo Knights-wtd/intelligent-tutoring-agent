@@ -20,7 +20,7 @@ from tutor_api.billing.schemas import (
     SettlementResult,
     VerifiedUsage,
 )
-from tutor_api.providers.models import FxVersion, PriceVersion
+from tutor_api.providers.models import FxVersion, PriceVersion, ProviderProfile
 
 
 class InsufficientFundsError(ValueError):
@@ -100,15 +100,21 @@ def available_balance(session: Session, wallet_id: UUID) -> Decimal:
 
 
 def reserve(
-    session: Session, user_id: UUID, request_id: str, amount: Decimal | int | str
+    session: Session,
+    user_id: UUID,
+    request_id: str,
+    amount: Decimal | int | str,
+    provider_profile_id: UUID,
 ) -> ReservationResult:
     reserved_amount = _positive_money(amount)
     if not request_id.strip():
         raise ValueError("Request id must not be blank")
+    _enabled_usage_profile(session, provider_profile_id)
 
     existing = _reservation_for_request(session, request_id)
     if existing is not None:
         _assert_reservation_owner(session, existing, user_id)
+        _assert_reservation_profile(existing, provider_profile_id)
         return _reservation_result(existing)
 
     wallet = _wallet_for_update(session, user_id)
@@ -117,12 +123,14 @@ def reserve(
     existing = _reservation_for_request(session, request_id)
     if existing is not None:
         _assert_reservation_owner(session, existing, user_id)
+        _assert_reservation_profile(existing, provider_profile_id)
         return _reservation_result(existing)
     if available_balance(session, wallet.id) < reserved_amount:
         raise InsufficientFundsError("Insufficient available balance")
 
     reservation = WalletReservation(
         wallet_id=wallet.id,
+        provider_profile_id=provider_profile_id,
         request_id=request_id,
         reserved_amount=reserved_amount,
         state=WalletReservationState.ACTIVE,
@@ -158,6 +166,28 @@ def _assert_reservation_owner(
         raise ValueError("Request id is already associated with another wallet")
 
 
+def _assert_reservation_profile(
+    reservation: WalletReservation, provider_profile_id: UUID
+) -> None:
+    if reservation.provider_profile_id != provider_profile_id:
+        raise ValueError("Request id is already associated with another provider profile")
+
+
+def _enabled_usage_profile(session: Session, provider_profile_id: UUID) -> ProviderProfile:
+    profile = session.scalar(
+        select(ProviderProfile)
+        .where(
+            ProviderProfile.id == provider_profile_id,
+            ProviderProfile.enabled.is_(True),
+            ProviderProfile.supports_usage.is_(True),
+        )
+        .with_for_update()
+    )
+    if profile is None:
+        raise InvalidUsageError("Selected profile is not enabled usage-capable")
+    return profile
+
+
 def settle(session: Session, reservation_id: UUID, usage: VerifiedUsage) -> SettlementResult:
     reservation = session.scalar(
         select(WalletReservation)
@@ -181,6 +211,11 @@ def settle(session: Session, reservation_id: UUID, usage: VerifiedUsage) -> Sett
         raise ValueError("Released reservation cannot be settled")
     if not usage.verified:
         raise InvalidUsageError("Usage must be verified before settlement")
+    if usage.provider_profile_id != reservation.provider_profile_id:
+        raise InvalidUsageError(
+            "Usage provider profile does not match the reserved provider profile"
+        )
+    _enabled_usage_profile(session, reservation.provider_profile_id)
 
     price, fx = _current_pricing(session, usage)
     charged_amount = _usage_charge(usage, price, fx)

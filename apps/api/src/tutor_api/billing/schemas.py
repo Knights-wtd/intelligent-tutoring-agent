@@ -11,7 +11,7 @@ class VerifiedUsage(BaseModel):
     input_units: int = Field(ge=0)
     cached_input_units: int = Field(ge=0)
     output_units: int = Field(ge=0)
-    verified: bool = True
+    verified: bool = False
 
 
 class ReservationResult(BaseModel):

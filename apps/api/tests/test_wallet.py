@@ -33,6 +33,20 @@ def session():
     engine.dispose()
 
 
+def usable_profile(session, key: str = "example-model") -> ProviderProfile:
+    profile = ProviderProfile(
+        profile_key=key,
+        provider="example",
+        model=f"{key}-model",
+        display_name="示例模型",
+        supports_usage=True,
+        enabled=True,
+    )
+    session.add(profile)
+    session.flush()
+    return profile
+
+
 def test_reserve_creates_a_wallet_and_tracks_available_balance(session) -> None:
     from tutor_api.billing.service import reserve, wallet_balance
 
@@ -49,8 +63,9 @@ def test_reserve_creates_a_wallet_and_tracks_available_balance(session) -> None:
         )
     )
     session.flush()
+    profile = usable_profile(session, "reserve-model")
 
-    reservation = reserve(session, user.id, "run-1", Decimal("10.00"))
+    reservation = reserve(session, user.id, "run-1", Decimal("10.00"), profile.id)
 
     assert reservation.reserved_amount == Decimal("10.00000000")
     assert wallet_balance(session, user.id) == Decimal("20.00000000")
@@ -60,11 +75,33 @@ def test_reservation_rejects_insufficient_available_balance(session) -> None:
     from tutor_api.billing.service import InsufficientFundsError, reserve
 
     user = session.query(User).filter_by(username="learner").one()
+    profile = usable_profile(session, "insufficient-model")
 
     with pytest.raises(InsufficientFundsError):
-        reserve(session, user.id, "run-insufficient", Decimal("0.01"))
+        reserve(session, user.id, "run-insufficient", Decimal("0.01"), profile.id)
 
     assert session.query(Wallet).count() == 1
+
+
+def test_reservation_requires_an_enabled_usage_capable_profile(session) -> None:
+    from tutor_api.billing.service import InvalidUsageError, reserve
+
+    user = session.query(User).filter_by(username="learner").one()
+    disabled_profile = ProviderProfile(
+        profile_key="disabled-model",
+        provider="example",
+        model="disabled-model",
+        display_name="已停用模型",
+        supports_usage=True,
+        enabled=False,
+    )
+    session.add(disabled_profile)
+    session.flush()
+
+    with pytest.raises(InvalidUsageError, match="enabled usage-capable"):
+        reserve(session, user.id, "run-disabled", Decimal("1"), disabled_profile.id)
+
+    assert session.query(WalletReservation).count() == 0
 
 
 def test_repeated_reservation_request_returns_the_existing_reservation(session) -> None:
@@ -83,9 +120,10 @@ def test_repeated_reservation_request_returns_the_existing_reservation(session) 
         )
     )
     session.flush()
+    profile = usable_profile(session, "repeat-model")
 
-    first = reserve(session, user.id, "run-repeat", Decimal("2"))
-    second = reserve(session, user.id, "run-repeat", Decimal("2"))
+    first = reserve(session, user.id, "run-repeat", Decimal("2"), profile.id)
+    second = reserve(session, user.id, "run-repeat", Decimal("2"), profile.id)
 
     assert second.id == first.id
     assert session.query(WalletReservation).filter_by(request_id="run-repeat").count() == 1
@@ -98,7 +136,7 @@ def test_repeated_reservation_request_returns_the_existing_reservation(session) 
     session.add(other_user)
     session.flush()
     with pytest.raises(ValueError, match="another wallet"):
-        reserve(session, other_user.id, "run-repeat", Decimal("2"))
+        reserve(session, other_user.id, "run-repeat", Decimal("2"), profile.id)
 
 
 def test_settlement_releases_unused_reservation_and_uses_decimal_snapshots(session) -> None:
@@ -144,7 +182,7 @@ def test_settlement_releases_unused_reservation_and_uses_decimal_snapshots(sessi
     )
     session.flush()
 
-    reservation = reserve(session, user.id, "run-settle", Decimal("10.00"))
+    reservation = reserve(session, user.id, "run-settle", Decimal("10.00"), profile.id)
     result = settle(
         session,
         reservation.id,
@@ -153,6 +191,7 @@ def test_settlement_releases_unused_reservation_and_uses_decimal_snapshots(sessi
             input_units=1000,
             cached_input_units=0,
             output_units=500,
+            verified=True,
         ),
     )
 
@@ -162,6 +201,58 @@ def test_settlement_releases_unused_reservation_and_uses_decimal_snapshots(sessi
     assert reservation_row is not None
     assert reservation_row.state.value == "settled"
     assert reservation_row.price_snapshot["currency"] == "CNY"
+    assert reservation_row.provider_profile_id == profile.id
+
+
+def test_settlement_rejects_usage_for_a_different_profile_than_the_reservation(session) -> None:
+    from tutor_api.billing.schemas import VerifiedUsage
+    from tutor_api.billing.service import InvalidUsageError, reserve, settle
+
+    user = session.query(User).filter_by(username="learner").one()
+    wallet = Wallet(user_id=user.id)
+    selected_profile = usable_profile(session, "selected-model")
+    supplied_profile = usable_profile(session, "supplied-model")
+    session.add(wallet)
+    session.flush()
+    session.add_all(
+        [
+            LedgerEntry(
+                wallet_id=wallet.id,
+                amount=Decimal("2"),
+                entry_type=LedgerEntryType.RECHARGE,
+                snapshot={},
+            ),
+            PriceVersion(
+                provider_profile_id=supplied_profile.id,
+                effective_at=datetime.now(UTC) - timedelta(minutes=1),
+                source_url="https://example.test/pricing",
+                currency="CNY",
+                input_unit_price=Decimal("1"),
+                cached_input_unit_price=Decimal("0"),
+                output_unit_price=Decimal("0"),
+                unit_size=1000,
+            ),
+        ]
+    )
+    session.flush()
+    reservation = reserve(
+        session, user.id, "run-profile-mismatch", Decimal("2"), selected_profile.id
+    )
+
+    with pytest.raises(InvalidUsageError, match="reserved provider profile"):
+        settle(
+            session,
+            reservation.id,
+            VerifiedUsage(
+                provider_profile_id=supplied_profile.id,
+                input_units=1000,
+                cached_input_units=0,
+                output_units=0,
+                verified=True,
+            ),
+        )
+
+    assert session.query(LedgerEntry).filter_by(reservation_id=reservation.id).count() == 0
 
 
 def test_repeated_settlement_request_is_idempotent(session) -> None:
@@ -201,12 +292,13 @@ def test_repeated_settlement_request_is_idempotent(session) -> None:
         ]
     )
     session.flush()
-    reservation = reserve(session, user.id, "run-idempotent", Decimal("2"))
+    reservation = reserve(session, user.id, "run-idempotent", Decimal("2"), profile.id)
     usage = VerifiedUsage(
         provider_profile_id=profile.id,
         input_units=1000,
         cached_input_units=0,
         output_units=0,
+        verified=True,
     )
 
     first = settle(session, reservation.id, usage)
@@ -232,7 +324,8 @@ def test_release_is_idempotent_and_never_creates_consumption(session) -> None:
         )
     )
     session.flush()
-    reservation = reserve(session, user.id, "run-release", Decimal("2"))
+    profile = usable_profile(session, "release-model")
+    reservation = reserve(session, user.id, "run-release", Decimal("2"), profile.id)
 
     assert release(session, reservation.id).released is True
     assert release(session, reservation.id).released is True
@@ -256,18 +349,18 @@ def test_settlement_rejects_usage_not_verified_by_a_provider_adapter(session) ->
         )
     )
     session.flush()
-    reservation = reserve(session, user.id, "run-unverified", Decimal("1"))
+    profile = usable_profile(session, "unverified-model")
+    reservation = reserve(session, user.id, "run-unverified", Decimal("1"), profile.id)
 
     with pytest.raises(InvalidUsageError, match="verified"):
         settle(
             session,
             reservation.id,
             VerifiedUsage(
-                provider_profile_id=uuid4(),
+                provider_profile_id=profile.id,
                 input_units=0,
                 cached_input_units=0,
                 output_units=0,
-                verified=False,
             ),
         )
 
@@ -316,7 +409,7 @@ def test_settlement_converts_current_fx_and_preserves_fx_snapshot(session) -> No
         ]
     )
     session.flush()
-    reservation = reserve(session, user.id, "run-fx", Decimal("10"))
+    reservation = reserve(session, user.id, "run-fx", Decimal("10"), profile.id)
 
     result = settle(
         session,
@@ -326,6 +419,7 @@ def test_settlement_converts_current_fx_and_preserves_fx_snapshot(session) -> No
             input_units=1000,
             cached_input_units=0,
             output_units=0,
+            verified=True,
         ),
     )
 

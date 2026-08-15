@@ -57,6 +57,9 @@ class WalletReservation(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     wallet_id: Mapped[UUID] = mapped_column(ForeignKey("wallets.id"), index=True)
+    provider_profile_id: Mapped[UUID] = mapped_column(
+        ForeignKey("provider_profiles.id"), index=True
+    )
     request_id: Mapped[str] = mapped_column(String(255), unique=True)
     reserved_amount: Mapped[Decimal] = mapped_column(Numeric(20, 8))
     state: Mapped[WalletReservationState] = mapped_column(

@@ -1,0 +1,37 @@
+"""bind wallet reservations to selected provider profiles
+
+Revision ID: 0003_bind_reservations_to_provider
+Revises: 0002_provider_wallet
+Create Date: 2026-08-15
+"""
+
+from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
+
+revision: str = "0003_bind_reservations_to_provider"
+down_revision: str | Sequence[str] | None = "0002_provider_wallet"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    with op.batch_alter_table("wallet_reservations") as batch_op:
+        batch_op.add_column(sa.Column("provider_profile_id", sa.Uuid(), nullable=False))
+        batch_op.create_foreign_key(
+            "fk_wallet_reservation_provider_profile",
+            "provider_profiles",
+            ["provider_profile_id"],
+            ["id"],
+        )
+        batch_op.create_index(
+            "ix_wallet_reservations_provider_profile_id", ["provider_profile_id"]
+        )
+
+
+def downgrade() -> None:
+    with op.batch_alter_table("wallet_reservations") as batch_op:
+        batch_op.drop_index("ix_wallet_reservations_provider_profile_id")
+        batch_op.drop_constraint("fk_wallet_reservation_provider_profile", type_="foreignkey")
+        batch_op.drop_column("provider_profile_id")
