@@ -1,8 +1,12 @@
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
 import tutor_api.billing.models  # noqa: F401
@@ -329,3 +333,49 @@ def test_settlement_converts_current_fx_and_preserves_fx_snapshot(session) -> No
     saved = session.get(WalletReservation, reservation.id)
     assert saved is not None
     assert saved.fx_snapshot["rate"] == "7.20000000"
+
+
+def test_postgres_concurrent_first_wallet_creation_is_idempotent() -> None:
+    """Exercise the first-wallet race with two real PostgreSQL transactions when supplied."""
+
+    postgres_url = os.environ.get("TEST_POSTGRES_URL")
+    if not postgres_url:
+        pytest.skip("TEST_POSTGRES_URL is not configured")
+
+    from tutor_api.billing.service import _wallet_for_update
+
+    engine = create_engine_from_url(postgres_url, app_env="test")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    with factory.begin() as database_session:
+        user = User(
+            email=f"concurrent-{uuid4()}@example.com",
+            username=f"concurrent-{uuid4()}",
+            password_hash="not-used-by-wallet-tests",
+        )
+        database_session.add(user)
+        database_session.flush()
+        user_id = user.id
+
+    insert_barrier = Barrier(2)
+
+    def synchronize_first_insert(*args) -> None:
+        statement = args[2]
+        if statement.startswith("INSERT INTO wallets"):
+            insert_barrier.wait(timeout=10)
+
+    event.listen(engine, "before_cursor_execute", synchronize_first_insert)
+    try:
+        def create_wallet() -> object:
+            with factory.begin() as database_session:
+                return _wallet_for_update(database_session, user_id).id
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            wallet_ids = list(executor.map(lambda _: create_wallet(), range(2)))
+    finally:
+        event.remove(engine, "before_cursor_execute", synchronize_first_insert)
+
+    with factory() as database_session:
+        assert len(set(wallet_ids)) == 1
+        assert database_session.query(Wallet).filter_by(user_id=user_id).count() == 1
+    engine.dispose()

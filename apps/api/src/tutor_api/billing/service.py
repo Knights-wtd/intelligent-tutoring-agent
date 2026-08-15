@@ -3,6 +3,8 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from tutor_api.billing.models import (
@@ -42,13 +44,26 @@ def _positive_money(value: Decimal | int | str) -> Decimal:
 
 def _wallet_for_update(session: Session, user_id: UUID) -> Wallet:
     wallet = session.scalar(select(Wallet).where(Wallet.user_id == user_id).with_for_update())
+    if wallet is not None:
+        return wallet
+
+    dialect_name = session.get_bind().dialect.name
+    if dialect_name == "postgresql":
+        statement = postgresql_insert(Wallet).values(user_id=user_id).on_conflict_do_nothing(
+            index_elements=["user_id"]
+        )
+    elif dialect_name == "sqlite":
+        statement = sqlite_insert(Wallet).values(user_id=user_id).on_conflict_do_nothing(
+            index_elements=["user_id"]
+        )
+    else:
+        raise RuntimeError("Wallet reservations require PostgreSQL or SQLite")
+    # A concurrent first request may insert first. PostgreSQL waits for that
+    # transaction and then treats this as a no-op; the following lock reads its row.
+    session.execute(statement)
+    wallet = session.scalar(select(Wallet).where(Wallet.user_id == user_id).with_for_update())
     if wallet is None:
-        wallet = Wallet(user_id=user_id)
-        session.add(wallet)
-        session.flush()
-        # Lock the persisted row on databases that support row locks.
-        wallet = session.scalar(select(Wallet).where(Wallet.id == wallet.id).with_for_update())
-        assert wallet is not None
+        raise RuntimeError("Wallet creation did not return a wallet row")
     return wallet
 
 
