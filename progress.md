@@ -2,7 +2,7 @@
 
 ## Session: 2026-08-14 · Provider and Wallet Planning
 
-- **Status:** in_progress
+- **Status:** complete
 - Actions taken:
   - 恢复已通过 Docker/PostgreSQL 验收的认证、班级与 C3 工作台里程碑。
   - 依据已批准的供应商、价格、汇率、钱包与人工充值设计，建立下一里程碑的测试先行实施计划。
