@@ -455,7 +455,6 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
     }.intersection(inspect(engine).get_table_names())
     engine.dispose()
 
-
 @pytest.mark.filterwarnings(
     "ignore:No path_separator found in configuration:DeprecationWarning"
 )
@@ -517,6 +516,36 @@ def test_migration_backfills_and_releases_historic_unbound_reservations(tmp_path
     assert profile["enabled"] is False
     assert profile["supports_usage"] is False
     engine.dispose()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_reversal_audit_migration_round_trip_preserves_0004_contract(tmp_path) -> None:
+    database_path = tmp_path / "reversal-audit.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+
+    def audit_check_sql() -> str:
+        engine = create_engine(config.get_main_option("sqlalchemy.url"))
+        try:
+            checks = {
+                constraint["name"]: constraint["sqltext"]
+                for constraint in inspect(engine).get_check_constraints("recharge_records")
+            }
+            return checks["ck_recharge_record_reversal_audit_complete"]
+        finally:
+            engine.dispose()
+
+    command.upgrade(config, "0004_recharge_reversal_audit")
+    assert "reversal_ledger_entry_id" not in audit_check_sql()
+
+    command.upgrade(config, "0005_reversal_audit_group")
+    assert "reversal_ledger_entry_id" in audit_check_sql()
+    assert "reversed_at" in audit_check_sql()
+
+    command.downgrade(config, "0004_recharge_reversal_audit")
+    assert "reversal_ledger_entry_id" not in audit_check_sql()
 
 
 def test_price_version_is_unique_per_profile_and_effective_at(session: Session) -> None:

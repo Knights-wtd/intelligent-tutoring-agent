@@ -34,5 +34,7 @@ def downgrade() -> None:
     with op.batch_alter_table("recharge_records") as batch_op:
         batch_op.drop_constraint("ck_recharge_record_reversal_audit_complete", type_="check")
         batch_op.create_check_constraint(
-            "ck_recharge_record_reversal_audit_complete", _AUDIT_GROUP_CHECK
+            "ck_recharge_record_reversal_audit_complete",
+            "(reversed_by_user_id IS NULL AND reversal_reason IS NULL) OR "
+            "(reversed_by_user_id IS NOT NULL AND reversal_reason IS NOT NULL)",
         )
