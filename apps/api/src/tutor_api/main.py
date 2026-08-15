@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
+from tutor_api.billing.router import router as billing_router
 from tutor_api.classrooms.router import router as classrooms_router
 from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
@@ -67,6 +68,7 @@ def create_app(
     app.include_router(spaces_router)
     app.include_router(classrooms_router)
     app.include_router(providers_router)
+    app.include_router(billing_router)
 
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
