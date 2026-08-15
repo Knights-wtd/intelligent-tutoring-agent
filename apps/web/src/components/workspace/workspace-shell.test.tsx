@@ -12,6 +12,8 @@ const mockApi = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({ api: mockApi }));
 
 beforeEach(() => {
+  mockApi.models.mockReset();
+  mockApi.billingMe.mockReset();
   mockApi.models.mockResolvedValue([]);
   mockApi.billingMe.mockResolvedValue({ balance: "0", currency: "CNY", entries: [] });
 });
@@ -39,7 +41,7 @@ describe("WorkspaceShell", () => {
     expect(screen.queryByText(/API Key|Base URL/i)).not.toBeInTheDocument();
   });
 
-  it("offers a neutral retry when the tutor data is unavailable", async () => {
+  it("keeps the balance visible and retries only the model catalog when it is unavailable", async () => {
     const user = userEvent.setup();
     mockApi.models
       .mockRejectedValueOnce(new Error("not for display"))
@@ -57,11 +59,36 @@ describe("WorkspaceShell", () => {
 
     render(<WorkspaceShell />);
 
-    expect(await screen.findByRole("status")).toHaveTextContent("暂时无法加载模型和余额。");
-    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("模型暂时无法加载。");
+    expect(screen.getByText("余额 ¥0.00")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试模型" }));
 
     expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
-    expect(screen.getByText("余额 ¥20.00")).toBeInTheDocument();
+    expect(screen.getByText("余额 ¥0.00")).toBeInTheDocument();
+    expect(screen.queryByText("not for display")).not.toBeInTheDocument();
+  });
+
+  it("keeps the model choice visible and retries only the balance when it is unavailable", async () => {
+    const user = userEvent.setup();
+    mockApi.models.mockResolvedValueOnce([
+      {
+        id: "example-chat",
+        display_name: "学习助手",
+        provider: "example",
+        price_summary: "按量计费",
+      },
+    ]);
+    mockApi.billingMe
+      .mockRejectedValueOnce(new Error("not for display"))
+      .mockResolvedValueOnce({ balance: "20.00", currency: "CNY", entries: [] });
+
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("余额暂时无法加载。");
+    await user.click(screen.getByRole("button", { name: "重试余额" }));
+
+    expect(await screen.findByText("余额 ¥20.00")).toBeInTheDocument();
     expect(screen.queryByText("not for display")).not.toBeInTheDocument();
   });
 

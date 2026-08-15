@@ -52,29 +52,41 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
   const [models, setModels] = useState<EnabledModel[] | null>(null);
   const [balance, setBalance] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState("");
-  const [isTutorDataUnavailable, setIsTutorDataUnavailable] = useState(false);
+  const [isModelCatalogUnavailable, setIsModelCatalogUnavailable] = useState(false);
+  const [isBalanceUnavailable, setIsBalanceUnavailable] = useState(false);
   const selectedView =
     workspaceViews.find((view) => view.id === selectedViewId) ?? workspaceViews[0];
   const selectedSpace = spaces.find((space) => space.id === selectedSpaceId) ?? spaces[0];
 
-  const loadTutorData = () => {
-    void Promise.all([api.models(), api.billingMe()])
-      .then(([catalog, billing]) => {
+  const loadModelCatalog = () => {
+    void api.models()
+      .then((catalog) => {
         setModels(catalog);
         setSelectedModelId((current) =>
           catalog.some((model) => model.id === current) ? current : (catalog[0]?.id ?? ""),
         );
-        setBalance(formatRmbBalance(billing.balance));
       })
       .catch(() => {
         setModels(null);
+        setIsModelCatalogUnavailable(true);
+      });
+  };
+
+  const loadBalance = () => {
+    void api
+      .billingMe()
+      .then((billing) => {
+        setBalance(formatRmbBalance(billing.balance));
+      })
+      .catch(() => {
         setBalance(null);
-        setIsTutorDataUnavailable(true);
+        setIsBalanceUnavailable(true);
       });
   };
 
   useEffect(() => {
-    loadTutorData();
+    loadModelCatalog();
+    loadBalance();
   }, []);
 
   return (
@@ -172,21 +184,8 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
               <strong>AI 家教</strong>
               <button type="button">完整解答</button>
             </header>
-            {isTutorDataUnavailable ? (
-              <div className={styles.tutorDataNotice} role="status">
-                暂时无法加载模型和余额。
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsTutorDataUnavailable(false);
-                    loadTutorData();
-                  }}
-                >
-                  重试
-                </button>
-              </div>
-            ) : (
-              <div className={styles.tutorControls}>
+            <div className={styles.tutorControls}>
+              <div>
                 <label className={styles.modelLabel}>
                   模型
                   <select
@@ -202,11 +201,41 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
                     ))}
                   </select>
                 </label>
+                {isModelCatalogUnavailable ? (
+                  <div className={styles.tutorDataNotice} role="status">
+                    模型暂时无法加载。
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsModelCatalogUnavailable(false);
+                        loadModelCatalog();
+                      }}
+                    >
+                      重试模型
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              <div>
                 <span className={styles.balance}>
                   {balance === null ? "余额加载中…" : `余额 ¥${balance}`}
                 </span>
+                {isBalanceUnavailable ? (
+                  <div className={styles.tutorDataNotice} role="status">
+                    余额暂时无法加载。
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsBalanceUnavailable(false);
+                        loadBalance();
+                      }}
+                    >
+                      重试余额
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            )}
+            </div>
             <div className={styles.answer}>
               选择教材内容或直接提出问题。回答将在这里显示来源与费用。
             </div>
