@@ -47,6 +47,13 @@ def synchronize_provider_profiles(
         if not configured.supports_usage:
             profile.enabled = False
 
+    for profile in session.scalars(
+        select(ProviderProfile).where(
+            ProviderProfile.enabled.is_(True), ProviderProfile.supports_usage.is_(False)
+        )
+    ):
+        profile.enabled = False
+
 
 def list_user_models(session: Session) -> list[ModelCatalogItem]:
     profiles = session.scalars(

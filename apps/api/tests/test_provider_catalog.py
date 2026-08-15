@@ -131,6 +131,16 @@ def test_startup_sync_updates_configured_profiles_without_deleting_historical_ro
                 enabled=False,
             )
         )
+        session.add(
+            ProviderProfile(
+                profile_key="historic-unverifiable",
+                provider="legacy",
+                model="legacy-unverifiable-model",
+                display_name="历史不可核验模型",
+                supports_usage=False,
+                enabled=True,
+            )
+        )
 
     settings = Settings(
         app_env="test",
@@ -149,6 +159,7 @@ def test_startup_sync_updates_configured_profiles_without_deleting_historical_ro
         assert profiles["openai-gpt"].enabled is True
         assert profiles["openai-gpt"].model == "gpt-test"
         assert profiles["historic"].display_name == "历史模型"
+        assert profiles["historic-unverifiable"].enabled is False
     engine.dispose()
 
 
