@@ -1,10 +1,11 @@
 from collections.abc import Generator
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
-from sqlalchemy import event
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -316,25 +317,62 @@ def test_reservation_rejects_non_positive_amount(session: Session) -> None:
         session.commit()
 
 
-def test_migration_declares_wallet_integrity_constraints() -> None:
-    migration = (
-        Path(__file__).parents[1] / "migrations" / "versions" / "0002_provider_wallet.py"
-    ).read_text(encoding="utf-8")
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> None:
+    database_path = tmp_path / "schema.db"
+    config = Config("apps/api/alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
 
-    for constraint_name in (
-        "uq_wallet_reservation_id_wallet",
-        "uq_ledger_entry_id_wallet",
-        "fk_ledger_entry_reservation_wallet",
-        "fk_recharge_record_primary_ledger_wallet",
-        "fk_recharge_record_reversal_ledger_wallet",
-        "ck_price_version_input_unit_price_nonnegative",
-        "ck_price_version_cached_input_unit_price_nonnegative",
-        "ck_price_version_output_unit_price_nonnegative",
-        "ck_price_version_unit_size_positive",
-        "ck_fx_version_rate_positive",
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    inspector = inspect(engine)
+    assert {
+        "provider_profiles",
+        "price_versions",
+        "fx_versions",
+        "wallets",
+        "wallet_reservations",
+        "ledger_entries",
+        "recharge_records",
+    }.issubset(inspector.get_table_names())
+    assert {
+        "ck_wallet_reservation_state",
         "ck_wallet_reservation_amount_positive",
-    ):
-        assert constraint_name in migration
+    }.issubset(
+        {
+            constraint["name"]
+            for constraint in inspector.get_check_constraints("wallet_reservations")
+        }
+    )
+    assert {
+        "ck_ledger_entry_type",
+    }.issubset(
+        {constraint["name"] for constraint in inspector.get_check_constraints("ledger_entries")}
+    )
+    assert {
+        ("reservation_id", "wallet_id"),
+    }.issubset(
+        {
+            tuple(constraint["constrained_columns"])
+            for constraint in inspector.get_foreign_keys("ledger_entries")
+        }
+    )
+
+    engine.dispose()
+    command.downgrade(config, "base")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    assert not {
+        "provider_profiles",
+        "price_versions",
+        "fx_versions",
+        "wallets",
+        "wallet_reservations",
+        "ledger_entries",
+        "recharge_records",
+    }.intersection(inspect(engine).get_table_names())
+    engine.dispose()
 
 
 def test_price_version_is_unique_per_profile_and_effective_at(session: Session) -> None:
