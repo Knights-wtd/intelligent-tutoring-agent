@@ -1,3 +1,6 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -9,6 +12,8 @@ from tutor_api.classrooms.router import router as classrooms_router
 from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
 from tutor_api.identity.router import router as identity_router
+from tutor_api.providers.router import router as providers_router
+from tutor_api.providers.service import synchronize_provider_profiles
 from tutor_api.spaces.router import router as spaces_router
 
 
@@ -19,7 +24,14 @@ def create_app(
     production_errors = active_settings.production_errors()
     if production_errors:
         raise RuntimeError("Invalid production configuration: " + "; ".join(production_errors))
-    app = FastAPI(title="Textbook Tutor API", version="0.1.0")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if app.state.session_factory is not None:
+            with app.state.session_factory.begin() as session:
+                synchronize_provider_profiles(session, active_settings.provider_profiles)
+        yield
+
+    app = FastAPI(title="Textbook Tutor API", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings
     if session_factory is not None:
         app.state.session_factory = session_factory
@@ -54,6 +66,7 @@ def create_app(
     app.include_router(identity_router)
     app.include_router(spaces_router)
     app.include_router(classrooms_router)
+    app.include_router(providers_router)
 
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
