@@ -30,23 +30,38 @@ describe("WorkspaceShell", () => {
         price_summary: "按量计费",
       },
     ]);
-    mockApi.billingMe.mockResolvedValue({ balance: "20.00", currency: "CNY", entries: [] });
+    mockApi.billingMe.mockResolvedValue({ balance: "1.00500000", currency: "CNY", entries: [] });
 
     render(<WorkspaceShell />);
 
     expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
-    expect(screen.getByText("余额 ¥20.00")).toBeInTheDocument();
+    expect(screen.getByText("余额 ¥1.01")).toBeInTheDocument();
     expect(screen.queryByText(/API Key|Base URL/i)).not.toBeInTheDocument();
   });
 
   it("offers a neutral retry when the tutor data is unavailable", async () => {
-    mockApi.models.mockRejectedValueOnce(new Error("not for display"));
-    mockApi.billingMe.mockResolvedValueOnce({ balance: "20.00", currency: "CNY", entries: [] });
+    const user = userEvent.setup();
+    mockApi.models
+      .mockRejectedValueOnce(new Error("not for display"))
+      .mockResolvedValueOnce([
+        {
+          id: "example-chat",
+          display_name: "学习助手",
+          provider: "example",
+          price_summary: "按量计费",
+        },
+      ]);
+    mockApi.billingMe
+      .mockResolvedValueOnce({ balance: "0", currency: "CNY", entries: [] })
+      .mockResolvedValueOnce({ balance: "20.00", currency: "CNY", entries: [] });
 
     render(<WorkspaceShell />);
 
     expect(await screen.findByRole("status")).toHaveTextContent("暂时无法加载模型和余额。");
-    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+
+    expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
+    expect(screen.getByText("余额 ¥20.00")).toBeInTheDocument();
     expect(screen.queryByText("not for display")).not.toBeInTheDocument();
   });
 

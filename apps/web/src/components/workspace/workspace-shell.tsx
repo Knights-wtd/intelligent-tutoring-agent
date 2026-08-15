@@ -222,6 +222,47 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
 }
 
 function formatRmbBalance(value: string): string {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? amount.toFixed(2) : "0.00";
+  const match = /^([+-]?)(\d+)(?:\.(\d+))?$/.exec(value.trim());
+  if (!match) return "0.00";
+
+  const [, sign, integerPart, fractionalPart = ""] = match;
+  let whole = stripLeadingZeroes(integerPart);
+  let cents = `${fractionalPart}00`.slice(0, 2);
+
+  if ((fractionalPart[2] ?? "0") >= "5") {
+    const incremented = incrementCents(cents);
+    cents = incremented.cents;
+    if (incremented.carry) whole = incrementWhole(whole);
+  }
+
+  const isZero = whole === "0" && cents === "00";
+  return `${sign === "-" && !isZero ? "-" : ""}${whole}.${cents}`;
+}
+
+function stripLeadingZeroes(value: string): string {
+  return value.replace(/^0+(?=\d)/, "");
+}
+
+function incrementCents(cents: string): { cents: string; carry: boolean } {
+  if (cents === "99") return { cents: "00", carry: true };
+  if (cents[1] !== "9") return { cents: `${cents[0]}${nextDigit(cents[1])}`, carry: false };
+  return { cents: `${nextDigit(cents[0])}0`, carry: false };
+}
+
+function incrementWhole(value: string): string {
+  const digits = value.split("");
+  for (let index = digits.length - 1; index >= 0; index -= 1) {
+    if (digits[index] === "9") {
+      digits[index] = "0";
+      continue;
+    }
+    digits[index] = nextDigit(digits[index]);
+    return digits.join("");
+  }
+  return `1${digits.join("")}`;
+}
+
+function nextDigit(value: string): string {
+  const digits = "0123456789";
+  return digits[digits.indexOf(value) + 1];
 }
