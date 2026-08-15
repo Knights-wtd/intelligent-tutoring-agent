@@ -6,6 +6,8 @@ import HomePage from "./page";
 const mockApi = vi.hoisted(() => ({
   me: vi.fn(),
   spaces: vi.fn(),
+  models: vi.fn(),
+  billingMe: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({ api: mockApi }));
@@ -28,6 +30,8 @@ describe("HomePage", () => {
       { id: "personal", kind: "personal", name: "我的空间" },
       { id: "math", kind: "classroom", name: "七年级数学" },
     ]);
+    mockApi.models.mockResolvedValue([]);
+    mockApi.billingMe.mockResolvedValue({ balance: "0", currency: "CNY", entries: [] });
 
     render(<HomePage />);
 
@@ -35,4 +39,3 @@ describe("HomePage", () => {
     expect(screen.getByLabelText("七年级数学")).toBeInTheDocument();
   });
 });
-

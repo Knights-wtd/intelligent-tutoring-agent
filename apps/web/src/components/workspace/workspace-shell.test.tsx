@@ -1,14 +1,55 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WorkspaceShell } from "./workspace-shell";
+
+const mockApi = vi.hoisted(() => ({
+  models: vi.fn(),
+  billingMe: vi.fn(),
+}));
+
+vi.mock("@/lib/api", () => ({ api: mockApi }));
+
+beforeEach(() => {
+  mockApi.models.mockResolvedValue([]);
+  mockApi.billingMe.mockResolvedValue({ balance: "0", currency: "CNY", entries: [] });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("WorkspaceShell", () => {
+  it("shows enabled models and simple balance without internal provider data", async () => {
+    mockApi.models.mockResolvedValue([
+      {
+        id: "example-chat",
+        display_name: "学习助手",
+        provider: "example",
+        price_summary: "按量计费",
+      },
+    ]);
+    mockApi.billingMe.mockResolvedValue({ balance: "20.00", currency: "CNY", entries: [] });
+
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
+    expect(screen.getByText("余额 ¥20.00")).toBeInTheDocument();
+    expect(screen.queryByText(/API Key|Base URL/i)).not.toBeInTheDocument();
+  });
+
+  it("offers a neutral retry when the tutor data is unavailable", async () => {
+    mockApi.models.mockRejectedValueOnce(new Error("not for display"));
+    mockApi.billingMe.mockResolvedValueOnce({ balance: "20.00", currency: "CNY", entries: [] });
+
+    render(<WorkspaceShell />);
+
+    expect(await screen.findByRole("status")).toHaveTextContent("暂时无法加载模型和余额。");
+    expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
+    expect(screen.queryByText("not for display")).not.toBeInTheDocument();
+  });
+
   it("renders authenticated personal and classroom spaces in the left rail", () => {
     render(
       <WorkspaceShell

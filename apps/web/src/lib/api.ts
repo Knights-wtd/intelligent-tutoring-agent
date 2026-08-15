@@ -13,6 +13,27 @@ export type CurrentUser = {
   personal_space: SpaceSummary;
 };
 
+export type EnabledModel = {
+  id: string;
+  provider: string;
+  display_name: string;
+  price_summary: string;
+};
+
+export type BillingSummary = {
+  balance: string;
+  currency: "CNY";
+  entries: Array<{
+    id: string;
+    amount: string;
+    entry_type: string;
+    created_at: string | null;
+  }>;
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 type Credentials = {
   email: string;
   password: string;
@@ -51,6 +72,8 @@ export const api = {
     return response.json() as Promise<CurrentUser>;
   },
   spaces: () => request<SpaceSummary[]>("/api/v1/spaces"),
+  models: () => request<EnabledModel[]>("/api/v1/models"),
+  billingMe: () => request<BillingSummary>("/api/v1/billing/me"),
   login: (credentials: Credentials) =>
     request("/api/v1/auth/login", {
       method: "POST",

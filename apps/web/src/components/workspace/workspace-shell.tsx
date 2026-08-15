@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
-import type { SpaceSummary } from "@/lib/api";
+import { api, type EnabledModel, type SpaceSummary } from "@/lib/api";
 
 import styles from "./workspace-shell.module.css";
 
@@ -49,9 +49,33 @@ type WorkspaceShellProps = {
 export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) {
   const [selectedViewId, setSelectedViewId] = useState<WorkspaceViewId>("graph");
   const [selectedSpaceId, setSelectedSpaceId] = useState(spaces[0]?.id ?? "");
+  const [models, setModels] = useState<EnabledModel[] | null>(null);
+  const [balance, setBalance] = useState<string | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const [isTutorDataUnavailable, setIsTutorDataUnavailable] = useState(false);
   const selectedView =
     workspaceViews.find((view) => view.id === selectedViewId) ?? workspaceViews[0];
   const selectedSpace = spaces.find((space) => space.id === selectedSpaceId) ?? spaces[0];
+
+  const loadTutorData = () => {
+    void Promise.all([api.models(), api.billingMe()])
+      .then(([catalog, billing]) => {
+        setModels(catalog);
+        setSelectedModelId((current) =>
+          catalog.some((model) => model.id === current) ? current : (catalog[0]?.id ?? ""),
+        );
+        setBalance(formatRmbBalance(billing.balance));
+      })
+      .catch(() => {
+        setModels(null);
+        setBalance(null);
+        setIsTutorDataUnavailable(true);
+      });
+  };
+
+  useEffect(() => {
+    loadTutorData();
+  }, []);
 
   return (
     <main className={styles.shell}>
@@ -148,6 +172,41 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
               <strong>AI 家教</strong>
               <button type="button">完整解答</button>
             </header>
+            {isTutorDataUnavailable ? (
+              <div className={styles.tutorDataNotice} role="status">
+                暂时无法加载模型和余额。
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsTutorDataUnavailable(false);
+                    loadTutorData();
+                  }}
+                >
+                  重试
+                </button>
+              </div>
+            ) : (
+              <div className={styles.tutorControls}>
+                <label className={styles.modelLabel}>
+                  模型
+                  <select
+                    aria-label="选择 AI 模型"
+                    disabled={models === null || models.length === 0}
+                    onChange={(event) => setSelectedModelId(event.target.value)}
+                    value={selectedModelId}
+                  >
+                    {models?.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className={styles.balance}>
+                  {balance === null ? "余额加载中…" : `余额 ¥${balance}`}
+                </span>
+              </div>
+            )}
             <div className={styles.answer}>
               选择教材内容或直接提出问题。回答将在这里显示来源与费用。
             </div>
@@ -160,4 +219,9 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
       </Group>
     </main>
   );
+}
+
+function formatRmbBalance(value: string): string {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount.toFixed(2) : "0.00";
 }

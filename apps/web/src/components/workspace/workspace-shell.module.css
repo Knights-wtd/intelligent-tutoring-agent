@@ -99,6 +99,54 @@
   min-width: 0;
 }
 
+.tutorControls,
+.tutorDataNotice {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #303540;
+  border-radius: 10px;
+  background: #20242c;
+  padding: 10px;
+  color: #cfd1da;
+  font-size: 12px;
+}
+
+.modelLabel {
+  display: grid;
+  gap: 5px;
+  color: #9ea3af;
+}
+
+.modelLabel select {
+  min-width: 130px;
+  border: 1px solid #3a3f4c;
+  border-radius: 7px;
+  background: #171a21;
+  color: #e8e9ef;
+  padding: 6px 8px;
+}
+
+.balance {
+  color: #d9d3ff;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tutorDataNotice {
+  align-items: center;
+}
+
+.tutorDataNotice button {
+  border: 0;
+  border-radius: 7px;
+  background: #343844;
+  color: white;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
 .treePane {
   padding: 15px 12px;
   background: #1b1e25;
