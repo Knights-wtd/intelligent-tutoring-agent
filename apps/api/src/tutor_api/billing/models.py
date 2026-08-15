@@ -4,7 +4,17 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, Enum, ForeignKey, Numeric, String, UniqueConstraint, func
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tutor_api.core.database import Base
@@ -36,6 +46,11 @@ class Wallet(Base):
 
 class WalletReservation(Base):
     __tablename__ = "wallet_reservations"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('active', 'settled', 'released')", name="ck_wallet_reservation_state"
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     wallet_id: Mapped[UUID] = mapped_column(ForeignKey("wallets.id"), index=True)
@@ -58,7 +73,12 @@ class WalletReservation(Base):
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
-    __table_args__ = (UniqueConstraint("reservation_id", name="uq_ledger_entry_reservation"),)
+    __table_args__ = (
+        CheckConstraint(
+            "entry_type IN ('recharge', 'consumption', 'reversal')", name="ck_ledger_entry_type"
+        ),
+        UniqueConstraint("reservation_id", name="uq_ledger_entry_reservation"),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     wallet_id: Mapped[UUID] = mapped_column(ForeignKey("wallets.id"), index=True)

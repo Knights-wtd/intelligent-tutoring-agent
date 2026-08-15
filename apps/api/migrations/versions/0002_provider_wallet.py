@@ -92,6 +92,9 @@ def upgrade() -> None:
         sa.Column("released_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["wallet_id"], ["wallets.id"]),
         sa.PrimaryKeyConstraint("id"),
+        sa.CheckConstraint(
+            "state IN ('active', 'settled', 'released')", name="ck_wallet_reservation_state"
+        ),
         sa.UniqueConstraint("request_id"),
     )
     op.create_index("ix_wallet_reservations_wallet_id", "wallet_reservations", ["wallet_id"])
@@ -107,6 +110,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["reservation_id"], ["wallet_reservations.id"]),
         sa.ForeignKeyConstraint(["wallet_id"], ["wallets.id"]),
         sa.PrimaryKeyConstraint("id"),
+        sa.CheckConstraint(
+            "entry_type IN ('recharge', 'consumption', 'reversal')", name="ck_ledger_entry_type"
+        ),
         sa.UniqueConstraint("reservation_id", name="uq_ledger_entry_reservation"),
     )
     op.create_index("ix_ledger_entries_wallet_id", "ledger_entries", ["wallet_id"])

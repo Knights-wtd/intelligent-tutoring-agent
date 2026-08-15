@@ -111,6 +111,45 @@ def test_reservation_request_id_is_unique(session: Session) -> None:
         session.commit()
 
 
+def test_reservation_state_rejects_unknown_value(session: Session) -> None:
+    user = User(email="learner@example.com", username="learner", password_hash="hash")
+    session.add(user)
+    session.flush()
+    wallet = Wallet(user_id=user.id)
+    session.add(wallet)
+    session.flush()
+    session.add(
+        WalletReservation(
+            wallet_id=wallet.id,
+            request_id="request-invalid-state",
+            reserved_amount=Decimal("1"),
+            state="unknown",  # type: ignore[arg-type]
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_ledger_entry_type_rejects_unknown_value(session: Session) -> None:
+    user = User(email="learner@example.com", username="learner", password_hash="hash")
+    session.add(user)
+    session.flush()
+    wallet = Wallet(user_id=user.id)
+    session.add(wallet)
+    session.flush()
+    session.add(
+        LedgerEntry(
+            wallet_id=wallet.id,
+            amount=Decimal("1"),
+            entry_type="unknown",  # type: ignore[arg-type]
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
 def test_price_version_is_unique_per_profile_and_effective_at(session: Session) -> None:
     profile = ProviderProfile(
         profile_key="openai-gpt",
