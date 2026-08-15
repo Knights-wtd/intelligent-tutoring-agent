@@ -37,6 +37,14 @@ class RechargeAlreadyReversedError(ValueError):
     pass
 
 
+class DuplicateExternalReferenceError(ValueError):
+    pass
+
+
+class RechargeTargetUserNotFoundError(ValueError):
+    pass
+
+
 def _money(value: Decimal | int | str) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.00000001"))
 
@@ -118,12 +126,18 @@ def create_manual_recharge(
     if not external_reference.strip() or not reason.strip():
         raise ValueError("Recharge reference and reason must not be blank")
     if session.get(User, user_id) is None:
-        raise ValueError("User was not found")
+        raise RechargeTargetUserNotFoundError("User was not found")
     if session.scalar(
         select(RechargeRecord).where(RechargeRecord.external_reference == external_reference)
     ) is not None:
-        raise ValueError("External reference has already been used")
+        raise DuplicateExternalReferenceError("External reference has already been used")
     wallet = _wallet_for_update(session, user_id)
+    # Same-wallet writes are serialized by the wallet lock. Recheck after it so
+    # concurrent retries of the same external reference do not add a second ledger row.
+    if session.scalar(
+        select(RechargeRecord).where(RechargeRecord.external_reference == external_reference)
+    ) is not None:
+        raise DuplicateExternalReferenceError("External reference has already been used")
     entry = LedgerEntry(
         wallet_id=wallet.id,
         amount=recharge_amount,

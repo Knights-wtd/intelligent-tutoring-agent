@@ -3,6 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from sqlalchemy.exc import IntegrityError
 
 from tutor_api.billing.schemas import (
     BillingEntryResponse,
@@ -13,7 +14,9 @@ from tutor_api.billing.schemas import (
     ReversalResponse,
 )
 from tutor_api.billing.service import (
+    DuplicateExternalReferenceError,
     RechargeAlreadyReversedError,
+    RechargeTargetUserNotFoundError,
     billing_entries,
     create_manual_recharge,
     reverse_manual_recharge,
@@ -54,8 +57,18 @@ def create_recharge(
                 external_reference=record.external_reference,
                 created_at=record.created_at,
             )
-    except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="充值记录冲突") from error
+    except RechargeTargetUserNotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在") from error
+    except DuplicateExternalReferenceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="外部流水号已被使用"
+        ) from error
+    except IntegrityError as error:
+        if "external_reference" not in str(error.orig).casefold():
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="外部流水号已被使用"
+        ) from error
     return result
 
 

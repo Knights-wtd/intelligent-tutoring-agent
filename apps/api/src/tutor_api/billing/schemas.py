@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class VerifiedUsage(BaseModel):
@@ -39,6 +39,13 @@ class ManualRechargeRequest(BaseModel):
     amount: Decimal = Field(gt=0, max_digits=20, decimal_places=8)
     external_reference: str = Field(min_length=1, max_length=255)
     reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("external_reference", "reason")
+    @classmethod
+    def validate_non_blank_audit_fields(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("充值审计字段不能为空白")
+        return value
 
 
 class ReversalRequest(BaseModel):

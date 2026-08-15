@@ -1,14 +1,20 @@
+import os
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
-from uuid import UUID
+from threading import Barrier
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 import tutor_api.billing.models  # noqa: F401
 from tutor_api.billing.models import LedgerEntry, LedgerEntryType, RechargeRecord
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
+from tutor_api.identity.models import User
 from tutor_api.main import create_app
 
 
@@ -109,6 +115,124 @@ def test_admin_recharge_requires_a_strictly_positive_decimal_amount(
     )
 
     assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("external_reference", " "), ("reason", " ")],
+)
+def test_admin_recharge_rejects_blank_audit_fields_as_invalid_input(
+    client_and_engine, field: str, value: str
+) -> None:
+    client, _ = client_and_engine
+    learner = register(client, "learner")
+    client.cookies.clear()
+    register(client, "admin")
+    payload = {
+        "user_id": learner["id"],
+        "amount": "20.00",
+        "external_reference": "manual-001",
+        "reason": "人工充值",
+    }
+    payload[field] = value
+
+    assert client.post("/api/v1/admin/recharges", json=payload).status_code == 422
+
+
+def test_admin_recharge_returns_not_found_when_target_user_is_missing(client_and_engine) -> None:
+    client, _ = client_and_engine
+    register(client, "admin")
+
+    response = client.post(
+        "/api/v1/admin/recharges",
+        json={
+            "user_id": "00000000-0000-0000-0000-000000000099",
+            "amount": "20.00",
+            "external_reference": "missing-user-001",
+            "reason": "人工充值",
+        },
+    )
+
+    assert response.status_code == 404
+
+
+def test_admin_recharge_returns_conflict_for_a_reused_external_reference(client_and_engine) -> None:
+    client, _ = client_and_engine
+    learner = register(client, "learner")
+    client.cookies.clear()
+    register(client, "admin")
+    payload = {
+        "user_id": learner["id"],
+        "amount": "20.00",
+        "external_reference": "manual-duplicate-001",
+        "reason": "人工充值",
+    }
+
+    assert client.post("/api/v1/admin/recharges", json=payload).status_code == 201
+    assert client.post("/api/v1/admin/recharges", json=payload).status_code == 409
+
+
+def test_postgres_concurrent_external_references_write_one_recharge_record() -> None:
+    """The unique key remains the cross-wallet race backstop after wallet locking."""
+
+    postgres_url = os.environ.get("TEST_POSTGRES_URL")
+    if not postgres_url:
+        pytest.skip("TEST_POSTGRES_URL is not configured")
+
+    from tutor_api.billing.service import create_manual_recharge
+
+    engine = create_engine_from_url(postgres_url, app_env="test")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    suffix = str(uuid4())
+    with factory.begin() as session:
+        users = [
+            User(
+                email=f"recharge-race-{index}-{suffix}@example.com",
+                username=f"recharge-race-{index}-{suffix}",
+                password_hash="not-used-by-billing-tests",
+            )
+            for index in range(2)
+        ]
+        session.add_all(users)
+        session.flush()
+        user_ids = [user.id for user in users]
+
+    insert_barrier = Barrier(2)
+    reference = f"race-{suffix}"
+
+    def synchronize_recharge_insert(*args) -> None:
+        if args[2].startswith("INSERT INTO recharge_records"):
+            insert_barrier.wait(timeout=10)
+
+    event.listen(engine, "before_cursor_execute", synchronize_recharge_insert)
+    try:
+        def create_for(user_id: UUID) -> str:
+            try:
+                with factory.begin() as session:
+                    create_manual_recharge(
+                        session,
+                        user_id=user_id,
+                        amount="1",
+                        external_reference=reference,
+                        reason="并发回归",
+                        created_by_user_id=user_id,
+                    )
+            except IntegrityError:
+                return "duplicate"
+            return "created"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(create_for, user_ids))
+    finally:
+        event.remove(engine, "before_cursor_execute", synchronize_recharge_insert)
+
+    with factory() as session:
+        assert outcomes.count("created") == 1
+        assert outcomes.count("duplicate") == 1
+        record = session.query(RechargeRecord).filter_by(external_reference=reference).one()
+        assert session.get(LedgerEntry, record.ledger_entry_id) is not None
+    engine.dispose()
 
 
 def test_reversal_is_one_time_and_creates_a_paired_negative_entry(client_and_engine) -> None:
