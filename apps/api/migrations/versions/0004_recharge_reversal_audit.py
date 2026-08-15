@@ -1,7 +1,7 @@
 """record the administrator and reason for recharge reversals
 
 Revision ID: 0004_recharge_reversal_audit
-Revises: 0003_reservation_provider
+Revises: 0003_bind_reservations_to_provider
 Create Date: 2026-08-15
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0004_recharge_reversal_audit"
-down_revision: str | Sequence[str] | None = "0003_reservation_provider"
+down_revision: str | Sequence[str] | None = "0003_bind_reservations_to_provider"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

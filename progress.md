@@ -1,5 +1,23 @@
 # Progress Log
 
+## Session: 2026-08-14 · Provider and Wallet Planning
+
+- **Status:** in_progress
+- Actions taken:
+  - 恢复已通过 Docker/PostgreSQL 验收的认证、班级与 C3 工作台里程碑。
+  - 依据已批准的供应商、价格、汇率、钱包与人工充值设计，建立下一里程碑的测试先行实施计划。
+  - 锁定边界：本机采用模拟供应商配置，不引入真实密钥、真实模型调用、自动支付、文档导入或 Agent 回答。
+  - Task 1 完成并通过规格、代码质量两轮复审：供应商配置严格校验且不回显误填密钥；管理员邮箱字符串、列表与元组均统一规范化、去重和校验；Compose 仅接收非秘密配置。
+  - Task 2 完成并通过规格、代码质量两轮复审：价格、汇率、钱包、预留、账本和充值审计的数据库约束已建立；跨钱包引用、数值边界和非法状态均由数据库拒绝；迁移在根目录和 API 工作目录均完成升级/降级往返测试。
+  - Task 3 完成并通过规格、代码质量两轮复审：启动时安全同步非秘密供应商目录；用户仅能读取启用且可计量的模型和人民币价格摘要。模型身份变化会失效旧配置而不重标历史价格；最新价格/汇率使用 Decimal 快照换算，目录查询不产生 N+1 请求。
+  - Task 4 完成并通过规格、代码质量两轮复审：钱包预留、可用余额和结算全部使用 Decimal/NUMERIC；首次并发建钱包安全串行化。预留持久绑定启用模型，用量必须明确标为已验证；账本只追加，结算/释放/重试均幂等。历史预留迁移为保留审计但不可结算的已释放记录，在途已绑定预留即使模型随后停用仍可结算。
+  - Task 5 完成并通过规格、代码质量两轮复审：仅服务端平台管理员白名单可执行人工充值和一次性冲正；用户仅能读取自己的脱敏分页账单。重复外部编号、冲正与结算均由钱包锁和数据库约束保护；冲正不得使已消费或被预留占用的余额倒挂。迁移往返已验证，旧版本约束保持不可变。
+  - Task 6 完成并通过规格、代码质量两轮复审：C3 右侧仅展示启用模型选择和两位小数人民币余额，保持三面板和两条可拖动分隔线。模型与余额独立获取、独立失败提示和独立重试；金额采用字符串十进制半进位格式化，不经过二进制浮点数。
+- Files created/modified:
+  - `docs/superpowers/plans/2026-08-14-provider-wallet-plan.md`
+  - `task_plan.md`
+  - `progress.md`
+
 ## Session: 2026-08-14 · Identity & Classroom Design
 
 - **Status:** in_progress
@@ -110,6 +128,13 @@
   - `docs/superpowers/specs/2026-08-14-textbook-agent-platform-design.md`
   - `docs/superpowers/plans/2026-08-14-textbook-agent-platform-roadmap.md`
   - `docs/superpowers/plans/2026-08-14-platform-foundation-plan.md`
+
+## Task 7 Verification · 2026-08-15
+
+- Safe configuration documentation completed: `.env.example` contains only empty example key fields and a non-functional model profile; README documents ignored `.env`, reviewed price/FX snapshots, and manual recharge/reversal.
+- Final checks: API 171 passed / 3 skipped / 95.45% coverage; Ruff passed; Web 15 tests, lint, and production build passed.
+- Isolated Compose acceptance used a separate project, ports, and volumes. Health was OK; configured administrator recharge yielded `example-chat-model` and a learner CNY balance of `12.50000000`. The project was stopped with `down` without deleting volumes.
+- Migration compatibility fix: preserve `0003_bind_reservations_to_provider`; its upgrade widens Alembic's PostgreSQL version column to `VARCHAR(64)` before Alembic stamps the historical long identifier. SQLite databases already at that legacy revision upgrade to head via regression test; a PostgreSQL database could not have successfully stored the old long identifier and remains safely at 0002 for forward upgrade.
 
 ## Test Results
 

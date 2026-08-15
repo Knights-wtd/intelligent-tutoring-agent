@@ -1,6 +1,6 @@
 """bind wallet reservations to selected provider profiles
 
-Revision ID: 0003_reservation_provider
+Revision ID: 0003_bind_reservations_to_provider
 Revises: 0002_provider_wallet
 Create Date: 2026-08-15
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0003_reservation_provider"
+revision: str = "0003_bind_reservations_to_provider"
 down_revision: str | Sequence[str] | None = "0002_provider_wallet"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -20,6 +20,17 @@ _LEGACY_PROFILE_KEY = "__legacy_reservation_unavailable__"
 
 
 def upgrade() -> None:
+    # Alembic creates version_num as VARCHAR(32), but this historical revision id
+    # is longer. Widen before Alembic writes this revision to PostgreSQL so the
+    # original revision history stays valid for existing SQLite databases too.
+    with op.batch_alter_table("alembic_version") as batch_op:
+        batch_op.alter_column(
+            "version_num",
+            existing_type=sa.String(length=32),
+            type_=sa.String(length=64),
+            existing_nullable=False,
+        )
+
     # Reservations created before this migration have no trustworthy model identity.
     # Preserve their audit trail but make pending authorization unusable: bind them to
     # a dedicated disabled profile and release any active hold before enforcing NOT NULL.

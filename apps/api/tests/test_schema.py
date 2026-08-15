@@ -7,8 +7,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from alembic.script import ScriptDirectory
-from sqlalchemy import MetaData, create_engine, event, inspect, select
+from sqlalchemy import MetaData, create_engine, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -457,11 +456,20 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
     engine.dispose()
 
 
-def test_migration_identifiers_fit_alembics_postgresql_version_column() -> None:
+def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
-    revisions = ScriptDirectory.from_config(config).walk_revisions(base="base", head="heads")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{(tmp_path / 'legacy.db').as_posix()}")
 
-    assert all(len(revision.revision) <= 32 for revision in revisions)
+    command.upgrade(config, "0003_bind_reservations_to_provider")
+    command.upgrade(config, "head")
+
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        with engine.connect() as connection:
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert version == "0005_reversal_audit_group"
+    finally:
+        engine.dispose()
 
 @pytest.mark.filterwarnings(
     "ignore:No path_separator found in configuration:DeprecationWarning"
