@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -21,7 +22,7 @@ class ProviderProfile(Base):
     __tablename__ = "provider_profiles"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    profile_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    profile_key: Mapped[str] = mapped_column(String(100), unique=True)
     provider: Mapped[str] = mapped_column(String(100), index=True)
     model: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(255))
@@ -39,6 +40,17 @@ class PriceVersion(Base):
         UniqueConstraint(
             "provider_profile_id", "effective_at", name="uq_price_version_profile_effective_at"
         ),
+        CheckConstraint(
+            "input_unit_price >= 0", name="ck_price_version_input_unit_price_nonnegative"
+        ),
+        CheckConstraint(
+            "cached_input_unit_price >= 0",
+            name="ck_price_version_cached_input_unit_price_nonnegative",
+        ),
+        CheckConstraint(
+            "output_unit_price >= 0", name="ck_price_version_output_unit_price_nonnegative"
+        ),
+        CheckConstraint("unit_size > 0", name="ck_price_version_unit_size_positive"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -64,6 +76,7 @@ class FxVersion(Base):
             "effective_at",
             name="uq_fx_version_pair_effective_at",
         ),
+        CheckConstraint("rate > 0", name="ck_fx_version_rate_positive"),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)

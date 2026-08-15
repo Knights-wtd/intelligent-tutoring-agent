@@ -1,22 +1,35 @@
 from collections.abc import Generator
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from tutor_api.billing.models import LedgerEntry, LedgerEntryType, Wallet, WalletReservation
+from tutor_api.billing.models import (
+    LedgerEntry,
+    LedgerEntryType,
+    RechargeRecord,
+    Wallet,
+    WalletReservation,
+)
 from tutor_api.classrooms.models import Classroom, ClassroomMembership, ClassroomRole
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
-from tutor_api.providers.models import PriceVersion, ProviderProfile
+from tutor_api.providers.models import FxVersion, PriceVersion, ProviderProfile
 from tutor_api.spaces.models import Space, SpaceKind
 
 
 @pytest.fixture
 def session() -> Generator[Session, None, None]:
     engine = create_engine_from_url("sqlite://", app_env="test")
+    event.listen(
+        engine,
+        "connect",
+        lambda connection, _: connection.execute("PRAGMA foreign_keys=ON"),
+    )
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     active_session = factory()
@@ -148,6 +161,180 @@ def test_ledger_entry_type_rejects_unknown_value(session: Session) -> None:
 
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_ledger_reservation_must_belong_to_its_wallet(session: Session) -> None:
+    first_user = User(email="first@example.com", username="first", password_hash="hash")
+    second_user = User(email="second@example.com", username="second", password_hash="hash")
+    session.add_all([first_user, second_user])
+    session.flush()
+    first_wallet = Wallet(user_id=first_user.id)
+    second_wallet = Wallet(user_id=second_user.id)
+    session.add_all([first_wallet, second_wallet])
+    session.flush()
+    reservation = WalletReservation(
+        wallet_id=first_wallet.id, request_id="cross-wallet", reserved_amount=Decimal("1")
+    )
+    session.add(reservation)
+    session.flush()
+    session.add(
+        LedgerEntry(
+            wallet_id=second_wallet.id,
+            reservation_id=reservation.id,
+            amount=Decimal("-1"),
+            entry_type=LedgerEntryType.CONSUMPTION,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_recharge_ledger_entry_must_belong_to_its_wallet(session: Session) -> None:
+    first_user = User(email="first@example.com", username="first", password_hash="hash")
+    second_user = User(email="second@example.com", username="second", password_hash="hash")
+    session.add_all([first_user, second_user])
+    session.flush()
+    first_wallet = Wallet(user_id=first_user.id)
+    second_wallet = Wallet(user_id=second_user.id)
+    session.add_all([first_wallet, second_wallet])
+    session.flush()
+    entry = LedgerEntry(
+        wallet_id=first_wallet.id, amount=Decimal("1"), entry_type=LedgerEntryType.RECHARGE
+    )
+    session.add(entry)
+    session.flush()
+    session.add(
+        RechargeRecord(
+            wallet_id=second_wallet.id,
+            ledger_entry_id=entry.id,
+            external_reference="cross-wallet-primary",
+            reason="test",
+            created_by_user_id=first_user.id,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_recharge_reversal_entry_must_belong_to_its_wallet(session: Session) -> None:
+    first_user = User(email="first@example.com", username="first", password_hash="hash")
+    second_user = User(email="second@example.com", username="second", password_hash="hash")
+    session.add_all([first_user, second_user])
+    session.flush()
+    first_wallet = Wallet(user_id=first_user.id)
+    second_wallet = Wallet(user_id=second_user.id)
+    session.add_all([first_wallet, second_wallet])
+    session.flush()
+    primary_entry = LedgerEntry(
+        wallet_id=second_wallet.id, amount=Decimal("1"), entry_type=LedgerEntryType.RECHARGE
+    )
+    reversal_entry = LedgerEntry(
+        wallet_id=first_wallet.id, amount=Decimal("-1"), entry_type=LedgerEntryType.REVERSAL
+    )
+    session.add_all([primary_entry, reversal_entry])
+    session.flush()
+    session.add(
+        RechargeRecord(
+            wallet_id=second_wallet.id,
+            ledger_entry_id=primary_entry.id,
+            reversal_ledger_entry_id=reversal_entry.id,
+            external_reference="cross-wallet-reversal",
+            reason="test",
+            created_by_user_id=second_user.id,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("input_unit_price", Decimal("-0.00000001")),
+        ("cached_input_unit_price", Decimal("-0.00000001")),
+        ("output_unit_price", Decimal("-0.00000001")),
+        ("unit_size", 0),
+    ],
+)
+def test_price_version_rejects_invalid_price_or_unit_size(
+    session: Session, field: str, value: Decimal | int
+) -> None:
+    profile = ProviderProfile(
+        profile_key="openai-gpt", provider="openai", model="gpt-test", display_name="测试模型"
+    )
+    session.add(profile)
+    session.flush()
+    price = PriceVersion(
+        provider_profile_id=profile.id,
+        effective_at=datetime.now(UTC),
+        source_url="https://example.test/prices",
+        currency="USD",
+        input_unit_price=Decimal("1"),
+        cached_input_unit_price=Decimal("0.5"),
+        output_unit_price=Decimal("2"),
+        unit_size=1_000_000,
+    )
+    setattr(price, field, value)
+    session.add(price)
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_fx_version_rejects_non_positive_rate(session: Session) -> None:
+    session.add(
+        FxVersion(
+            base_currency="USD",
+            quote_currency="CNY",
+            effective_at=datetime.now(UTC),
+            rate=Decimal("0"),
+            source_url="https://example.test/fx",
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_reservation_rejects_non_positive_amount(session: Session) -> None:
+    user = User(email="learner@example.com", username="learner", password_hash="hash")
+    session.add(user)
+    session.flush()
+    wallet = Wallet(user_id=user.id)
+    session.add(wallet)
+    session.flush()
+    session.add(
+        WalletReservation(
+            wallet_id=wallet.id, request_id="zero-reservation", reserved_amount=Decimal("0")
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_migration_declares_wallet_integrity_constraints() -> None:
+    migration = (
+        Path(__file__).parents[1] / "migrations" / "versions" / "0002_provider_wallet.py"
+    ).read_text(encoding="utf-8")
+
+    for constraint_name in (
+        "uq_wallet_reservation_id_wallet",
+        "uq_ledger_entry_id_wallet",
+        "fk_ledger_entry_reservation_wallet",
+        "fk_recharge_record_primary_ledger_wallet",
+        "fk_recharge_record_reversal_ledger_wallet",
+        "ck_price_version_input_unit_price_nonnegative",
+        "ck_price_version_cached_input_unit_price_nonnegative",
+        "ck_price_version_output_unit_price_nonnegative",
+        "ck_price_version_unit_size_positive",
+        "ck_fx_version_rate_positive",
+        "ck_wallet_reservation_amount_positive",
+    ):
+        assert constraint_name in migration
 
 
 def test_price_version_is_unique_per_profile_and_effective_at(session: Session) -> None:

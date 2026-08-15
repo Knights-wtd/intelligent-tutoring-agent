@@ -31,7 +31,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("profile_key"),
     )
-    op.create_index("ix_provider_profiles_profile_key", "provider_profiles", ["profile_key"])
     op.create_index("ix_provider_profiles_provider", "provider_profiles", ["provider"])
     op.create_table(
         "price_versions",
@@ -47,6 +46,17 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["provider_profile_id"], ["provider_profiles.id"]),
         sa.PrimaryKeyConstraint("id"),
+        sa.CheckConstraint(
+            "input_unit_price >= 0", name="ck_price_version_input_unit_price_nonnegative"
+        ),
+        sa.CheckConstraint(
+            "cached_input_unit_price >= 0",
+            name="ck_price_version_cached_input_unit_price_nonnegative",
+        ),
+        sa.CheckConstraint(
+            "output_unit_price >= 0", name="ck_price_version_output_unit_price_nonnegative"
+        ),
+        sa.CheckConstraint("unit_size > 0", name="ck_price_version_unit_size_positive"),
         sa.UniqueConstraint(
             "provider_profile_id", "effective_at", name="uq_price_version_profile_effective_at"
         ),
@@ -62,6 +72,7 @@ def upgrade() -> None:
         sa.Column("source_url", sa.String(length=2048), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
+        sa.CheckConstraint("rate > 0", name="ck_fx_version_rate_positive"),
         sa.UniqueConstraint(
             "base_currency", "quote_currency", "effective_at", name="uq_fx_version_pair_effective_at"
         ),
@@ -77,7 +88,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id"),
     )
-    op.create_index("ix_wallets_user_id", "wallets", ["user_id"])
     op.create_table(
         "wallet_reservations",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -95,7 +105,9 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "state IN ('active', 'settled', 'released')", name="ck_wallet_reservation_state"
         ),
+        sa.CheckConstraint("reserved_amount > 0", name="ck_wallet_reservation_amount_positive"),
         sa.UniqueConstraint("request_id"),
+        sa.UniqueConstraint("id", "wallet_id", name="uq_wallet_reservation_id_wallet"),
     )
     op.create_index("ix_wallet_reservations_wallet_id", "wallet_reservations", ["wallet_id"])
     op.create_table(
@@ -107,12 +119,17 @@ def upgrade() -> None:
         sa.Column("entry_type", sa.String(length=11), nullable=False),
         sa.Column("snapshot", sa.JSON(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.ForeignKeyConstraint(["reservation_id"], ["wallet_reservations.id"]),
+        sa.ForeignKeyConstraint(
+            ["reservation_id", "wallet_id"],
+            ["wallet_reservations.id", "wallet_reservations.wallet_id"],
+            name="fk_ledger_entry_reservation_wallet",
+        ),
         sa.ForeignKeyConstraint(["wallet_id"], ["wallets.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.CheckConstraint(
             "entry_type IN ('recharge', 'consumption', 'reversal')", name="ck_ledger_entry_type"
         ),
+        sa.UniqueConstraint("id", "wallet_id", name="uq_ledger_entry_id_wallet"),
         sa.UniqueConstraint("reservation_id", name="uq_ledger_entry_reservation"),
     )
     op.create_index("ix_ledger_entries_wallet_id", "ledger_entries", ["wallet_id"])
@@ -128,8 +145,16 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("reversed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"]),
-        sa.ForeignKeyConstraint(["ledger_entry_id"], ["ledger_entries.id"]),
-        sa.ForeignKeyConstraint(["reversal_ledger_entry_id"], ["ledger_entries.id"]),
+        sa.ForeignKeyConstraint(
+            ["ledger_entry_id", "wallet_id"],
+            ["ledger_entries.id", "ledger_entries.wallet_id"],
+            name="fk_recharge_record_primary_ledger_wallet",
+        ),
+        sa.ForeignKeyConstraint(
+            ["reversal_ledger_entry_id", "wallet_id"],
+            ["ledger_entries.id", "ledger_entries.wallet_id"],
+            name="fk_recharge_record_reversal_ledger_wallet",
+        ),
         sa.ForeignKeyConstraint(["wallet_id"], ["wallets.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("ledger_entry_id"),
@@ -148,11 +173,9 @@ def downgrade() -> None:
     op.drop_table("ledger_entries")
     op.drop_index("ix_wallet_reservations_wallet_id", table_name="wallet_reservations")
     op.drop_table("wallet_reservations")
-    op.drop_index("ix_wallets_user_id", table_name="wallets")
     op.drop_table("wallets")
     op.drop_table("fx_versions")
     op.drop_index("ix_price_versions_provider_profile_id", table_name="price_versions")
     op.drop_table("price_versions")
     op.drop_index("ix_provider_profiles_provider", table_name="provider_profiles")
-    op.drop_index("ix_provider_profiles_profile_key", table_name="provider_profiles")
     op.drop_table("provider_profiles")
