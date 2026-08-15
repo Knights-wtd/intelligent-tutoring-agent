@@ -51,6 +51,13 @@ class ManualRechargeRequest(BaseModel):
 class ReversalRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=1000)
 
+    @field_validator("reason")
+    @classmethod
+    def validate_non_blank_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("冲正原因不能为空白")
+        return value
+
 
 class RechargeResponse(BaseModel):
     id: UUID

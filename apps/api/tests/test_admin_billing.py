@@ -273,6 +273,30 @@ def test_reversal_is_one_time_and_creates_a_paired_negative_entry(client_and_eng
         assert reversal_entry.snapshot["reversal_of_recharge_record_id"] == str(record.id)
 
 
+def test_admin_reversal_rejects_a_blank_reason_as_invalid_input(client_and_engine) -> None:
+    client, _ = client_and_engine
+    learner = register(client, "learner")
+    client.cookies.clear()
+    register(client, "admin")
+    recharge = client.post(
+        "/api/v1/admin/recharges",
+        json={
+            "user_id": learner["id"],
+            "amount": "20.00",
+            "external_reference": "manual-blank-reversal-001",
+            "reason": "人工充值",
+        },
+    )
+    assert recharge.status_code == 201
+
+    response = client.post(
+        f"/api/v1/admin/recharges/{recharge.json()['id']}/reverse",
+        json={"reason": " "},
+    )
+
+    assert response.status_code == 422
+
+
 def test_user_billing_is_paginated_and_hides_internal_usage_details(client_and_engine) -> None:
     client, _ = client_and_engine
     learner = register(client, "learner")
