@@ -1,6 +1,7 @@
 from collections.abc import Generator
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from alembic import command
@@ -322,7 +323,7 @@ def test_reservation_rejects_non_positive_amount(session: Session) -> None:
 )
 def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> None:
     database_path = tmp_path / "schema.db"
-    config = Config("apps/api/alembic.ini")
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
 
     command.upgrade(config, "head")
@@ -352,11 +353,43 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
         {constraint["name"] for constraint in inspector.get_check_constraints("ledger_entries")}
     )
     assert {
-        ("reservation_id", "wallet_id"),
+        "ck_price_version_input_unit_price_nonnegative",
+        "ck_price_version_cached_input_unit_price_nonnegative",
+        "ck_price_version_output_unit_price_nonnegative",
+        "ck_price_version_unit_size_positive",
+    }.issubset(
+        {constraint["name"] for constraint in inspector.get_check_constraints("price_versions")}
+    )
+    assert {"ck_fx_version_rate_positive"}.issubset(
+        {constraint["name"] for constraint in inspector.get_check_constraints("fx_versions")}
+    )
+    assert {
+        (
+            ("reservation_id", "wallet_id"),
+            "wallet_reservations",
+            ("id", "wallet_id"),
+        ),
     }.issubset(
         {
-            tuple(constraint["constrained_columns"])
+            (
+                tuple(constraint["constrained_columns"]),
+                constraint["referred_table"],
+                tuple(constraint["referred_columns"]),
+            )
             for constraint in inspector.get_foreign_keys("ledger_entries")
+        }
+    )
+    assert {
+        (("ledger_entry_id", "wallet_id"), "ledger_entries", ("id", "wallet_id")),
+        (("reversal_ledger_entry_id", "wallet_id"), "ledger_entries", ("id", "wallet_id")),
+    }.issubset(
+        {
+            (
+                tuple(constraint["constrained_columns"]),
+                constraint["referred_table"],
+                tuple(constraint["referred_columns"]),
+            )
+            for constraint in inspector.get_foreign_keys("recharge_records")
         }
     )
 
