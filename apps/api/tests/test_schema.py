@@ -2,11 +2,12 @@ from collections.abc import Generator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, event, inspect
+from sqlalchemy import MetaData, create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -443,6 +444,69 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
         "ledger_entries",
         "recharge_records",
     }.intersection(inspect(engine).get_table_names())
+    engine.dispose()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_migration_backfills_and_releases_historic_unbound_reservations(tmp_path) -> None:
+    database_path = tmp_path / "historic-reservations.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+
+    command.upgrade(config, "0002_provider_wallet")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    metadata = MetaData()
+    metadata.reflect(bind=engine, only=["users", "wallets", "wallet_reservations"])
+    user_id, wallet_id, reservation_id = (str(uuid4()), str(uuid4()), str(uuid4()))
+    with engine.begin() as connection:
+        connection.execute(
+            metadata.tables["users"].insert(),
+            {
+                "id": user_id,
+                "email": "historic@example.com",
+                "username": "historic",
+                "password_hash": "hash",
+            },
+        )
+        connection.execute(
+            metadata.tables["wallets"].insert(),
+            {"id": wallet_id, "user_id": user_id, "currency": "CNY"},
+        )
+        connection.execute(
+            metadata.tables["wallet_reservations"].insert(),
+            {
+                "id": reservation_id,
+                "wallet_id": wallet_id,
+                "request_id": "historic-request",
+                "reserved_amount": Decimal("1"),
+                "state": "active",
+            },
+        )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    upgraded = MetaData()
+    upgraded.reflect(bind=engine, only=["provider_profiles", "wallet_reservations"])
+    with engine.connect() as connection:
+        reservation = connection.execute(
+            select(upgraded.tables["wallet_reservations"]).where(
+                upgraded.tables["wallet_reservations"].c.id == reservation_id
+            )
+        ).mappings().one()
+        profile = connection.execute(
+            select(upgraded.tables["provider_profiles"]).where(
+                upgraded.tables["provider_profiles"].c.id == reservation["provider_profile_id"]
+            )
+        ).mappings().one()
+
+    assert reservation["state"] == "released"
+    assert reservation["released_at"] is not None
+    assert profile["profile_key"] == "__legacy_reservation_unavailable__"
+    assert profile["enabled"] is False
+    assert profile["supports_usage"] is False
     engine.dispose()
 
 

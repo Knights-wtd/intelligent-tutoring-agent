@@ -188,6 +188,17 @@ def _enabled_usage_profile(session: Session, provider_profile_id: UUID) -> Provi
     return profile
 
 
+def _bound_profile(session: Session, provider_profile_id: UUID) -> ProviderProfile:
+    profile = session.scalar(
+        select(ProviderProfile)
+        .where(ProviderProfile.id == provider_profile_id)
+        .with_for_update()
+    )
+    if profile is None:
+        raise InvalidUsageError("Reserved provider profile no longer exists")
+    return profile
+
+
 def settle(session: Session, reservation_id: UUID, usage: VerifiedUsage) -> SettlementResult:
     reservation = session.scalar(
         select(WalletReservation)
@@ -215,7 +226,7 @@ def settle(session: Session, reservation_id: UUID, usage: VerifiedUsage) -> Sett
         raise InvalidUsageError(
             "Usage provider profile does not match the reserved provider profile"
         )
-    _enabled_usage_profile(session, reservation.provider_profile_id)
+    _bound_profile(session, reservation.provider_profile_id)
 
     price, fx = _current_pricing(session, usage)
     charged_amount = _usage_charge(usage, price, fx)

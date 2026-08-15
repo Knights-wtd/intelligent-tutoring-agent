@@ -183,6 +183,8 @@ def test_settlement_releases_unused_reservation_and_uses_decimal_snapshots(sessi
     session.flush()
 
     reservation = reserve(session, user.id, "run-settle", Decimal("10.00"), profile.id)
+    profile.enabled = False
+    session.flush()
     result = settle(
         session,
         reservation.id,
@@ -197,6 +199,18 @@ def test_settlement_releases_unused_reservation_and_uses_decimal_snapshots(sessi
 
     assert result.charged_amount == Decimal("2.50000000")
     assert wallet_balance(session, user.id) == Decimal("7.50000000")
+    retry = settle(
+        session,
+        reservation.id,
+        VerifiedUsage(
+            provider_profile_id=profile.id,
+            input_units=1000,
+            cached_input_units=0,
+            output_units=500,
+            verified=True,
+        ),
+    )
+    assert retry.ledger_entry_id == result.ledger_entry_id
     reservation_row = session.get(WalletReservation, reservation.id)
     assert reservation_row is not None
     assert reservation_row.state.value == "settled"
