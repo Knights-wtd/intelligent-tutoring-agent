@@ -109,7 +109,6 @@ def reserve(
     reserved_amount = _positive_money(amount)
     if not request_id.strip():
         raise ValueError("Request id must not be blank")
-    _enabled_usage_profile(session, provider_profile_id)
 
     existing = _reservation_for_request(session, request_id)
     if existing is not None:
@@ -125,6 +124,7 @@ def reserve(
         _assert_reservation_owner(session, existing, user_id)
         _assert_reservation_profile(existing, provider_profile_id)
         return _reservation_result(existing)
+    _enabled_usage_profile(session, provider_profile_id)
     if available_balance(session, wallet.id) < reserved_amount:
         raise InsufficientFundsError("Insufficient available balance")
 

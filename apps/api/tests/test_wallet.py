@@ -185,6 +185,8 @@ def test_settlement_releases_unused_reservation_and_uses_decimal_snapshots(sessi
     reservation = reserve(session, user.id, "run-settle", Decimal("10.00"), profile.id)
     profile.enabled = False
     session.flush()
+    retry_reservation = reserve(session, user.id, "run-settle", Decimal("10.00"), profile.id)
+    assert retry_reservation.id == reservation.id
     result = settle(
         session,
         reservation.id,
