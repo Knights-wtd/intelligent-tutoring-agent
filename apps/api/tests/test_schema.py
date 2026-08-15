@@ -471,6 +471,35 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     finally:
         engine.dispose()
 
+
+def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    database_path = tmp_path / "short-lived.db"
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+
+    command.upgrade(config, "0003_bind_reservations_to_provider")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE alembic_version SET version_num = "
+                    "'0003_reservation_provider'"
+                )
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        with engine.connect() as connection:
+            version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
+        assert version == "0005_reversal_audit_group"
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.filterwarnings(
     "ignore:No path_separator found in configuration:DeprecationWarning"
 )

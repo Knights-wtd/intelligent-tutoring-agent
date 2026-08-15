@@ -135,6 +135,7 @@
 - Final checks: API 171 passed / 3 skipped / 95.45% coverage; Ruff passed; Web 15 tests, lint, and production build passed.
 - Isolated Compose acceptance used a separate project, ports, and volumes. Health was OK; configured administrator recharge yielded `example-chat-model` and a learner CNY balance of `12.50000000`. The project was stopped with `down` without deleting volumes.
 - Migration compatibility fix: preserve `0003_bind_reservations_to_provider`; its upgrade widens Alembic's PostgreSQL version column to `VARCHAR(64)` before Alembic stamps the historical long identifier. SQLite databases already at that legacy revision upgrade to head via regression test; a PostgreSQL database could not have successfully stored the old long identifier and remains safely at 0002 for forward upgrade.
+- Compatibility follow-up: databases briefly migrated with `0003_reservation_provider` are bridged idempotently in Alembic's online preflight. For the exact short marker only, PostgreSQL widens `alembic_version.version_num` before mapping it back to the preserved historical marker; SQLite and PostgreSQL regression paths then upgrade through 0004 and 0005 successfully.
 
 ## Test Results
 

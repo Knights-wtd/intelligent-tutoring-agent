@@ -2,6 +2,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
+import sqlalchemy as sa
 from sqlalchemy import engine_from_config, pool
 
 import tutor_api.classrooms.models  # noqa: F401
@@ -21,6 +22,34 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+_TASK7_SHORT_REVISION = "0003_reservation_provider"
+_TASK7_HISTORICAL_REVISION = "0003_bind_reservations_to_provider"
+
+
+def _bridge_short_lived_task7_revision(connection: sa.Connection) -> None:
+    """Map the briefly-published Task 7 revision id back to its preserved history."""
+
+    inspector = sa.inspect(connection)
+    if "alembic_version" not in inspector.get_table_names():
+        return
+    version = connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar()
+    if version != _TASK7_SHORT_REVISION:
+        return
+    if connection.dialect.name == "postgresql":
+        connection.execute(
+            sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(64)")
+        )
+    connection.execute(
+        sa.text(
+            "UPDATE alembic_version SET version_num = :historical_revision "
+            "WHERE version_num = :short_revision"
+        ),
+        {
+            "historical_revision": _TASK7_HISTORICAL_REVISION,
+            "short_revision": _TASK7_SHORT_REVISION,
+        },
+    )
 
 
 def run_migrations_offline() -> None:
@@ -43,6 +72,7 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
+            _bridge_short_lived_task7_revision(connection)
             context.run_migrations()
 
 
