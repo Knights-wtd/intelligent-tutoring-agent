@@ -11,11 +11,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 import tutor_api.billing.models  # noqa: F401
-from tutor_api.billing.models import LedgerEntry, LedgerEntryType, RechargeRecord
+from tutor_api.billing.models import (
+    LedgerEntry,
+    LedgerEntryType,
+    RechargeRecord,
+    WalletReservation,
+    WalletReservationState,
+)
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
 from tutor_api.main import create_app
+from tutor_api.providers.models import ProviderProfile
 
 
 def make_client() -> tuple[TestClient, object]:
@@ -235,6 +242,90 @@ def test_postgres_concurrent_external_references_write_one_recharge_record() -> 
     engine.dispose()
 
 
+def test_postgres_reversal_and_reservation_cannot_both_consume_the_same_recharge() -> None:
+    postgres_url = os.environ.get("TEST_POSTGRES_URL")
+    if not postgres_url:
+        pytest.skip("TEST_POSTGRES_URL is not configured")
+
+    from tutor_api.billing.service import (
+        InsufficientFundsError,
+        RechargeCannotBeReversedError,
+        create_manual_recharge,
+        reserve,
+        reverse_manual_recharge,
+    )
+
+    engine = create_engine_from_url(postgres_url, app_env="test")
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    suffix = str(uuid4())
+    with factory.begin() as session:
+        user = User(
+            email=f"reversal-race-{suffix}@example.com",
+            username=f"reversal-race-{suffix}",
+            password_hash="not-used-by-billing-tests",
+        )
+        profile = ProviderProfile(
+            profile_key=f"reversal-race-{suffix}",
+            provider="example",
+            model="example-chat-model",
+            display_name="示例模型",
+            supports_usage=True,
+            enabled=True,
+        )
+        session.add_all([user, profile])
+        session.flush()
+        recharge = create_manual_recharge(
+            session,
+            user_id=user.id,
+            amount="20",
+            external_reference=f"reversal-race-{suffix}",
+            reason="并发回归",
+            created_by_user_id=user.id,
+        )
+        user_id, profile_id, recharge_id = user.id, profile.id, recharge.id
+
+    start = Barrier(2)
+
+    def reverse() -> str:
+        try:
+            with factory.begin() as session:
+                start.wait(timeout=10)
+                reverse_manual_recharge(
+                    session,
+                    recharge_record_id=recharge_id,
+                    reason="录入错误",
+                    reversed_by_user_id=user_id,
+                )
+        except RechargeCannotBeReversedError:
+            return "reversal-rejected"
+        return "reversed"
+
+    def reserve_funds() -> str:
+        try:
+            with factory.begin() as session:
+                start.wait(timeout=10)
+                reserve(
+                    session,
+                    user_id=user_id,
+                    request_id=f"reversal-race-request-{suffix}",
+                    amount="0.01",
+                    provider_profile_id=profile_id,
+                )
+        except InsufficientFundsError:
+            return "reservation-rejected"
+        return "reserved"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(lambda operation: operation(), [reverse, reserve_funds]))
+
+    assert sorted(outcomes) in (
+        ["reversal-rejected", "reserved"],
+        ["reservation-rejected", "reversed"],
+    )
+    engine.dispose()
+
+
 def test_reversal_is_one_time_and_creates_a_paired_negative_entry(client_and_engine) -> None:
     client, engine = client_and_engine
     learner = register(client, "learner")
@@ -295,6 +386,95 @@ def test_admin_reversal_rejects_a_blank_reason_as_invalid_input(client_and_engin
     )
 
     assert response.status_code == 422
+
+
+def test_admin_reversal_rejects_when_posted_consumption_has_used_the_recharge(
+    client_and_engine,
+) -> None:
+    client, engine = client_and_engine
+    learner = register(client, "learner")
+    client.cookies.clear()
+    register(client, "admin")
+    recharge = client.post(
+        "/api/v1/admin/recharges",
+        json={
+            "user_id": learner["id"],
+            "amount": "20.00",
+            "external_reference": "manual-consumed-reversal-001",
+            "reason": "人工充值",
+        },
+    )
+    assert recharge.status_code == 201
+    factory = sessionmaker(bind=engine)
+    with factory.begin() as session:
+        record = session.get(RechargeRecord, UUID(recharge.json()["id"]))
+        assert record is not None
+        session.add(
+            LedgerEntry(
+                wallet_id=record.wallet_id,
+                amount=Decimal("-0.01"),
+                entry_type=LedgerEntryType.CONSUMPTION,
+                snapshot={},
+            )
+        )
+
+    response = client.post(
+        f"/api/v1/admin/recharges/{recharge.json()['id']}/reverse",
+        json={"reason": "录入错误"},
+    )
+
+    assert response.status_code == 409
+    with factory() as session:
+        record = session.get(RechargeRecord, UUID(recharge.json()["id"]))
+        assert record is not None
+        assert record.reversal_ledger_entry_id is None
+
+
+def test_admin_reversal_rejects_when_an_active_hold_uses_the_recharge(client_and_engine) -> None:
+    client, engine = client_and_engine
+    learner = register(client, "learner")
+    client.cookies.clear()
+    register(client, "admin")
+    recharge = client.post(
+        "/api/v1/admin/recharges",
+        json={
+            "user_id": learner["id"],
+            "amount": "20.00",
+            "external_reference": "manual-held-reversal-001",
+            "reason": "人工充值",
+        },
+    )
+    assert recharge.status_code == 201
+    factory = sessionmaker(bind=engine)
+    with factory.begin() as session:
+        record = session.get(RechargeRecord, UUID(recharge.json()["id"]))
+        assert record is not None
+        profile = ProviderProfile(
+            profile_key="reversal-hold-model",
+            provider="example",
+            model="example-chat-model",
+            display_name="示例模型",
+            supports_usage=True,
+            enabled=True,
+        )
+        session.add(profile)
+        session.flush()
+        session.add(
+            WalletReservation(
+                wallet_id=record.wallet_id,
+                provider_profile_id=profile.id,
+                request_id="reversal-hold-request",
+                reserved_amount=Decimal("0.01"),
+                state=WalletReservationState.ACTIVE,
+            )
+        )
+
+    response = client.post(
+        f"/api/v1/admin/recharges/{recharge.json()['id']}/reverse",
+        json={"reason": "录入错误"},
+    )
+
+    assert response.status_code == 409
 
 
 def test_user_billing_is_paginated_and_hides_internal_usage_details(client_and_engine) -> None:

@@ -37,6 +37,10 @@ class RechargeAlreadyReversedError(ValueError):
     pass
 
 
+class RechargeCannotBeReversedError(ValueError):
+    pass
+
+
 class DuplicateExternalReferenceError(ValueError):
     pass
 
@@ -78,6 +82,13 @@ def _wallet_for_update(session: Session, user_id: UUID) -> Wallet:
     wallet = session.scalar(select(Wallet).where(Wallet.user_id == user_id).with_for_update())
     if wallet is None:
         raise RuntimeError("Wallet creation did not return a wallet row")
+    return wallet
+
+
+def _wallet_by_id_for_update(session: Session, wallet_id: UUID) -> Wallet:
+    wallet = session.scalar(select(Wallet).where(Wallet.id == wallet_id).with_for_update())
+    if wallet is None:
+        raise RuntimeError("Wallet was not found")
     return wallet
 
 
@@ -179,9 +190,15 @@ def reverse_manual_recharge(
     original_entry = session.get(LedgerEntry, record.ledger_entry_id)
     if original_entry is None or original_entry.wallet_id != record.wallet_id:
         raise RuntimeError("Recharge audit record is invalid")
+    wallet = _wallet_by_id_for_update(session, record.wallet_id)
+    original_amount = _money(original_entry.amount)
+    if original_amount <= Decimal("0"):
+        raise RuntimeError("Recharge ledger entry must be positive")
+    if available_balance(session, wallet.id) < original_amount:
+        raise RechargeCannotBeReversedError("Recharge funds are no longer available")
     entry = LedgerEntry(
         wallet_id=record.wallet_id,
-        amount=-_money(original_entry.amount),
+        amount=-original_amount,
         entry_type=LedgerEntryType.REVERSAL,
         snapshot={
             "reversal_of_recharge_record_id": str(record.id),
@@ -329,6 +346,7 @@ def settle(session: Session, reservation_id: UUID, usage: VerifiedUsage) -> Sett
     )
     if reservation is None:
         raise ValueError("Reservation was not found")
+    _wallet_by_id_for_update(session, reservation.wallet_id)
     existing_entry = session.scalar(
         select(LedgerEntry).where(LedgerEntry.reservation_id == reservation.id)
     )

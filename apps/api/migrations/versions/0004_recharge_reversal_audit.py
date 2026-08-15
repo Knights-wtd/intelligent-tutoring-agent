@@ -31,8 +31,10 @@ def upgrade() -> None:
         )
         batch_op.create_check_constraint(
             "ck_recharge_record_reversal_audit_complete",
-            "(reversed_by_user_id IS NULL AND reversal_reason IS NULL) OR "
-            "(reversed_by_user_id IS NOT NULL AND reversal_reason IS NOT NULL)",
+            "(reversal_ledger_entry_id IS NULL AND reversed_at IS NULL AND "
+            "reversed_by_user_id IS NULL AND reversal_reason IS NULL) OR "
+            "(reversal_ledger_entry_id IS NOT NULL AND reversed_at IS NOT NULL AND "
+            "reversed_by_user_id IS NOT NULL AND reversal_reason IS NOT NULL)",
         )
 
 

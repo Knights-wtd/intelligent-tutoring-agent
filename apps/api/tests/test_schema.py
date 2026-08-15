@@ -379,6 +379,15 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
     }.issubset(
         {constraint["name"] for constraint in inspector.get_check_constraints("ledger_entries")}
     )
+    recharge_checks = {
+        constraint["name"]: constraint["sqltext"]
+        for constraint in inspector.get_check_constraints("recharge_records")
+    }
+    assert "ck_recharge_record_reversal_audit_complete" in recharge_checks
+    assert "reversal_ledger_entry_id" in recharge_checks[
+        "ck_recharge_record_reversal_audit_complete"
+    ]
+    assert "reversed_at" in recharge_checks["ck_recharge_record_reversal_audit_complete"]
     assert {
         "ck_price_version_input_unit_price_nonnegative",
         "ck_price_version_cached_input_unit_price_nonnegative",

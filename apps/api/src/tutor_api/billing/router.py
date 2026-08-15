@@ -16,6 +16,7 @@ from tutor_api.billing.schemas import (
 from tutor_api.billing.service import (
     DuplicateExternalReferenceError,
     RechargeAlreadyReversedError,
+    RechargeCannotBeReversedError,
     RechargeTargetUserNotFoundError,
     billing_entries,
     create_manual_recharge,
@@ -99,6 +100,10 @@ def reverse_recharge(
         ) from error
     except RechargeAlreadyReversedError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="该充值已冲正") from error
+    except RechargeCannotBeReversedError as error:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="充值余额已被使用"
+        ) from error
     return result
 
 
