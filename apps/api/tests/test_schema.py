@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -454,6 +455,13 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
         "recharge_records",
     }.intersection(inspect(engine).get_table_names())
     engine.dispose()
+
+
+def test_migration_identifiers_fit_alembics_postgresql_version_column() -> None:
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    revisions = ScriptDirectory.from_config(config).walk_revisions(base="base", head="heads")
+
+    assert all(len(revision.revision) <= 32 for revision in revisions)
 
 @pytest.mark.filterwarnings(
     "ignore:No path_separator found in configuration:DeprecationWarning"

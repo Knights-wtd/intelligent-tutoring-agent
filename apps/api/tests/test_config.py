@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from tutor_api.core.config import Settings
@@ -105,6 +108,41 @@ def test_settings_repr_contains_no_provider_api_key_or_base_url() -> None:
 
     assert "api_key" not in repr(settings).casefold()
     assert "base_url" not in repr(settings).casefold()
+
+
+def test_example_environment_uses_only_fake_provider_metadata_and_empty_keys() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    values = {
+        line.split("=", maxsplit=1)[0]: line.split("=", maxsplit=1)[1]
+        for line in (repository_root / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line and not line.startswith("#") and "=" in line
+    }
+    profiles = json.loads(values["PROVIDER_PROFILES_JSON"])
+
+    assert profiles == [
+        {
+            "id": "example-chat-model",
+            "provider": "openai",
+            "model": "example-chat-model",
+            "display_name": "Example Chat Model",
+            "supports_usage": True,
+            "enabled_by_default": True,
+        }
+    ]
+    assert values["OPENAI_API_KEY"] == ""
+    assert values["ANTHROPIC_API_KEY"] == ""
+    assert all("key" not in profile and "secret" not in profile for profile in profiles)
+
+
+def test_readme_documents_safe_provider_and_wallet_administration() -> None:
+    repository_root = Path(__file__).resolve().parents[3]
+    readme = (repository_root / "README.md").read_text(encoding="utf-8")
+    workflow = (repository_root / ".github/workflows/quality.yml").read_text(encoding="utf-8")
+
+    assert "忽略的 `.env`" in readme
+    assert "审核后的价格与汇率快照" in readme
+    assert "人工充值和冲正" in readme
+    assert "alembic -c alembic.ini upgrade head --sql" in workflow
 
 
 @pytest.mark.parametrize(

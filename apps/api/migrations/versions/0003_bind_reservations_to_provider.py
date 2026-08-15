@@ -1,6 +1,6 @@
 """bind wallet reservations to selected provider profiles
 
-Revision ID: 0003_bind_reservations_to_provider
+Revision ID: 0003_reservation_provider
 Revises: 0002_provider_wallet
 Create Date: 2026-08-15
 """
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0003_bind_reservations_to_provider"
+revision: str = "0003_reservation_provider"
 down_revision: str | Sequence[str] | None = "0002_provider_wallet"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
