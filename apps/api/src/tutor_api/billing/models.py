@@ -110,6 +110,11 @@ class LedgerEntry(Base):
 class RechargeRecord(Base):
     __tablename__ = "recharge_records"
     __table_args__ = (
+        CheckConstraint(
+            "(reversed_by_user_id IS NULL AND reversal_reason IS NULL) OR "
+            "(reversed_by_user_id IS NOT NULL AND reversal_reason IS NOT NULL)",
+            name="ck_recharge_record_reversal_audit_complete",
+        ),
         ForeignKeyConstraint(
             ["ledger_entry_id", "wallet_id"],
             ["ledger_entries.id", "ledger_entries.wallet_id"],
@@ -131,3 +136,5 @@ class RechargeRecord(Base):
     created_by_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reversed_by_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
+    reversal_reason: Mapped[str | None] = mapped_column(String(1000))

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from tutor_api.billing.models import (
     LedgerEntry,
     LedgerEntryType,
+    RechargeRecord,
     Wallet,
     WalletReservation,
     WalletReservationState,
@@ -20,6 +21,7 @@ from tutor_api.billing.schemas import (
     SettlementResult,
     VerifiedUsage,
 )
+from tutor_api.identity.models import User
 from tutor_api.providers.models import FxVersion, PriceVersion, ProviderProfile
 
 
@@ -28,6 +30,10 @@ class InsufficientFundsError(ValueError):
 
 
 class InvalidUsageError(ValueError):
+    pass
+
+
+class RechargeAlreadyReversedError(ValueError):
     pass
 
 
@@ -97,6 +103,108 @@ def available_balance(session: Session, wallet_id: UUID) -> Decimal:
     return _money(
         _ledger_total(session, wallet_id) - _active_reservations_total(session, wallet_id)
     )
+
+
+def create_manual_recharge(
+    session: Session,
+    *,
+    user_id: UUID,
+    amount: Decimal | int | str,
+    external_reference: str,
+    reason: str,
+    created_by_user_id: UUID,
+) -> RechargeRecord:
+    recharge_amount = _positive_money(amount)
+    if not external_reference.strip() or not reason.strip():
+        raise ValueError("Recharge reference and reason must not be blank")
+    if session.get(User, user_id) is None:
+        raise ValueError("User was not found")
+    if session.scalar(
+        select(RechargeRecord).where(RechargeRecord.external_reference == external_reference)
+    ) is not None:
+        raise ValueError("External reference has already been used")
+    wallet = _wallet_for_update(session, user_id)
+    entry = LedgerEntry(
+        wallet_id=wallet.id,
+        amount=recharge_amount,
+        entry_type=LedgerEntryType.RECHARGE,
+        snapshot={
+            "external_reference": external_reference,
+            "reason": reason,
+            "created_by_user_id": str(created_by_user_id),
+        },
+    )
+    session.add(entry)
+    session.flush()
+    record = RechargeRecord(
+        wallet_id=wallet.id,
+        ledger_entry_id=entry.id,
+        external_reference=external_reference,
+        reason=reason,
+        created_by_user_id=created_by_user_id,
+    )
+    session.add(record)
+    session.flush()
+    return record
+
+
+def reverse_manual_recharge(
+    session: Session, *, recharge_record_id: UUID, reason: str, reversed_by_user_id: UUID
+) -> LedgerEntry:
+    if not reason.strip():
+        raise ValueError("Reversal reason must not be blank")
+    record = session.scalar(
+        select(RechargeRecord)
+        .where(RechargeRecord.id == recharge_record_id)
+        .with_for_update()
+    )
+    if record is None:
+        raise LookupError("Recharge record was not found")
+    if record.reversal_ledger_entry_id is not None:
+        raise RechargeAlreadyReversedError("Recharge has already been reversed")
+    original_entry = session.get(LedgerEntry, record.ledger_entry_id)
+    if original_entry is None or original_entry.wallet_id != record.wallet_id:
+        raise RuntimeError("Recharge audit record is invalid")
+    entry = LedgerEntry(
+        wallet_id=record.wallet_id,
+        amount=-_money(original_entry.amount),
+        entry_type=LedgerEntryType.REVERSAL,
+        snapshot={
+            "reversal_of_recharge_record_id": str(record.id),
+            "reversal_of_ledger_entry_id": str(original_entry.id),
+            "reason": reason,
+            "reversed_by_user_id": str(reversed_by_user_id),
+        },
+    )
+    session.add(entry)
+    session.flush()
+    record.reversal_ledger_entry_id = entry.id
+    record.reversed_at = datetime.now(UTC)
+    record.reversed_by_user_id = reversed_by_user_id
+    record.reversal_reason = reason
+    session.flush()
+    return entry
+
+
+def billing_entries(
+    session: Session, user_id: UUID, *, limit: int, offset: int
+) -> tuple[Decimal, str, list[LedgerEntry], int]:
+    wallet = session.scalar(select(Wallet).where(Wallet.user_id == user_id))
+    if wallet is None:
+        return Decimal("0.00000000"), "CNY", [], 0
+    total = session.scalar(
+        select(func.count()).select_from(LedgerEntry).where(LedgerEntry.wallet_id == wallet.id)
+    )
+    entries = list(
+        session.scalars(
+            select(LedgerEntry)
+            .where(LedgerEntry.wallet_id == wallet.id)
+            .order_by(LedgerEntry.created_at.desc(), LedgerEntry.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+    )
+    return _ledger_total(session, wallet.id), wallet.currency, entries, total or 0
 
 
 def reserve(

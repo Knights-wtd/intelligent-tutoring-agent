@@ -84,6 +84,15 @@ def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def require_platform_admin(request: Request, current_user: CurrentUser) -> User:
+    if current_user.email.casefold() not in request.app.state.settings.platform_admin_emails:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="权限不足")
+    return current_user
+
+
+PlatformAdmin = Annotated[User, Depends(require_platform_admin)]
+
+
 @router.post(
     "/register", response_model=RegistrationResponse, status_code=status.HTTP_201_CREATED
 )
