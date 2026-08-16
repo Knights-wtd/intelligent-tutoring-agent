@@ -1,7 +1,13 @@
 """Runtime boundaries for knowledge ingestion and indexing."""
 
 from tutor_api.knowledge.embeddings import EmbeddingAdapter, HashEmbeddingAdapter
-from tutor_api.knowledge.ocr import DisabledOCRAdapter, OCRAdapter, OCRError
+from tutor_api.knowledge.ocr import (
+    DisabledOCRAdapter,
+    OCRAdapter,
+    OCRError,
+    OCRErrorCode,
+    extract_text_safely,
+)
 from tutor_api.knowledge.storage import (
     MemoryObjectStorage,
     ObjectAlreadyExistsError,
@@ -18,9 +24,11 @@ __all__ = [
     "MemoryObjectStorage",
     "OCRAdapter",
     "OCRError",
+    "OCRErrorCode",
     "ObjectAlreadyExistsError",
     "ObjectNotFoundError",
     "ObjectStorage",
     "StoredObject",
     "build_document_object_key",
+    "extract_text_safely",
 ]

@@ -1,11 +1,20 @@
 import math
+import threading
+import traceback
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 from uuid import UUID
 
 import pytest
 
 from tutor_api.core.config import Settings
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
-from tutor_api.knowledge.ocr import DisabledOCRAdapter, OCRError
+from tutor_api.knowledge.ocr import (
+    DisabledOCRAdapter,
+    OCRError,
+    OCRErrorCode,
+    extract_text_safely,
+)
 from tutor_api.knowledge.storage import (
     MemoryObjectStorage,
     ObjectAlreadyExistsError,
@@ -42,6 +51,12 @@ def test_document_object_key_uses_fixed_scope_and_normalizes_unicode() -> None:
         pytest.param("notes/secret\x00.pdf", id="nul"),
         pytest.param("notes//secret.pdf", id="empty-segment"),
         pytest.param("C:/secret.pdf", id="windows-drive"),
+        pytest.param("notes/line\rbreak.md", id="carriage-return"),
+        pytest.param("notes/line\nbreak.md", id="line-feed"),
+        pytest.param("notes/tab\tname.md", id="tab"),
+        pytest.param("notes/control\x1fname.md", id="c0-control"),
+        pytest.param("notes/delete\x7fname.md", id="delete-control"),
+        pytest.param("notes/zero\u200bwidth.md", id="unicode-format"),
         pytest.param("", id="empty-name"),
     ],
 )
@@ -50,7 +65,7 @@ def test_document_object_key_rejects_unsafe_names(unsafe_name: str) -> None:
         build_document_object_key(SPACE_ID, DOCUMENT_ID, VERSION_ID, unsafe_name)
 
 
-def test_memory_object_storage_round_trips_bytes_and_content_type() -> None:
+def test_memory_object_storage_round_trips_bytes_and_normalized_content_type() -> None:
     storage = MemoryObjectStorage()
     key = build_document_object_key(
         SPACE_ID,
@@ -59,83 +74,173 @@ def test_memory_object_storage_round_trips_bytes_and_content_type() -> None:
         "chapter-1.pdf",
     )
 
-    storage.put_object(key, b"%PDF-test", content_type="application/pdf")
+    storage.put_if_absent(
+        key,
+        b"%PDF-test",
+        content_type=" Application/PDF ; Charset=UTF-8 ",
+    )
 
     stored = storage.get_object(key)
     assert stored.data == b"%PDF-test"
-    assert stored.content_type == "application/pdf"
+    assert stored.content_type == "application/pdf; charset=UTF-8"
 
 
-def test_memory_object_storage_rejects_overwrite_by_default() -> None:
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("application", id="missing-subtype"),
+        pytest.param("application/", id="empty-subtype"),
+        pytest.param("/pdf", id="empty-type"),
+        pytest.param("application/p df", id="invalid-token"),
+        pytest.param("application/pdf\x00", id="nul"),
+        pytest.param("application/pdf\t", id="tab"),
+        pytest.param("application/pdf\r\nX-Test: injected", id="header-injection"),
+        pytest.param("application/pdf;", id="empty-parameter"),
+        pytest.param("application/pdf; charset", id="parameter-without-value"),
+        pytest.param("application/pdf; charset=", id="empty-parameter-value"),
+        pytest.param("application/pdf; bad name=utf-8", id="invalid-parameter-name"),
+    ],
+)
+def test_memory_object_storage_rejects_unsafe_content_type(content_type: str) -> None:
     storage = MemoryObjectStorage()
-    key = build_document_object_key(
-        SPACE_ID,
-        DOCUMENT_ID,
-        VERSION_ID,
-        "chapter-1.pdf",
-    )
-    storage.put_object(key, b"original", content_type="application/pdf")
 
-    with pytest.raises(ObjectAlreadyExistsError) as error:
-        storage.put_object(key, b"replacement", content_type="application/pdf")
-
-    assert key not in str(error.value)
-    assert storage.get_object(key).data == b"original"
+    with pytest.raises(ValueError, match="content_type"):
+        storage.put_if_absent("safe-key", b"data", content_type=content_type)
 
 
-def test_disabled_ocr_exposes_only_a_stable_public_error_code() -> None:
+def test_memory_object_storage_exposes_only_immutable_create() -> None:
+    storage = MemoryObjectStorage()
+
+    assert not hasattr(storage, "put_object")
+
+
+def test_memory_object_storage_allows_exactly_one_concurrent_writer() -> None:
+    storage = MemoryObjectStorage()
+    barrier = threading.Barrier(2)
+
+    def write(payload: bytes) -> bool:
+        barrier.wait()
+        try:
+            storage.put_if_absent("shared-key", payload, content_type="application/pdf")
+        except ObjectAlreadyExistsError:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(write, (b"first", b"second")))
+
+    assert sorted(results) == [False, True]
+    assert storage.get_object("shared-key").data in {b"first", b"second"}
+
+
+def test_disabled_ocr_uses_a_restricted_public_error_code() -> None:
     adapter = DisabledOCRAdapter()
-    secret_provider_detail = "provider-token-and-command-line"
 
     with pytest.raises(OCRError) as error:
-        try:
-            raise RuntimeError(secret_provider_detail)
-        except RuntimeError:
-            adapter.extract_text(b"image", languages=("eng",))
+        adapter.extract_text(b"image", languages=("eng",))
 
-    assert error.value.code == "ocr_disabled"
-    assert str(error.value) == "ocr_disabled"
+    assert error.value.code is OCRErrorCode.DISABLED
+    assert str(error.value) == OCRErrorCode.DISABLED.value
     assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
+def test_ocr_boundary_redacts_provider_errors_without_retaining_context() -> None:
+    secret_provider_detail = "provider-token-and-command-line"
+
+    class FailingOCRAdapter:
+        backend = "test-provider"
+
+        def extract_text(self, image: bytes, *, languages: tuple[str, ...]) -> str:
+            del image, languages
+            raise RuntimeError(secret_provider_detail)
+
+    with pytest.raises(OCRError) as error:
+        extract_text_safely(
+            FailingOCRAdapter(),
+            b"image",
+            languages=("eng",),
+        )
+
+    rendered = "".join(traceback.format_exception(error.value))
+    assert error.value.code is OCRErrorCode.PROCESSING_FAILED
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
     assert secret_provider_detail not in repr(error.value)
+    assert secret_provider_detail not in rendered
 
 
 def test_hash_embedding_is_unicode_deterministic_fixed_dimension_and_normalized() -> None:
-    adapter = HashEmbeddingAdapter(backend="hash", model="sha256-v1", dimension=64)
+    adapter = HashEmbeddingAdapter(dimension=64)
 
-    composed = adapter.embed("caf\u00e9")
-    decomposed = adapter.embed("cafe\u0301")
+    composed = adapter.embed("caf\u00e9 explains force and acceleration")
+    decomposed = adapter.embed("cafe\u0301 explains force and acceleration")
 
     assert composed == decomposed
     assert len(composed) == 64
     assert math.sqrt(sum(component * component for component in composed)) == pytest.approx(1.0)
 
 
-def test_hash_embedding_signature_binds_backend_model_and_dimension() -> None:
-    baseline = HashEmbeddingAdapter(backend="hash", model="sha256-v1", dimension=64)
+def test_feature_hash_embedding_preserves_near_text_similarity() -> None:
+    adapter = HashEmbeddingAdapter(dimension=384)
+    source = adapter.embed("牛顿第二定律说明物体加速度与合外力成正比，与质量成反比")
+    near = adapter.embed("牛顿第二定律：物体的加速度和合外力成正比，和质量成反比")
+    unrelated = adapter.embed("光合作用利用叶绿素把光能转化为化学能并释放氧气")
 
-    assert baseline.signature == "hash:sha256-v1:64"
-    assert (
-        HashEmbeddingAdapter(
-            backend="local-hash", model="sha256-v1", dimension=64
-        ).signature
-        != baseline.signature
-    )
-    assert (
-        HashEmbeddingAdapter(backend="hash", model="sha512-v1", dimension=64).signature
-        != baseline.signature
-    )
-    assert (
-        HashEmbeddingAdapter(backend="hash", model="sha256-v1", dimension=32).signature
-        != baseline.signature
+    near_similarity = sum(left * right for left, right in zip(source, near, strict=True))
+    unrelated_similarity = sum(
+        left * right for left, right in zip(source, unrelated, strict=True)
     )
 
+    assert near_similarity > unrelated_similarity
+    assert near_similarity > 0.5
 
-def test_knowledge_settings_have_safe_local_defaults_and_normalize_names() -> None:
+
+@pytest.mark.parametrize("text", ["", " ", "\t\r\n"])
+def test_hash_embedding_rejects_blank_text(text: str) -> None:
+    with pytest.raises(ValueError, match="text must not be blank"):
+        HashEmbeddingAdapter().embed(text)
+
+
+def test_hash_embedding_signature_describes_the_real_algorithm() -> None:
+    adapter = HashEmbeddingAdapter(dimension=64)
+
+    assert adapter.signature == "hash:feature-hash-v1:64"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"backend": "openai"}, id="unknown-backend"),
+        pytest.param({"model": "sha256-v1"}, id="unknown-model"),
+        pytest.param({"dimension": 7}, id="dimension-too-small"),
+        pytest.param({"dimension": 4_097}, id="dimension-too-large"),
+    ],
+)
+def test_hash_embedding_adapter_rejects_unsupported_configuration(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        HashEmbeddingAdapter(**kwargs)
+
+
+def test_runtime_adapters_are_immutable() -> None:
+    embedding = HashEmbeddingAdapter()
+    ocr = DisabledOCRAdapter()
+
+    with pytest.raises(FrozenInstanceError):
+        embedding.dimension = 128
+    with pytest.raises(FrozenInstanceError):
+        ocr.backend = "tesseract"
+
+
+def test_knowledge_settings_have_fail_closed_local_defaults_and_normalize_names() -> None:
     settings = Settings(
         ocr_backend=" DISABLED ",
         ocr_languages=" ENG, chi_SIM,eng ",
         embedding_backend=" HASH ",
-        embedding_model=" sha256-v1 ",
+        embedding_model=" FEATURE-HASH-V1 ",
     )
 
     assert settings.max_upload_bytes == 50 * 1024 * 1024
@@ -144,8 +249,27 @@ def test_knowledge_settings_have_safe_local_defaults_and_normalize_names() -> No
     assert settings.ocr_backend == "disabled"
     assert settings.ocr_languages == ("eng", "chi_sim")
     assert settings.embedding_backend == "hash"
-    assert settings.embedding_model == "sha256-v1"
+    assert settings.embedding_model == "feature-hash-v1"
     assert settings.embedding_dimension == 384
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("ocr_backend", "tesseract", id="unknown-ocr-backend"),
+        pytest.param("embedding_backend", "openai", id="unknown-embedding-backend"),
+        pytest.param("embedding_model", "sha256-v1", id="obsolete-embedding-model"),
+        pytest.param("embedding_model", "feature-hash-v2", id="unknown-embedding-model"),
+    ],
+)
+def test_knowledge_settings_fail_closed_for_unknown_runtime_configuration(
+    field: str,
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match=field.upper()) as error:
+        Settings(**{field: value})
+
+    assert value not in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -171,22 +295,16 @@ def test_knowledge_settings_enforce_numeric_bounds(field: str, value: int) -> No
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    "ocr_languages",
     [
-        pytest.param("ocr_backend", "", id="blank-ocr-backend"),
-        pytest.param("ocr_backend", "bad backend", id="invalid-ocr-backend"),
-        pytest.param("ocr_languages", "eng,,chi_sim", id="empty-ocr-language"),
-        pytest.param("ocr_languages", "eng,../../secret", id="invalid-ocr-language"),
-        pytest.param("embedding_backend", "bad/backend", id="invalid-embedding-backend"),
-        pytest.param("embedding_model", " ", id="blank-embedding-model"),
+        pytest.param("eng,,chi_sim", id="empty-language"),
+        pytest.param("eng,../../secret", id="invalid-language"),
     ],
 )
-def test_knowledge_settings_reject_invalid_adapter_names_without_echoing_input(
-    field: str,
-    value: str,
+def test_knowledge_settings_reject_invalid_ocr_languages_without_echoing_input(
+    ocr_languages: str,
 ) -> None:
-    with pytest.raises(ValueError, match=field.upper()) as error:
-        Settings(**{field: value})
+    with pytest.raises(ValueError, match="OCR_LANGUAGES") as error:
+        Settings(ocr_languages=ocr_languages)
 
-    if value.strip():
-        assert value not in str(error.value)
+    assert ocr_languages not in str(error.value)

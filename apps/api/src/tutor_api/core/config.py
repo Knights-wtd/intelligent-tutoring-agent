@@ -19,6 +19,13 @@ from pydantic import (
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from tutor_api.knowledge.embeddings import (
+    normalize_embedding_backend,
+    normalize_embedding_model,
+    validate_embedding_dimension,
+)
+from tutor_api.knowledge.ocr import normalize_ocr_backend
+
 _HTTP_URL_ADAPTER = TypeAdapter(HttpUrl)
 _POSTGRESQL_SCHEMES = {"postgres", "postgresql", "postgresql+psycopg"}
 _REDIS_SCHEMES = {"redis", "rediss"}
@@ -31,9 +38,7 @@ _DEVELOPMENT_OBJECT_SECRETS = {
 _INVALID_PERCENT_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _COOKIE_NAME = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _EMAIL_ADDRESS = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_ADAPTER_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _LANGUAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
 class ProviderProfileConfig(BaseModel):
@@ -107,7 +112,7 @@ class Settings(BaseSettings):
     ocr_backend: str = "disabled"
     ocr_languages: Annotated[tuple[str, ...], NoDecode] = ("eng", "chi_sim")
     embedding_backend: str = "hash"
-    embedding_model: str = "sha256-v1"
+    embedding_model: str = "feature-hash-v1"
     embedding_dimension: int = 384
     session_cookie_name: str = "session"
     session_ttl_seconds: int = 604800
@@ -185,35 +190,23 @@ class Settings(BaseSettings):
 
     @field_validator("embedding_dimension")
     @classmethod
-    def validate_embedding_dimension(cls, value: int) -> int:
-        if not 8 <= value <= 4096:
-            raise ValueError("EMBEDDING_DIMENSION must be between 8 and 4096")
-        return value
+    def validate_embedding_dimension_setting(cls, value: int) -> int:
+        return validate_embedding_dimension(value)
 
-    @field_validator("ocr_backend", "embedding_backend", mode="before")
+    @field_validator("ocr_backend", mode="before")
     @classmethod
-    def normalize_adapter_name(cls, value: Any, info: Any) -> str:
-        normalized = (
-            unicodedata.normalize("NFKC", value).strip().casefold()
-            if isinstance(value, str)
-            else ""
-        )
-        if not _ADAPTER_NAME.fullmatch(normalized):
-            raise ValueError(f"{info.field_name.upper()} must be a safe adapter name")
-        return normalized
+    def validate_ocr_backend_setting(cls, value: Any) -> str:
+        return normalize_ocr_backend(value)
+
+    @field_validator("embedding_backend", mode="before")
+    @classmethod
+    def validate_embedding_backend_setting(cls, value: Any) -> str:
+        return normalize_embedding_backend(value)
 
     @field_validator("embedding_model", mode="before")
     @classmethod
-    def normalize_embedding_model(cls, value: Any) -> str:
-        normalized = unicodedata.normalize("NFKC", value).strip() if isinstance(value, str) else ""
-        if (
-            not _MODEL_NAME.fullmatch(normalized)
-            or normalized.startswith("/")
-            or "//" in normalized
-            or any(segment in {".", ".."} for segment in normalized.split("/"))
-        ):
-            raise ValueError("EMBEDDING_MODEL must be a safe model name")
-        return normalized
+    def validate_embedding_model_setting(cls, value: Any) -> str:
+        return normalize_embedding_model(value)
 
     @field_validator("ocr_languages", mode="before")
     @classmethod
