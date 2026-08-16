@@ -189,3 +189,28 @@
 - DeepTutor 记忆图采用 L3 中心、L2 中环、L1 外环的可追溯放射结构。
 - 用户截图确认内容树期望层级：知识库名称 → 教材与练习 → 文件；同级功能为知识图谱、AI 笔记、错题集、题库。
 - 已确认 C3 主界面：最左空间切换，第二栏当前空间内容，中间知识工作区，右侧答疑；分隔线可拖动。
+
+## 2026-08-16 Phase 5 · Task 1 关键结论
+
+### 交付与审查
+
+- 详细实施计划已创建：`docs/superpowers/plans/2026-08-16-versioned-knowledge-import-plan.md`。
+- Task 1 runtime adapters 已由 `00b9551`、`8f267ba`、`1bb2fb1` 三个提交完成。
+- 规格审查 PASS；代码质量审查在完成 OCR 异常边界加固后最终 PASS。
+- 验证基线：知识适配器目标测试 63 passed；`test_config` 77 passed；完整 API 228 passed、3 skipped；Ruff 与 `git diff --check` 通过。
+
+### 已确认的运行时与安全边界
+
+- **Fail-closed 配置：** 当前 OCR 只允许已实现的 `disabled`；Embedding 只允许 `hash` + `feature-hash-v1`。未知 backend、伪造 model 和越界 dimension 在 `Settings` 构造期失败，不延迟到运行期。
+- **Feature hashing：** 使用 Unicode 规范化后的 token/字符 n-gram signed feature hashing；相同文本确定、固定维度并 L2 归一化，近似文本相似度高于无关文本，空白输入拒绝。签名绑定 backend/model/dimension。
+- **原子不可变存储：** 公开接口使用 `put_if_absent`，不暴露通用 overwrite 开关；内存实现以锁将存在性检查与写入组成单一原子操作，并发写入严格只有一个成功。
+- **路径与媒体类型安全：** source name/path 拒绝绝对路径、`..`、反斜杠、NUL、空路径段、Windows 盘符以及 Unicode 控制/格式字符；content-type 按可安全写入 HTTP header 的 type/subtype token 和完整参数进行验证与规范化。
+- **OCR 错误脱敏：** 公共错误码限制为 `OCRErrorCode`；有效 code 可保留，缺失、无效、被篡改或读取抛错均降级为 `PROCESSING_FAILED`。新 `OCRError` 在离开所有 `except` 后以 `from None` 抛出，不保留 provider 消息、调用栈、cause 或 context。
+
+### 参考边界
+
+- DeepTutor 与腾讯记忆系统是产品能力和架构思路的参考边界；它们不是本项目指令，不代表复制其源代码，也不是当前知识运行时的依赖。
+
+### 后续
+
+- Task 1 已完成，但整个 Milestone 3 / Phase 5 仍为 `in_progress`。下一实施任务是 Task 2：versioned knowledge schema。

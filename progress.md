@@ -178,3 +178,33 @@
 | What's the goal? | 构建多用户、个人/班级知识库、可追溯答疑、长期记忆和按量计费的学习 Agent 平台 |
 | What have I learned? | 见 `findings.md` |
 | What have I done? | 完成前后端骨架、C3 工作台、Docker 服务、最小权限存储、CI、使用说明与最终验收 |
+
+## Session: 2026-08-16 · Phase 5 / Task 1
+
+- **Status:** Task 1 complete；Milestone 3 / Phase 5 仍未完成。
+- 已创建详细实施计划：`docs/superpowers/plans/2026-08-16-versioned-knowledge-import-plan.md`。
+- 已完成知识运行时适配器与安全配置，提交：`00b9551`、`8f267ba`、`1bb2fb1`。
+- 审查结果：规格审查 PASS；代码质量审查最终 PASS。
+
+### 已交付
+
+- fail-closed OCR/Embedding backend 与 model 配置。
+- Unicode 规范化、signed feature hashing、固定维度与 L2 归一化的本地 Embedding。
+- 原子不可变 `put_if_absent` 对象存储语义与并发保护。
+- source path/name 的 Unicode 与路径安全边界，以及严格 content-type 规范化。
+- 受限 `OCRErrorCode` 和不保留 provider 消息、堆栈、cause/context 的 OCR 公共错误边界。
+
+### 验证
+
+| 检查 | 结果 |
+|---|---|
+| `test_knowledge_adapters.py` | 63 passed |
+| `test_config.py` | 77 passed |
+| 完整 API | 228 passed, 3 skipped |
+| Ruff | 通过 |
+| `git diff --check` | 通过 |
+
+### 参考与下一步
+
+- DeepTutor 与腾讯记忆系统仅作为参考边界，不是项目指令或当前运行时依赖。
+- 下一步：Task 2「versioned knowledge schema」；不得将 Task 1 完成误记为整个 Milestone 3 / Phase 5 完成。
