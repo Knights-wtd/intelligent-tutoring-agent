@@ -27,3 +27,19 @@ class KnowledgeBaseResponse(BaseModel):
     state: str
     created_at: datetime
     updated_at: datetime
+
+
+class KnowledgeUploadResponse(BaseModel):
+    document_id: UUID
+    document_version_id: UUID
+    ingestion_job_id: UUID
+    space_id: UUID
+    knowledge_base_id: UUID
+    source_name: str
+    version_number: int
+    content_sha256: str
+    content_type: str
+    document_state: str
+    version_state: str
+    job_state: str
+    created_at: datetime

@@ -3,6 +3,7 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
+from io import BytesIO
 from uuid import UUID
 
 import pytest
@@ -414,3 +415,20 @@ def test_knowledge_settings_reject_invalid_ocr_languages_without_echoing_input(
         Settings(ocr_languages=ocr_languages)
 
     assert ocr_languages not in str(error.value)
+
+
+def test_memory_object_storage_accepts_stream_without_overwrite() -> None:
+    storage = MemoryObjectStorage()
+    storage.put_file_if_absent(
+        "spaces/streamed/document.bin",
+        BytesIO(b"streamed-bytes"),
+        content_type="application/octet-stream",
+    )
+
+    assert storage.get_object("spaces/streamed/document.bin").data == b"streamed-bytes"
+    with pytest.raises(ObjectAlreadyExistsError):
+        storage.put_file_if_absent(
+            "spaces/streamed/document.bin",
+            BytesIO(b"replacement"),
+            content_type="application/octet-stream",
+        )

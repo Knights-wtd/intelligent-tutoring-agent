@@ -650,6 +650,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
         "index_versions",
         "chunks",
         "ingestion_jobs",
+        "knowledge_upload_requests",
     }
 
     command.upgrade(config, "head")

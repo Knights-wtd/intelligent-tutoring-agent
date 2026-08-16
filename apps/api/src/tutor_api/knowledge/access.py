@@ -97,3 +97,37 @@ def get_readable_knowledge_base(
     if classroom_knowledge_base is None:
         raise _not_found()
     return classroom_knowledge_base
+
+
+def get_writable_knowledge_base(
+    session: Session, user: User, knowledge_base_id: UUID
+) -> KnowledgeBase:
+    personal_knowledge_base = session.scalar(
+        select(KnowledgeBase)
+        .join(Space, Space.id == KnowledgeBase.space_id)
+        .where(
+            KnowledgeBase.id == knowledge_base_id,
+            Space.kind == SpaceKind.PERSONAL,
+            Space.owner_id == user.id,
+        )
+    )
+    if personal_knowledge_base is not None:
+        return personal_knowledge_base
+
+    classroom_access = session.execute(
+        select(KnowledgeBase, ClassroomMembership.role)
+        .join(Space, Space.id == KnowledgeBase.space_id)
+        .join(Classroom, Classroom.space_id == Space.id)
+        .join(ClassroomMembership, ClassroomMembership.classroom_id == Classroom.id)
+        .where(
+            KnowledgeBase.id == knowledge_base_id,
+            Space.kind == SpaceKind.CLASSROOM,
+            ClassroomMembership.user_id == user.id,
+        )
+    ).one_or_none()
+    if classroom_access is None:
+        raise _not_found()
+    knowledge_base, role = classroom_access
+    if role not in {ClassroomRole.OWNER, ClassroomRole.TEACHER}:
+        raise _forbidden()
+    return knowledge_base

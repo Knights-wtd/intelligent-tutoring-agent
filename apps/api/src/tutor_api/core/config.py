@@ -107,6 +107,7 @@ class Settings(BaseSettings):
     object_storage_secret_key: SecretStr = SecretStr("replace-for-non-local-use")
     object_storage_bucket: str = "textbook-assets"
     max_upload_bytes: int = 50 * 1024 * 1024
+    knowledge_upload_max_bytes: int = 100 * 1024 * 1024
     max_vault_files: int = 5_000
     max_vault_uncompressed_bytes: int = 500 * 1024 * 1024
     ocr_backend: str = "disabled"
@@ -170,6 +171,15 @@ class Settings(BaseSettings):
     def validate_max_upload_bytes(cls, value: int) -> int:
         if not 1 <= value <= 2 * 1024 * 1024 * 1024:
             raise ValueError("MAX_UPLOAD_BYTES must be between 1 and 2147483648")
+        return value
+
+    @field_validator("knowledge_upload_max_bytes")
+    @classmethod
+    def validate_knowledge_upload_max_bytes(cls, value: int) -> int:
+        if not 1 <= value <= 2 * 1024 * 1024 * 1024:
+            raise ValueError(
+                "KNOWLEDGE_UPLOAD_MAX_BYTES must be between 1 and 2147483648"
+            )
         return value
 
     @field_validator("max_vault_files")

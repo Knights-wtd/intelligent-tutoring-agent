@@ -770,6 +770,14 @@ class IngestionJob(Base):
     __table_args__ = (
         UniqueConstraint("id", "space_id", name="uq_ingestion_job_id_space"),
         UniqueConstraint(
+            "id",
+            "document_version_id",
+            "document_id",
+            "knowledge_base_id",
+            "space_id",
+            name="uq_ingestion_job_id_version_document_kb_space",
+        ),
+        UniqueConstraint(
             "knowledge_base_id", "idempotency_key", name="uq_ingestion_job_idempotency"
         ),
         CheckConstraint("attempt_count >= 0", name="ck_ingestion_attempt_nonnegative"),
@@ -906,4 +914,65 @@ class IngestionJob(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class KnowledgeUploadRequest(Base):
+    __tablename__ = "knowledge_upload_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "knowledge_base_id", "request_key_hash", name="uq_knowledge_upload_request_key"
+        ),
+        CheckConstraint(_sha256_check("request_key_hash"), name="ck_upload_request_key_hash"),
+        CheckConstraint(_sha256_check("content_sha256"), name="ck_upload_request_content_hash"),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "space_id"],
+            ["knowledge_bases.id", "knowledge_bases.space_id"],
+            name="fk_upload_request_knowledge_base_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_version_id", "document_id", "knowledge_base_id", "space_id"],
+            [
+                "document_versions.id",
+                "document_versions.document_id",
+                "document_versions.knowledge_base_id",
+                "document_versions.space_id",
+            ],
+            name="fk_upload_request_version_document_kb_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            [
+                "ingestion_job_id",
+                "document_version_id",
+                "document_id",
+                "knowledge_base_id",
+                "space_id",
+            ],
+            [
+                "ingestion_jobs.id",
+                "ingestion_jobs.document_version_id",
+                "ingestion_jobs.document_id",
+                "ingestion_jobs.knowledge_base_id",
+                "ingestion_jobs.space_id",
+            ],
+            name="fk_upload_request_job_version_document_kb_space",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    request_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    document_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    document_version_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    ingestion_job_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )

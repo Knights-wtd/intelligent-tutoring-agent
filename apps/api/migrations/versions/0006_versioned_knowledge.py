@@ -579,6 +579,14 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "space_id", name="uq_ingestion_job_id_space"),
         sa.UniqueConstraint(
+            "id",
+            "document_version_id",
+            "document_id",
+            "knowledge_base_id",
+            "space_id",
+            name="uq_ingestion_job_id_version_document_kb_space",
+        ),
+        sa.UniqueConstraint(
             "knowledge_base_id", "idempotency_key", name="uq_ingestion_job_idempotency"
         ),
     )
@@ -599,7 +607,94 @@ def upgrade() -> None:
         op.create_index(f"ix_ingestion_jobs_{column}", "ingestion_jobs", [column])
 
 
+
+    op.create_table(
+        "knowledge_upload_requests",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("space_id", sa.Uuid(), nullable=False),
+        sa.Column("knowledge_base_id", sa.Uuid(), nullable=False),
+        sa.Column("request_key_hash", sa.String(length=64), nullable=False),
+        sa.Column("source_name", sa.String(length=500), nullable=False),
+        sa.Column("content_sha256", sa.String(length=64), nullable=False),
+        sa.Column("document_id", sa.Uuid(), nullable=False),
+        sa.Column("document_version_id", sa.Uuid(), nullable=False),
+        sa.Column("ingestion_job_id", sa.Uuid(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.CheckConstraint(_sha256_check("request_key_hash"), name="ck_upload_request_key_hash"),
+        sa.CheckConstraint(
+            _sha256_check("content_sha256"), name="ck_upload_request_content_hash"
+        ),
+        sa.ForeignKeyConstraint(["space_id"], ["spaces.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["knowledge_base_id", "space_id"],
+            ["knowledge_bases.id", "knowledge_bases.space_id"],
+            name="fk_upload_request_knowledge_base_space",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["document_version_id", "document_id", "knowledge_base_id", "space_id"],
+            [
+                "document_versions.id",
+                "document_versions.document_id",
+                "document_versions.knowledge_base_id",
+                "document_versions.space_id",
+            ],
+            name="fk_upload_request_version_document_kb_space",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            [
+                "ingestion_job_id",
+                "document_version_id",
+                "document_id",
+                "knowledge_base_id",
+                "space_id",
+            ],
+            [
+                "ingestion_jobs.id",
+                "ingestion_jobs.document_version_id",
+                "ingestion_jobs.document_id",
+                "ingestion_jobs.knowledge_base_id",
+                "ingestion_jobs.space_id",
+            ],
+            name="fk_upload_request_job_version_document_kb_space",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint(
+            "knowledge_base_id", "request_key_hash", name="uq_knowledge_upload_request_key"
+        ),
+    )
+    for column in (
+        "space_id",
+        "knowledge_base_id",
+        "document_id",
+        "document_version_id",
+        "ingestion_job_id",
+    ):
+        op.create_index(
+            f"ix_knowledge_upload_requests_{column}",
+            "knowledge_upload_requests",
+            [column],
+        )
+
+
 def downgrade() -> None:
+    for column in (
+        "ingestion_job_id",
+        "document_version_id",
+        "document_id",
+        "knowledge_base_id",
+        "space_id",
+    ):
+        op.drop_index(
+            f"ix_knowledge_upload_requests_{column}",
+            table_name="knowledge_upload_requests",
+        )
+    op.drop_table("knowledge_upload_requests")
+
     if op.get_bind().dialect.name == "sqlite":
         op.execute(sa.text("DROP TRIGGER IF EXISTS trg_chunks_validate_embedding_update"))
         op.execute(sa.text("DROP TRIGGER IF EXISTS trg_chunks_validate_embedding_insert"))

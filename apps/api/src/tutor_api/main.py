@@ -15,13 +15,16 @@ from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
 from tutor_api.identity.router import router as identity_router
 from tutor_api.knowledge.router import router as knowledge_router
+from tutor_api.knowledge.storage import ObjectStorage
 from tutor_api.providers.router import router as providers_router
 from tutor_api.providers.service import synchronize_provider_profiles
 from tutor_api.spaces.router import router as spaces_router
 
 
 def create_app(
-    settings: Settings | None = None, session_factory: sessionmaker[Session] | None = None
+    settings: Settings | None = None,
+    session_factory: sessionmaker[Session] | None = None,
+    object_storage: ObjectStorage | None = None,
 ) -> FastAPI:
     active_settings = settings or get_settings()
     production_errors = active_settings.production_errors()
@@ -36,6 +39,7 @@ def create_app(
 
     app = FastAPI(title="Textbook Tutor API", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings
+    app.state.object_storage = object_storage
     if session_factory is not None:
         app.state.session_factory = session_factory
     elif active_settings.app_env == "test" or active_settings.database_url.startswith(

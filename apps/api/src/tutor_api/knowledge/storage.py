@@ -4,7 +4,7 @@ import re
 import threading
 import unicodedata
 from dataclasses import dataclass
-from typing import Protocol
+from typing import BinaryIO, Protocol
 from uuid import UUID
 
 _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:(?:/|$)")
@@ -42,6 +42,14 @@ class ObjectStorage(Protocol):
         self,
         key: str,
         data: bytes,
+        *,
+        content_type: str,
+    ) -> None: ...
+
+    def put_file_if_absent(
+        self,
+        key: str,
+        data: BinaryIO,
         *,
         content_type: str,
     ) -> None: ...
@@ -139,6 +147,18 @@ class MemoryObjectStorage:
             if key in self._objects:
                 raise ObjectAlreadyExistsError
             self._objects[key] = stored
+
+    def put_file_if_absent(
+        self,
+        key: str,
+        data: BinaryIO,
+        *,
+        content_type: str,
+    ) -> None:
+        chunks: list[bytes] = []
+        while chunk := data.read(64 * 1024):
+            chunks.append(chunk)
+        self.put_if_absent(key, b"".join(chunks), content_type=content_type)
 
     def get_object(self, key: str) -> StoredObject:
         with self._lock:

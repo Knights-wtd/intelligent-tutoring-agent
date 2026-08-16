@@ -1651,3 +1651,23 @@ def test_knowledge_base_name_unique_constraint_has_stable_name() -> None:
 
     assert len(matching) == 1
     assert tuple(column.name for column in matching[0].columns) == ("space_id", "name")
+
+
+def test_upload_idempotency_mapping_is_scoped_and_migration_backed() -> None:
+    table = Base.metadata.tables.get("knowledge_upload_requests")
+    assert table is not None
+    constraints = {constraint.name for constraint in table.constraints}
+    assert "uq_knowledge_upload_request_key" in constraints
+    ingestion_constraints = {
+        constraint.name for constraint in IngestionJob.__table__.constraints
+    }
+    assert "uq_ingestion_job_id_version_document_kb_space" in ingestion_constraints
+
+    migration = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / "migrations"
+        / "versions"
+        / "0006_versioned_knowledge.py"
+    ).read_text(encoding="utf-8")
+    assert '"knowledge_upload_requests"' in migration
+    assert 'name="uq_knowledge_upload_request_key"' in migration
