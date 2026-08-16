@@ -661,7 +661,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
             index["name"] for index in inspector.get_indexes("index_versions")
         }
         assert {
-            "ck_chunk_embedding_dimension",
+            "ck_chunk_embedding_dimension_sqlite",
             "ck_chunk_sha256",
         }.issubset(
             {constraint["name"] for constraint in inspector.get_check_constraints("chunks")}
@@ -776,6 +776,64 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
         engine.dispose()
 
 
+def _normalized_sql(sql: str) -> str:
+    return " ".join(sql.lower().split()).rstrip(";")
+
+
+def _sqlite_embedding_contract(engine) -> tuple[dict[str, str], dict[str, str]]:
+    inspector = inspect(engine)
+    checks = {
+        constraint["name"]: _normalized_sql(constraint["sqltext"])
+        for constraint in inspector.get_check_constraints("chunks")
+        if constraint["name"].startswith("ck_chunk_embedding_dimension")
+    }
+    with engine.connect() as connection:
+        triggers = {
+            row.name: _normalized_sql(row.sql)
+            for row in connection.execute(
+                text(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type = 'trigger' "
+                    "AND name LIKE 'trg_chunks_validate_embedding_%'"
+                )
+            )
+        }
+    return checks, triggers
+
+
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_create_all_and_migrated_sqlite_embedding_contracts_match(tmp_path) -> None:
+    create_all_engine = create_engine("sqlite://")
+    Base.metadata.create_all(create_all_engine)
+    migration_path = tmp_path / "embedding-contract.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{migration_path.as_posix()}")
+    command.upgrade(config, "head")
+    migrated_engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        create_all_checks, create_all_triggers = _sqlite_embedding_contract(
+            create_all_engine
+        )
+        migrated_checks, migrated_triggers = _sqlite_embedding_contract(migrated_engine)
+
+        assert create_all_checks == migrated_checks == {
+            "ck_chunk_embedding_dimension_sqlite": (
+                "json_valid(embedding) and json_type(embedding) = 'array' "
+                "and json_array_length(embedding) = embedding_dimension"
+            )
+        }
+        assert set(create_all_triggers) == set(migrated_triggers) == {
+            "trg_chunks_validate_embedding_insert",
+            "trg_chunks_validate_embedding_update",
+        }
+        assert create_all_triggers == migrated_triggers
+    finally:
+        create_all_engine.dispose()
+        migrated_engine.dispose()
+
+
 @pytest.mark.filterwarnings(
     "ignore:No path_separator found in configuration:DeprecationWarning"
 )
@@ -793,6 +851,7 @@ def test_postgresql_offline_sql_enables_pgvector_and_uses_vector_type() -> None:
     assert "create extension if not exists vector" in sql
     assert "embedding vector not null" in sql
     assert "vector_dims(embedding) = embedding_dimension" in sql
+    assert "constraint ck_chunk_embedding_dimension_postgresql" in sql
     assert "checkpoint jsonb not null" in sql
     assert "jsonb_typeof(checkpoint) = 'object'" in sql
     assert (
@@ -807,6 +866,81 @@ def test_postgresql_offline_sql_enables_pgvector_and_uses_vector_type() -> None:
         "foreign key(document_version_id, knowledge_base_id, space_id)"
     ) in sql
     assert "create trigger trg_chunks_validate_embedding" not in sql
+
+
+def _raw_migrated_chunk_insert(
+    connection, embedding_json: str, *, ordinal: int
+) -> str:
+    chunk_id = uuid4().hex
+    connection.exec_driver_sql(
+        """
+        INSERT INTO chunks (
+            id, space_id, knowledge_base_id, index_version_id,
+            document_version_id, ordinal, source_pointer, content_sha256,
+            content, embedding_dimension, index_signature, embedding
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            chunk_id,
+            uuid4().hex,
+            uuid4().hex,
+            uuid4().hex,
+            uuid4().hex,
+            ordinal,
+            f"raw-migrated:{uuid4()}",
+            "a" * 64,
+            "raw migrated embedding",
+            8,
+            "raw:index:v1",
+            embedding_json,
+        ),
+    )
+    return chunk_id
+
+
+@pytest.mark.parametrize(
+    "embedding_json",
+    ["[1e309,0,0,0,0,0,0,0]", "[-1e999,0,0,0,0,0,0,0]"],
+)
+@pytest.mark.parametrize("operation", ["insert", "update"])
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_migrated_sqlite_raw_sql_rejects_non_finite_embeddings(
+    tmp_path, embedding_json: str, operation: str
+) -> None:
+    database_path = tmp_path / f"raw-infinite-{operation}-{uuid4().hex}.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        with engine.begin() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 0
+            finite_chunk_id = _raw_migrated_chunk_insert(
+                connection, "[1e300,0,0,0,0,0,0,0]", ordinal=0
+            )
+            if operation == "insert":
+                with pytest.raises(IntegrityError, match="invalid embedding element"):
+                    _raw_migrated_chunk_insert(
+                        connection, embedding_json, ordinal=1
+                    )
+            else:
+                connection.exec_driver_sql(
+                    "UPDATE chunks SET embedding = ? WHERE id = ?",
+                    ("[-1e300,0,0,0,0,0,0,0]", finite_chunk_id),
+                )
+                with pytest.raises(IntegrityError, match="invalid embedding element"):
+                    connection.exec_driver_sql(
+                        "UPDATE chunks SET embedding = ? WHERE id = ?",
+                        (embedding_json, finite_chunk_id),
+                    )
+                assert connection.exec_driver_sql(
+                    "SELECT embedding FROM chunks WHERE id = ?",
+                    (finite_chunk_id,),
+                ).scalar().startswith("[-1e300")
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.filterwarnings(

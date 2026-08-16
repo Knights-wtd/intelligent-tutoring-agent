@@ -24,7 +24,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Dialect
-from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.ext.mutable import Mutable, MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator, UserDefinedType
 
@@ -538,6 +538,8 @@ _SQLITE_EMBEDDING_INSERT_TRIGGER = DDL(
     WHEN EXISTS (
         SELECT 1 FROM json_each(NEW.embedding)
         WHERE type NOT IN ('integer', 'real')
+           OR value != value
+           OR abs(value) > 1.7976931348623157e308
     )
     BEGIN
         SELECT RAISE(ABORT, 'invalid embedding element');
@@ -551,6 +553,8 @@ _SQLITE_EMBEDDING_UPDATE_TRIGGER = DDL(
     WHEN EXISTS (
         SELECT 1 FROM json_each(NEW.embedding)
         WHERE type NOT IN ('integer', 'real')
+           OR value != value
+           OR abs(value) > 1.7976931348623157e308
     )
     BEGIN
         SELECT RAISE(ABORT, 'invalid embedding element');
@@ -563,6 +567,99 @@ event.listen(Chunk.__table__, "after_create", _SQLITE_EMBEDDING_UPDATE_TRIGGER)
 
 _CHECKPOINT_TYPE = JSON().with_variant(JSONB(), "postgresql")
 
+
+class _NestedMutable:
+    _container_parent: Any = None
+
+    def _set_container_parent(self, parent: Any) -> None:
+        self._container_parent = parent
+
+    def changed(self) -> None:
+        if self._container_parent is not None:
+            self._container_parent.changed()
+            return
+        Mutable.changed(self)
+
+
+class MutableJSONDict(_NestedMutable, MutableDict):
+    """Mutable JSON object that propagates changes from nested containers."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        dict.__init__(self)
+        for key, value in dict(*args, **kwargs).items():
+            dict.__setitem__(self, key, _mutable_json_value(value, self))
+
+    @classmethod
+    def coerce(cls, key: str, value: Any) -> "MutableJSONDict | None":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, dict):
+            return cls(value)
+        return Mutable.coerce(key, value)
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        dict.__setitem__(self, key, _mutable_json_value(value, self))
+        self.changed()
+
+    def setdefault(self, key: Any, value: Any = None) -> Any:
+        if key in self:
+            return dict.__getitem__(self, key)
+        self[key] = value
+        return dict.__getitem__(self, key)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        values = dict(*args, **kwargs)
+        for key, value in values.items():
+            dict.__setitem__(self, key, _mutable_json_value(value, self))
+        if values:
+            self.changed()
+
+
+class MutableJSONList(_NestedMutable, MutableList):
+    """Mutable JSON array that propagates changes to its root object."""
+
+    def __init__(self, values: Any = ()) -> None:
+        list.__init__(self)
+        list.extend(self, (_mutable_json_value(value, self) for value in values))
+
+    def __setitem__(self, index: Any, value: Any) -> None:
+        if isinstance(index, slice):
+            value = [_mutable_json_value(item, self) for item in value]
+        else:
+            value = _mutable_json_value(value, self)
+        list.__setitem__(self, index, value)
+        self.changed()
+
+    def append(self, value: Any) -> None:
+        list.append(self, _mutable_json_value(value, self))
+        self.changed()
+
+    def extend(self, values: Any) -> None:
+        wrapped = [_mutable_json_value(value, self) for value in values]
+        if wrapped:
+            list.extend(self, wrapped)
+            self.changed()
+
+    def insert(self, index: int, value: Any) -> None:
+        list.insert(self, index, _mutable_json_value(value, self))
+        self.changed()
+
+
+def _mutable_json_value(value: Any, parent: Any) -> Any:
+    if isinstance(value, (MutableJSONDict, MutableJSONList)):
+        value._set_container_parent(parent)
+        return value
+    if isinstance(value, dict):
+        value = MutableJSONDict(value)
+        value._set_container_parent(parent)
+        return value
+    if isinstance(value, list):
+        value = MutableJSONList(value)
+        value._set_container_parent(parent)
+        return value
+    return value
+
+
 class IngestionJob(Base):
     __tablename__ = "ingestion_jobs"
     __table_args__ = (
@@ -573,6 +670,10 @@ class IngestionJob(Base):
         CheckConstraint("attempt_count >= 0", name="ck_ingestion_attempt_nonnegative"),
         CheckConstraint("max_attempts > 0", name="ck_ingestion_max_attempts_positive"),
         CheckConstraint("attempt_count <= max_attempts", name="ck_ingestion_attempt_within_limit"),
+        CheckConstraint(
+            "state <> 'retry_wait' OR attempt_count > 0",
+            name="ck_ingestion_retry_wait_has_attempt",
+        ),
         CheckConstraint(
             "(state = 'running' AND lease_owner IS NOT NULL "
             "AND lease_expires_at IS NOT NULL) OR "
@@ -588,9 +689,9 @@ class IngestionJob(Base):
             name="ck_ingestion_completed_at_matches_state",
         ),
         CheckConstraint(
-            "(state IN ('queued', 'retry_wait') AND started_at IS NULL) OR "
-            "(state IN ('running', 'completed', 'failed', 'cancelled') "
-            "AND started_at IS NOT NULL)",
+            "(state = 'queued' AND started_at IS NULL) OR "
+            "(state IN ('running', 'retry_wait', 'completed', 'failed') "
+            "AND started_at IS NOT NULL) OR state = 'cancelled'",
             name="ck_ingestion_started_at_matches_state",
         ),
         CheckConstraint(
@@ -686,7 +787,7 @@ class IngestionJob(Base):
     lease_owner: Mapped[str | None] = mapped_column(String(255), index=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     checkpoint: Mapped[dict[str, Any]] = mapped_column(
-        MutableDict.as_mutable(_CHECKPOINT_TYPE), nullable=False, default=dict
+        MutableJSONDict.as_mutable(_CHECKPOINT_TYPE), nullable=False, default=dict
     )
     last_error_code: Mapped[str | None] = mapped_column(String(100))
     last_error_detail: Mapped[str | None] = mapped_column(String(1000))

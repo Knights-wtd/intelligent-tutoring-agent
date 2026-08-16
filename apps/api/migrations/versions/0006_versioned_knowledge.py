@@ -63,6 +63,11 @@ def upgrade() -> None:
         else "json_valid(embedding) AND json_type(embedding) = 'array' "
         "AND json_array_length(embedding) = embedding_dimension"
     )
+    embedding_dimension_constraint_name = (
+        "ck_chunk_embedding_dimension_postgresql"
+        if dialect_name == "postgresql"
+        else "ck_chunk_embedding_dimension_sqlite"
+    )
     checkpoint_object_check = (
         "jsonb_typeof(checkpoint) = 'object'"
         if dialect_name == "postgresql"
@@ -352,7 +357,9 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "block_id IS NULL OR page_id IS NOT NULL", name="ck_chunk_block_requires_page"
         ),
-        sa.CheckConstraint(embedding_dimension_check, name="ck_chunk_embedding_dimension"),
+        sa.CheckConstraint(
+            embedding_dimension_check, name=embedding_dimension_constraint_name
+        ),
         sa.ForeignKeyConstraint(["space_id"], ["spaces.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             [
@@ -419,6 +426,8 @@ def upgrade() -> None:
                 WHEN EXISTS (
                     SELECT 1 FROM json_each(NEW.embedding)
                     WHERE type NOT IN ('integer', 'real')
+                       OR value != value
+                       OR abs(value) > 1.7976931348623157e308
                 )
                 BEGIN
                     SELECT RAISE(ABORT, 'invalid embedding element');
@@ -434,6 +443,8 @@ def upgrade() -> None:
                 WHEN EXISTS (
                     SELECT 1 FROM json_each(NEW.embedding)
                     WHERE type NOT IN ('integer', 'real')
+                       OR value != value
+                       OR abs(value) > 1.7976931348623157e308
                 )
                 BEGIN
                     SELECT RAISE(ABORT, 'invalid embedding element');
@@ -474,6 +485,10 @@ def upgrade() -> None:
             "attempt_count <= max_attempts", name="ck_ingestion_attempt_within_limit"
         ),
         sa.CheckConstraint(
+            "state <> 'retry_wait' OR attempt_count > 0",
+            name="ck_ingestion_retry_wait_has_attempt",
+        ),
+        sa.CheckConstraint(
             "(state = 'running' AND lease_owner IS NOT NULL "
             "AND lease_expires_at IS NOT NULL) OR "
             "(state <> 'running' AND lease_owner IS NULL "
@@ -488,9 +503,9 @@ def upgrade() -> None:
             name="ck_ingestion_completed_at_matches_state",
         ),
         sa.CheckConstraint(
-            "(state IN ('queued', 'retry_wait') AND started_at IS NULL) OR "
-            "(state IN ('running', 'completed', 'failed', 'cancelled') "
-            "AND started_at IS NOT NULL)",
+            "(state = 'queued' AND started_at IS NULL) OR "
+            "(state IN ('running', 'retry_wait', 'completed', 'failed') "
+            "AND started_at IS NOT NULL) OR state = 'cancelled'",
             name="ck_ingestion_started_at_matches_state",
         ),
         sa.CheckConstraint(
