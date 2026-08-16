@@ -1,6 +1,21 @@
+import tomllib
 from pathlib import Path
 
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _locked_requirements() -> dict[str, Requirement]:
+    lock_file = REPOSITORY_ROOT / "apps" / "api" / "requirements.lock"
+    requirements = {}
+    for line in lock_file.read_text(encoding="utf-8").splitlines():
+        candidate = line.strip()
+        if candidate and not candidate.startswith("#"):
+            requirement = Requirement(candidate)
+            requirements[canonicalize_name(requirement.name)] = requirement
+    return requirements
 
 
 def _environment_example() -> dict[str, str]:
@@ -73,6 +88,24 @@ def test_api_image_includes_and_applies_database_migrations_before_starting() ->
     assert "COPY apps/api/migrations ./migrations" in dockerfile
     assert "COPY apps/api/alembic.ini ./alembic.ini" in dockerfile
     assert "python -m alembic -c alembic.ini upgrade head" in dockerfile
+
+
+def test_multipart_runtime_dependency_is_pinned_in_production_lock() -> None:
+    pyproject = tomllib.loads(
+        (REPOSITORY_ROOT / "apps" / "api" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    declared = {
+        canonicalize_name(requirement.name): requirement
+        for value in pyproject["project"]["dependencies"]
+        for requirement in [Requirement(value)]
+    }
+    multipart = declared["python-multipart"]
+    locked = _locked_requirements()["python-multipart"]
+
+    locked_specifiers = list(locked.specifier)
+    assert len(locked_specifiers) == 1
+    assert locked_specifiers[0].operator == "=="
+    assert locked_specifiers[0].version in multipart.specifier
 
 
 def test_migrations_use_the_runtime_database_url_when_it_is_provided() -> None:

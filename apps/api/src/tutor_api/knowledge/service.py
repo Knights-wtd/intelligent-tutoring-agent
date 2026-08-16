@@ -145,17 +145,38 @@ def _upload_error(status_code: int, detail: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail=detail)
 
 
+def _put_upload_object(
+    object_storage: ObjectStorage,
+    object_key: str,
+    data: BinaryIO,
+    *,
+    content_type: str,
+) -> None:
+    try:
+        object_storage.put_file_if_absent(
+            object_key,
+            data,
+            content_type=content_type,
+        )
+    except ObjectAlreadyExistsError:
+        raise _upload_error(status.HTTP_409_CONFLICT, "不可变对象已存在") from None
+    except Exception:
+        raise _upload_error(status.HTTP_503_SERVICE_UNAVAILABLE, "上传服务暂不可用") from None
+
+
 def _normalize_idempotency_key(value: str) -> str:
+    if any(unicodedata.category(character) in {"Cc", "Cf"} for character in value):
+        raise _upload_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "无效的幂等键")
     normalized = value.strip()
     if not 1 <= len(normalized) <= 255 or not _IDEMPOTENCY_VALUE.fullmatch(normalized):
-        raise _upload_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "无效的幂等键")
-    if any(unicodedata.category(character) in {"Cc", "Cf"} for character in normalized):
         raise _upload_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "无效的幂等键")
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _normalize_source_name(value: str | None) -> tuple[str, str]:
-    if value is None:
+    if value is None or any(
+        unicodedata.category(character) in {"Cc", "Cf"} for character in value
+    ):
         raise _upload_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "无效的文件名")
     normalized = unicodedata.normalize("NFC", value.strip())
     if (
@@ -436,13 +457,12 @@ async def upload_knowledge_document(
                 )
                 session.flush()
                 prepared.temporary_file.seek(0)
-                object_storage.put_file_if_absent(
+                _put_upload_object(
+                    object_storage,
                     version.object_key,
                     prepared.temporary_file,
                     content_type=prepared.content_type,
                 )
-        except ObjectAlreadyExistsError:
-            raise _upload_error(status.HTTP_409_CONFLICT, "不可变对象已存在") from None
         except HTTPException:
             raise
         except IntegrityError as error:

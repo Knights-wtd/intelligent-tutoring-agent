@@ -21,7 +21,10 @@ from tutor_api.knowledge.models import (
     IngestionJob,
     KnowledgeUploadRequest,
 )
-from tutor_api.knowledge.service import _normalize_source_name
+from tutor_api.knowledge.service import (
+    _normalize_idempotency_key,
+    _normalize_source_name,
+)
 from tutor_api.knowledge.storage import MemoryObjectStorage
 from tutor_api.main import create_app
 
@@ -262,6 +265,48 @@ def test_raw_unsafe_filename_values_are_rejected_before_storage(name: str) -> No
     assert getattr(error.value, "status_code", None) == 422
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["\tbook.pdf", "book.pdf\n", "\x1cbook.pdf", "\u200bbook.pdf", "book.pdf\u200b"],
+)
+def test_source_name_rejects_raw_control_and_format_characters(name: str) -> None:
+    with pytest.raises(HTTPException) as error:
+        _normalize_source_name(name)
+    assert error.value.status_code == 422
+
+
+def test_raw_multipart_filename_control_is_rejected_without_side_effects() -> None:
+    client, engine, storage = make_client()
+    registration = register(client, "raw-control-filename")
+    knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+    boundary = "raw-control-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Disposition: form-data; name=\"file\"; "
+        "filename=\"\tlesson.pdf\"\r\n"
+        "Content-Type: application/pdf\r\n"
+        "\r\n"
+    ).encode() + b"%PDF-1.7\nminimal" + f"\r\n--{boundary}--\r\n".encode()
+
+    response = client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",
+        headers={
+            "Idempotency-Key": "raw-control-filename",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        content=body,
+    )
+
+    assert response.status_code == 422
+    with sessionmaker(bind=engine)() as session:
+        assert session.scalar(select(func.count()).select_from(Document)) == 0
+        assert session.scalar(select(func.count()).select_from(DocumentVersion)) == 0
+        assert session.scalar(select(func.count()).select_from(IngestionJob)) == 0
+        assert session.scalar(select(func.count()).select_from(KnowledgeUploadRequest)) == 0
+    assert storage is not None and len(storage._objects) == 0
+    engine.dispose()
+
+
 def test_filename_is_nfc_normalized_before_identity_and_storage() -> None:
     client, engine, _ = make_client()
     registration = register(client, "unicode-name")
@@ -428,6 +473,36 @@ def test_idempotency_exact_replay_and_payload_conflict_are_stable() -> None:
     engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "key",
+    ["\tstable-key", "stable-key\n", "\x1cstable-key", "\u200bstable-key", "stable-key\u200b"],
+)
+def test_idempotency_key_rejects_raw_control_and_format_characters(key: str) -> None:
+    with pytest.raises(HTTPException) as error:
+        _normalize_idempotency_key(key)
+    assert error.value.status_code == 422
+
+
+def test_control_prefixed_idempotency_key_does_not_replay_trimmed_key() -> None:
+    client, engine, storage = make_client()
+    registration = register(client, "control-idempotency")
+    knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+    first = upload(client, knowledge_base["id"], key="control-key")
+
+    rejected = upload(client, knowledge_base["id"], key="\tcontrol-key")
+
+    assert first.status_code == 201
+    assert rejected.status_code == 422
+    assert first.json()["document_id"] not in rejected.text
+    with sessionmaker(bind=engine)() as session:
+        assert session.scalar(select(func.count()).select_from(Document)) == 1
+        assert session.scalar(select(func.count()).select_from(DocumentVersion)) == 1
+        assert session.scalar(select(func.count()).select_from(IngestionJob)) == 1
+        assert session.scalar(select(func.count()).select_from(KnowledgeUploadRequest)) == 1
+    assert storage is not None and len(storage._objects) == 1
+    engine.dispose()
+
+
 @pytest.mark.parametrize("key", ["", "   ", "bad key", "bad\x00key", "x" * 256])
 def test_unsafe_idempotency_keys_are_rejected_without_echo(key: str) -> None:
     client, engine, _ = make_client()
@@ -449,6 +524,41 @@ def test_missing_idempotency_key_is_rejected() -> None:
         files={"file": ("lesson.pdf", b"%PDF-data", "application/pdf")},
     )
     assert response.status_code == 422
+    engine.dispose()
+
+
+class LeakingHttpStorage(MemoryObjectStorage):
+    def put_file_if_absent(self, key, data, *, content_type):
+        raise HTTPException(
+            status_code=418, detail="provider secret /internal/bucket"
+        )
+
+
+def test_storage_http_exception_is_redacted_and_rolls_back_metadata() -> None:
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    app = create_app(
+        Settings(app_env="test", knowledge_upload_max_bytes=1024),
+        sessionmaker(bind=engine),
+        object_storage=LeakingHttpStorage(),
+    )
+    client = TestClient(app)
+    registration = register(client, "storage-http-failure")
+    knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+
+    response = upload(client, knowledge_base["id"])
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "上传服务暂不可用"}
+    assert "provider secret" not in response.text
+    assert "/internal/bucket" not in response.text
+    assert "HTTPException" not in response.text
+    with sessionmaker(bind=engine)() as session:
+        assert session.scalar(select(func.count()).select_from(Document)) == 0
+        assert session.scalar(select(func.count()).select_from(DocumentVersion)) == 0
+        assert session.scalar(select(func.count()).select_from(IngestionJob)) == 0
+        assert session.scalar(select(func.count()).select_from(KnowledgeUploadRequest)) == 0
+        assert session.scalar(select(1)) == 1
     engine.dispose()
 
 
