@@ -57,6 +57,14 @@ class DisabledOCRAdapter:
         raise OCRError(OCRErrorCode.DISABLED) from None
 
 
+def _safe_public_code(error: OCRError) -> OCRErrorCode:
+    try:
+        code = error.code
+    except Exception:
+        return OCRErrorCode.PROCESSING_FAILED
+    return code if isinstance(code, OCRErrorCode) else OCRErrorCode.PROCESSING_FAILED
+
+
 def extract_text_safely(
     adapter: OCRAdapter,
     image: bytes,
@@ -65,14 +73,12 @@ def extract_text_safely(
 ) -> str:
     """Run OCR while replacing provider failures with context-free public errors."""
 
-    public_error: OCRError | None = None
+    public_code = OCRErrorCode.PROCESSING_FAILED
     try:
         return adapter.extract_text(image, languages=languages)
     except OCRError as error:
-        public_error = OCRError(error.code)
+        public_code = _safe_public_code(error)
     except Exception:
-        public_error = OCRError(OCRErrorCode.PROCESSING_FAILED)
+        pass
 
-    if public_error is None:  # pragma: no cover - defensive exhaustiveness guard
-        raise RuntimeError("unreachable OCR error mapping state")
-    raise public_error
+    raise OCRError(public_code) from None

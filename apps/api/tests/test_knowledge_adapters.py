@@ -146,6 +146,112 @@ def test_disabled_ocr_uses_a_restricted_public_error_code() -> None:
     assert error.value.__context__ is None
 
 
+def _assert_ocr_error_is_sanitized(
+    provider_error: OCRError,
+    *,
+    expected_code: OCRErrorCode,
+    secret: str,
+) -> None:
+    class FailingOCRAdapter:
+        backend = "test-provider"
+
+        def extract_text(self, image: bytes, *, languages: tuple[str, ...]) -> str:
+            del image, languages
+            provider_stack_marker(provider_error)
+
+    with pytest.raises(OCRError) as error:
+        extract_text_safely(FailingOCRAdapter(), b"image", languages=("eng",))
+
+    rendered = "".join(traceback.format_exception(error.value))
+    assert type(error.value) is OCRError
+    assert error.value.code is expected_code
+    assert str(error.value) == expected_code.value
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+    assert secret not in repr(error.value)
+    assert secret not in rendered
+    assert "provider_stack_marker" not in repr(error.value)
+    assert "provider_stack_marker" not in rendered
+
+
+def provider_stack_marker(error: OCRError) -> None:
+    raise error
+
+
+def test_ocr_boundary_preserves_valid_code_without_provider_details() -> None:
+    secret = "secret-valid-provider-message"
+    provider_error = OCRError(OCRErrorCode.DISABLED)
+    provider_error.args = (secret,)
+    provider_error.__cause__ = RuntimeError(secret)
+    provider_error.__context__ = RuntimeError(secret)
+
+    _assert_ocr_error_is_sanitized(
+        provider_error,
+        expected_code=OCRErrorCode.DISABLED,
+        secret=secret,
+    )
+
+
+def test_ocr_boundary_rejects_invalid_code_from_malformed_subclass() -> None:
+    secret = "secret-invalid-subclass-message"
+
+    class InvalidCodeOCRError(OCRError):
+        def __init__(self) -> None:
+            RuntimeError.__init__(self, secret)
+            self.code = "forged-code"
+
+    _assert_ocr_error_is_sanitized(
+        InvalidCodeOCRError(),
+        expected_code=OCRErrorCode.PROCESSING_FAILED,
+        secret=secret,
+    )
+
+
+def test_ocr_boundary_rejects_code_mutated_after_construction() -> None:
+    secret = "secret-mutated-code-message"
+    provider_error = OCRError(OCRErrorCode.DISABLED)
+    provider_error.args = (secret,)
+    provider_error.code = "forged-code"
+
+    _assert_ocr_error_is_sanitized(
+        provider_error,
+        expected_code=OCRErrorCode.PROCESSING_FAILED,
+        secret=secret,
+    )
+
+
+def test_ocr_boundary_handles_missing_code() -> None:
+    secret = "secret-missing-code-message"
+
+    class MissingCodeOCRError(OCRError):
+        def __init__(self) -> None:
+            RuntimeError.__init__(self, secret)
+
+    _assert_ocr_error_is_sanitized(
+        MissingCodeOCRError(),
+        expected_code=OCRErrorCode.PROCESSING_FAILED,
+        secret=secret,
+    )
+
+
+def test_ocr_boundary_handles_code_property_that_raises() -> None:
+    secret = "secret-code-property-message"
+
+    class ExplodingCodeOCRError(OCRError):
+        @property
+        def code(self) -> OCRErrorCode:
+            raise RuntimeError(secret)
+
+        def __init__(self) -> None:
+            RuntimeError.__init__(self, secret)
+
+    _assert_ocr_error_is_sanitized(
+        ExplodingCodeOCRError(),
+        expected_code=OCRErrorCode.PROCESSING_FAILED,
+        secret=secret,
+    )
+
+
 def test_ocr_boundary_redacts_provider_errors_without_retaining_context() -> None:
     secret_provider_detail = "provider-token-and-command-line"
 
