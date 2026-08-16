@@ -39,6 +39,41 @@ def make_pdf() -> bytes:
             b"/Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>"
         ),
         b"<< /Length 0 >>\nstream\n\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]
+    output = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(output))
+        output.extend(f"{number} 0 obj\n".encode())
+        output.extend(body)
+        output.extend(b"\nendobj\n")
+    xref_offset = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    output.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        output.extend(f"{offset:010d} 00000 n \n".encode())
+    output.extend(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_offset}\n%%EOF\n"
+        ).encode()
+    )
+    return bytes(output)
+
+
+def make_single_page_pdf(text: str) -> bytes:
+    encoded = text.encode("cp1252")
+    literal = b"".join(f"\\{byte:03o}".encode() for byte in encoded)
+    content = b"BT /F1 12 Tf 72 720 Td (" + literal + b") Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
+        ),
+        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
     ]
     output = bytearray(b"%PDF-1.4\n")
@@ -62,6 +97,17 @@ def make_pdf() -> bytes:
     return bytes(output)
 
 
+def make_docx_from_xml(document_xml: bytes) -> bytes:
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "[Content_Types].xml",
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+        )
+        archive.writestr("word/document.xml", document_xml)
+    return output.getvalue()
+
+
 def make_docx(*, dangerous_xml: bool = False) -> bytes:
     prefix = (
         '<!DOCTYPE w:document [<!ENTITY leak SYSTEM "file:///secret">]>'
@@ -81,14 +127,7 @@ def make_docx(*, dangerous_xml: bool = False) -> bytes:
     <w:p><w:r><w:t>Last paragraph.</w:t></w:r></w:p>
   </w:body>
 </w:document>'''.encode()
-    output = BytesIO()
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "[Content_Types].xml",
-            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
-        )
-        archive.writestr("word/document.xml", document_xml)
-    return output.getvalue()
+    return make_docx_from_xml(document_xml)
 
 
 def png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -96,12 +135,22 @@ def png_chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum)
 
 
-def make_png(width: int = 3, height: int = 2) -> bytes:
-    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+def make_png(
+    width: int = 3,
+    height: int = 2,
+    *,
+    idat: bytes | None = None,
+    interlace: int = 0,
+) -> bytes:
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, interlace)
     raw_rows = b"".join(b"\x00" + (b"\x00\x00\x00" * width) for _ in range(height))
-    return b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", ihdr) + png_chunk(
-        b"IDAT", zlib.compress(raw_rows)
-    ) + png_chunk(b"IEND", b"")
+    image_data = zlib.compress(raw_rows) if idat is None else idat
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", ihdr)
+        + png_chunk(b"IDAT", image_data)
+        + png_chunk(b"IEND", b"")
+    )
 
 
 def make_zip(entries: list[tuple[str | zipfile.ZipInfo, bytes]]) -> bytes:
@@ -147,6 +196,20 @@ def test_pdf_preserves_pages_order_and_marks_only_low_text_page_for_ocr() -> Non
     assert [block.page_number for block in parsed.blocks] == [1, 1]
 
 
+def test_garbled_pdf_page_is_marked_for_ocr_through_public_parser() -> None:
+    mojibake = (
+        "Readable native paragraph with enough text 1234567890 "
+        "ÃƒÂ© ÃƒÂ¶ Ã¢â‚¬â„¢ ÃƒÂ±"
+    )
+
+    parsed = parse_pdf(make_single_page_pdf(mojibake), source_name="garbled.pdf")
+
+    extracted = parsed.pages[0].blocks[0].text
+    assert sum(character.isalnum() for character in extracted) >= 20
+    assert sum(unicodedata.category(character) == "Cc" for character in extracted) >= 3
+    assert parsed.pages[0].needs_ocr is True
+
+
 def test_pdf_failures_use_stable_public_error() -> None:
     with pytest.raises(ParseError) as raised:
         parse_pdf(b"not a PDF and /internal/secret", source_name="broken.pdf")
@@ -183,6 +246,20 @@ def test_docx_rejects_dtd_without_leaking_parser_details() -> None:
     assert raised.value.code is ParseErrorCode.UNSAFE_XML
     assert str(raised.value) == "XML content is unsafe"
     assert "file:///secret" not in str(raised.value)
+
+
+def test_docx_rejects_utf16_dangerous_xml_before_entity_expansion() -> None:
+    xml = """<?xml version="1.0" encoding="UTF-16"?>
+<!DOCTYPE w:document [<!ENTITY expanded "EXPANDED SECRET">]>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body><w:p><w:r><w:t>&expanded;</w:t></w:r></w:p></w:body>
+</w:document>""".encode("utf-16")
+
+    with pytest.raises(ParseError) as raised:
+        parse_docx(make_docx_from_xml(xml), source_name="utf16-danger.docx")
+
+    assert raised.value.code is ParseErrorCode.UNSAFE_XML
+    assert "EXPANDED SECRET" not in str(raised.value)
 
 
 def test_markdown_retains_frontmatter_tags_tables_wikilinks_and_line_ranges() -> None:
@@ -230,6 +307,19 @@ See [[Other Note]].
     assert all(block.line_start > 6 for block in parsed.blocks)
 
 
+def test_markdown_parses_pipe_less_table_with_exact_line_range() -> None:
+    parsed = parse_markdown(
+        b"Heading paragraph\n\nA | B\n--- | ---\n1 | 2\n",
+        source_name="pipe-less.md",
+    )
+
+    table = parsed.blocks[1]
+    assert table.kind is BlockKind.TABLE
+    assert table.table == (("A", "B"), ("1", "2"))
+    assert (table.line_start, table.line_end) == (3, 5)
+    assert table.source_pointer == "pipe-less.md:L3-L5"
+
+
 def test_markdown_rejects_non_mapping_frontmatter() -> None:
     with pytest.raises(ParseError) as raised:
         parse_markdown(b"---\n- unsafe\n- shape\n---\nbody\n", source_name="bad.md")
@@ -247,6 +337,16 @@ def test_png_validates_structure_reads_dimensions_and_defers_ocr() -> None:
     assert page.needs_ocr is True
     assert page.blocks == ()
     assert parsed.needs_ocr is True
+
+
+def test_png_rejects_invalid_zlib_stream_and_unsupported_interlace() -> None:
+    with pytest.raises(ParseError) as invalid_stream:
+        parse_png(make_png(idat=b"not a zlib stream"), source_name="invalid-idat.png")
+    assert invalid_stream.value.code is ParseErrorCode.INVALID_FORMAT
+
+    with pytest.raises(ParseError) as interlaced:
+        parse_png(make_png(interlace=1), source_name="interlaced.png")
+    assert interlaced.value.code is ParseErrorCode.INVALID_FORMAT
 
 
 def test_png_rejects_bad_chunk_crc() -> None:
@@ -319,6 +419,13 @@ def test_obsidian_vault_rejects_unsafe_paths(unsafe_name: str) -> None:
     assert raised.value.code is ParseErrorCode.UNSAFE_ARCHIVE
 
 
+def test_obsidian_vault_rejects_drive_relative_path() -> None:
+    with pytest.raises(ParseError) as raised:
+        parse_obsidian_vault_zip(make_zip([("C:relative.md", b"unsafe")]))
+
+    assert raised.value.code is ParseErrorCode.UNSAFE_ARCHIVE
+
+
 def test_obsidian_vault_rejects_duplicate_normalized_paths() -> None:
     vault = make_zip(
         [
@@ -378,6 +485,18 @@ def test_docx_reuses_archive_guards_for_suspicious_members() -> None:
         parse_docx(docx, source_name="unsafe.docx")
 
     assert raised.value.code is ParseErrorCode.UNSAFE_ARCHIVE
+
+
+def test_deep_yaml_recursion_is_redacted_as_invalid_frontmatter() -> None:
+    depth = 1_200
+    nested = "[" * depth + "value" + "]" * depth
+    markdown = f"---\nvalue: {nested}\n---\nbody\n".encode()
+
+    with pytest.raises(ParseError) as raised:
+        parse_markdown(markdown, source_name="deep.md")
+
+    assert raised.value.code is ParseErrorCode.INVALID_FRONTMATTER
+    assert str(raised.value) == "frontmatter is invalid"
 
 
 def test_frontmatter_values_are_deeply_immutable() -> None:

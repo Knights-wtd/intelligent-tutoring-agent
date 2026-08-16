@@ -10,6 +10,7 @@ import stat
 import struct
 import unicodedata
 import zipfile
+import zlib
 from dataclasses import dataclass
 from enum import StrEnum
 from io import BytesIO
@@ -20,7 +21,7 @@ import yaml
 from pypdf import PdfReader
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:(?:/|$)")
+_WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
 _MARKDOWN_HEADING = re.compile(r"^(#{1,6})[ \t]+(.+?)\s*$")
 _MARKDOWN_TABLE_SEPARATOR = re.compile(r"^:?-{3,}:?$")
 _WIKILINK = re.compile(r"\[\[([^\[\]\r\n]{1,512})\]\]")
@@ -36,6 +37,8 @@ _DOCX_MAX_FILES = 2_048
 _DOCX_MAX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
 _DOCX_MAX_MEMBER_BYTES = 8 * 1024 * 1024
 _ARCHIVE_READ_CHUNK_BYTES = 64 * 1024
+_MAX_PNG_DECOMPRESSED_BYTES = 64 * 1024 * 1024
+_PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
 
 type FrozenScalar = str | int | float | bool | None
 type FrozenValue = (
@@ -185,7 +188,10 @@ def _looks_like_ocr_candidate(text: str) -> bool:
         )
         for character in text
     )
-    return suspicious >= 3 and suspicious / max(len(text), 1) > 0.05
+    if suspicious >= 3 and suspicious / max(len(text), 1) > 0.05:
+        return True
+    mojibake_markers = ("Ã", "Â", "â€", "ðŸ", "ï¿½")
+    return sum(text.count(marker) for marker in mojibake_markers) >= 3
 
 
 def parse_pdf(data: bytes, *, source_name: str = "document.pdf") -> ParsedDocument:
@@ -367,7 +373,8 @@ def _read_archive(
 
 def _contains_dangerous_xml_declaration(data: bytes) -> bool:
     lowered = data.lower()
-    return b"<!doctype" in lowered or b"<!entity" in lowered
+    compact = lowered.replace(b"\x00", b"")
+    return b"<!doctype" in compact or b"<!entity" in compact
 
 
 def _parse_xml(data: bytes) -> ElementTree.Element:
@@ -538,13 +545,16 @@ def _parse_frontmatter(
         _raise(ParseErrorCode.INVALID_FRONTMATTER)
     try:
         loaded = yaml.safe_load(yaml_text)
-    except yaml.YAMLError:
+    except (RecursionError, yaml.YAMLError):
         _raise(ParseErrorCode.INVALID_FRONTMATTER)
     if loaded is None:
         loaded = {}
     if not isinstance(loaded, dict) or not all(isinstance(key, str) for key in loaded):
         _raise(ParseErrorCode.INVALID_FRONTMATTER)
-    frozen = _freeze_yaml(loaded)
+    try:
+        frozen = _freeze_yaml(loaded)
+    except RecursionError:
+        _raise(ParseErrorCode.INVALID_FRONTMATTER)
     if not isinstance(frozen, tuple):
         _raise(ParseErrorCode.INVALID_FRONTMATTER)
 
@@ -563,9 +573,14 @@ def _parse_frontmatter(
 
 def _markdown_table_cells(line: str) -> tuple[str, ...]:
     stripped = line.strip()
-    if not stripped.startswith("|") or not stripped.endswith("|"):
+    if "|" not in stripped:
         return ()
-    return tuple(cell.strip() for cell in stripped[1:-1].split("|"))
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    cells = tuple(cell.strip() for cell in stripped.split("|"))
+    return cells if len(cells) >= 2 else ()
 
 
 def _is_markdown_table(lines: list[str], index: int) -> bool:
@@ -711,8 +726,37 @@ def parse_markdown(data: bytes, *, source_name: str = "document.md") -> ParsedDo
     )
 
 
+def _validate_png_image_data(
+    compressed: bytes,
+    *,
+    width: int,
+    height: int,
+    bit_depth: int,
+    color_type: int,
+) -> None:
+    row_bytes = (width * _PNG_CHANNELS[color_type] * bit_depth + 7) // 8
+    expected_bytes = height * (row_bytes + 1)
+    if expected_bytes > _MAX_PNG_DECOMPRESSED_BYTES:
+        _raise(ParseErrorCode.INVALID_FORMAT)
+    try:
+        decompressor = zlib.decompressobj()
+        decoded = decompressor.decompress(compressed, expected_bytes + 1)
+    except zlib.error:
+        _raise(ParseErrorCode.INVALID_FORMAT)
+    if (
+        len(decoded) != expected_bytes
+        or not decompressor.eof
+        or decompressor.unconsumed_tail
+        or decompressor.unused_data
+    ):
+        _raise(ParseErrorCode.INVALID_FORMAT)
+    stride = row_bytes + 1
+    if any(decoded[offset] > 4 for offset in range(0, len(decoded), stride)):
+        _raise(ParseErrorCode.INVALID_FORMAT)
+
+
 def parse_png(data: bytes, *, source_name: str = "image.png") -> ParsedDocument:
-    """Validate PNG chunk framing and return dimensions without running OCR."""
+    """Validate PNG chunks and bounded non-interlaced scanlines without OCR."""
 
     raw = bytes(data)
     if not raw.startswith(_PNG_SIGNATURE):
@@ -720,6 +764,9 @@ def parse_png(data: bytes, *, source_name: str = "image.png") -> ParsedDocument:
     offset = len(_PNG_SIGNATURE)
     width: int | None = None
     height: int | None = None
+    bit_depth: int | None = None
+    color_type: int | None = None
+    idat_parts: list[bytes] = []
     saw_idat = False
     saw_iend = False
     chunk_index = 0
@@ -755,13 +802,14 @@ def parse_png(data: bytes, *, source_name: str = "image.png") -> ParsedDocument:
                 or bit_depth not in valid_depths.get(color_type, set())
                 or compression != 0
                 or filtering != 0
-                or interlace not in {0, 1}
+                or interlace != 0
             ):
                 _raise(ParseErrorCode.INVALID_FORMAT)
         elif chunk_type == b"IHDR":
             _raise(ParseErrorCode.INVALID_FORMAT)
         if chunk_type == b"IDAT":
             saw_idat = True
+            idat_parts.append(chunk_data)
         if chunk_type == b"IEND":
             if length != 0 or not saw_idat or end != len(raw):
                 _raise(ParseErrorCode.INVALID_FORMAT)
@@ -770,8 +818,21 @@ def parse_png(data: bytes, *, source_name: str = "image.png") -> ParsedDocument:
             break
         offset = end
         chunk_index += 1
-    if not saw_iend or width is None or height is None:
+    if (
+        not saw_iend
+        or width is None
+        or height is None
+        or bit_depth is None
+        or color_type is None
+    ):
         _raise(ParseErrorCode.INVALID_FORMAT)
+    _validate_png_image_data(
+        b"".join(idat_parts),
+        width=width,
+        height=height,
+        bit_depth=bit_depth,
+        color_type=color_type,
+    )
     page = ParsedPage(page_number=1, blocks=(), needs_ocr=True, width=width, height=height)
     return ParsedDocument(
         source_name=source_name,
