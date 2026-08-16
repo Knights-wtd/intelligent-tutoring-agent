@@ -25,10 +25,15 @@
 
 **Files:** Create `knowledge/models.py` and migration `0006_versioned_knowledge.py`; modify `migrations/env.py`; test `tests/test_knowledge_schema.py` and `tests/test_schema.py`.
 
-- [ ] Test one active index per KB, source-version uniqueness, content hashes, signature/dimension consistency, and cascades.
-- [ ] Implement knowledge bases, documents, versions, pages, blocks, index versions, chunks, and ingestion jobs with UUIDs, `space_id`, owner/audit fields, state enums, hashes, source pointers, leases, retries, and checkpoints.
-- [ ] Enable pgvector on PostgreSQL while retaining a JSON fallback for SQLite tests; dimensions cannot silently mix in one index.
-- [ ] Run schema tests and Alembic upgrade/downgrade/upgrade; commit `feat: add versioned knowledge schema`.
+- [x] Test one active index per KB, source-version uniqueness, content hashes, signature/dimension consistency, and cascades.
+- [x] Implement knowledge bases, documents, versions, pages, blocks, index versions, chunks, and ingestion jobs with UUIDs, `space_id`, owner/audit fields, state enums, hashes, source pointers, leases, retries, and checkpoints.
+- [x] Enable pgvector on PostgreSQL while retaining a JSON fallback for SQLite tests; dimensions cannot silently mix in one index.
+- [x] Run schema tests and Alembic upgrade/downgrade/upgrade; commit `feat: add versioned knowledge schema`.
+- [x] Complete specification review with PASS.
+- [x] Complete iterative code-quality hardening and obtain final quality-review PASS.
+- [x] Re-run focused schema tests, Alembic tests, the complete API suite, Ruff without cache, PostgreSQL offline SQL checks, and `git diff --check`.
+
+**Delivery record (2026-08-16):** Task 2 completed in initial commit `bac0e0d` and quality-hardening commits `8129e28`, `67780ed`, and `000240d`. Specification review PASS; code-quality review final PASS after iterative hardening. Final verification: knowledge schema 105 passed, schema/Alembic 33 passed, complete API 345 passed/3 skipped, Ruff passed, and `git diff --check` passed. PostgreSQL validation was limited to offline SQL for `CREATE EXTENSION vector` and `VECTOR`; real PostgreSQL/pgvector permissions, DBAPI round-trips, concurrency, and performance remain for integration acceptance.
 
 ### Task 3: Space-scoped knowledge APIs
 

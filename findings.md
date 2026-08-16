@@ -214,3 +214,24 @@
 ### 后续
 
 - Task 1 已完成，但整个 Milestone 3 / Phase 5 仍为 `in_progress`。下一实施任务是 Task 2：versioned knowledge schema。
+
+## 2026-08-16 Phase 5 · Task 2 关键结论
+
+### 交付与审查
+
+- Task 2 versioned knowledge schema 由初始提交 `bac0e0d` 及质量修复提交 `8129e28`、`67780ed`、`000240d` 完成。
+- 规格审查 PASS；独立质量审查经过跨 KB 约束、Embedding 合同、任务状态机、SQLite 数值边界和递归 checkpoint 生命周期等多轮加固后最终 PASS。
+- 最终验证基线：knowledge schema 105 passed；schema/Alembic 33 passed；完整 API 345 passed、3 skipped；Ruff 与 `git diff --check` 通过。
+
+### 已确认的数据不变量
+
+- **租户与知识库隔离：** knowledge bases、documents、document versions、pages、blocks、index versions、chunks 和 ingestion jobs 均使用 UUID，并具有非空、索引的 `space_id`。复合外键同时绑定 space 与 knowledge base，阻止跨 space 或同 space 跨 KB 的静默关联。
+- **不可变版本与索引：** 每个 KB 至多一个 active index；document source/version 唯一规则、SHA-256/内容哈希、页面/块/chunk ordinal 与 source pointer 唯一性均由数据库约束覆盖。删除 KB、document、version 或 index 会按预期级联，不留孤儿。
+- **Embedding 合同：** embedding 非空，backend/model/dimension/index signature 持久化，同一 index 的 chunk dimension 不能混用。SQLite 使用 JSON fallback 与一致命名的 INSERT/UPDATE triggers，校验数组根类型、数值元素、有限数，并安全接受 min/max integer、拒绝 Infinity；PostgreSQL offline SQL 启用 `vector` extension 并生成 `VECTOR` 类型路径。
+- **可恢复任务状态机：** ingestion jobs 持久化 lease、retry、attempt、checkpoint、started/completed 时间，并以数据库约束保护 queued/running/retry_wait/terminal 状态以及 parse/OCR/build-index 的 kind/target 矩阵。
+- **递归 checkpoint：** checkpoint 仅接受 JSON object；递归 mutable dict/list 会把嵌套修改传播至 ORM 根对象。子树跨任务赋值会复制而不共享 identity，替换、删除、pop、clear、slice/remove 等移除路径会解除旧父链接，detached 旧引用后续修改不会误标记或抛出 ORM 生命周期错误。
+
+### PostgreSQL 验收边界与下一步
+
+- 当前只验证 PostgreSQL offline SQL，未运行真实 PostgreSQL/pgvector；extension 创建权限、DBAPI vector bind/result 往返、JSONB 真实往返、并发行为和性能仍待后续集成验收。
+- Task 2 最终 PASS，但 Phase 5 / Milestone 3 仍未完成；下一实施任务是 Task 3：space-scoped knowledge APIs。

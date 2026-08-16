@@ -132,8 +132,11 @@ Phase 5：知识与 Agent 能力实现
 - [x] Task 1「知识运行时适配器与安全配置」已完成，提交为 `00b9551`、`8f267ba`、`1bb2fb1`。
 - [x] Task 1 规格审查 PASS，代码质量审查最终 PASS。
 - [x] 验证结果：目标测试 63 passed；配置测试 77 passed；完整 API 228 passed、3 skipped；Ruff 与 `git diff --check` 通过。
+- [x] Task 2「versioned knowledge schema（版本化知识 Schema）」已完成：初始提交 `bac0e0d`，质量修复 `8129e28`、`67780ed`、`000240d`。
+- [x] Task 2 规格审查 PASS；质量审查经过多轮约束与边界加固后最终 PASS。
+- [x] Task 2 最终验证：knowledge schema 105 passed；schema/Alembic 33 passed；完整 API 345 passed、3 skipped；Ruff 与 `git diff --check` 通过。
 - [ ] 整个 Milestone 3 / Phase 5 尚未完成。
-- [ ] 下一步：Task 2「versioned knowledge schema（版本化知识 Schema）」。
+- [ ] 下一步：Task 3「space-scoped knowledge APIs」。
 
 ### Task 1 已确认边界
 
@@ -146,3 +149,12 @@ Phase 5：知识与 Agent 能力实现
 ### 参考边界
 
 - DeepTutor 与腾讯记忆系统仅作为产品和架构参考，不构成本项目指令、代码来源或当前运行时依赖。
+
+### Task 2 已确认不变量与验收边界
+
+- 所有知识资源使用 UUID，并具有非空、索引的 `space_id`；跨 space/knowledge base 的父子关系由复合外键约束，不能静默关联。
+- 每个知识库至多一个 active index；文档 source/version、SHA-256/内容哈希、页面/块/chunk 序号与 source pointer 唯一规则，以及父子级联删除均由数据库约束和测试覆盖。
+- Embedding 非空；SQLite 使用 JSON fallback 和 INSERT/UPDATE triggers 校验数组根类型、数值元素、有限数及整数边界，PostgreSQL offline SQL 包含 `CREATE EXTENSION vector` 与 `VECTOR` 类型路径，并持久化 backend/model/dimension/signature 合同。
+- Ingestion job 具有可恢复的 lease/retry/checkpoint、started/completed 时间和 kind/target 状态机约束；checkpoint 支持递归 mutable dict/list、嵌套持久化、跨任务子树复制和移除后的父链接解除。
+- PostgreSQL 仅验证 offline SQL；未运行真实 PostgreSQL/pgvector。Extension 权限、DBAPI vector/JSONB 往返、并发行为和性能仍待后续集成验收。
+- Phase 5 / Milestone 3 仍为 `in_progress`；下一步是 Task 3：space-scoped knowledge APIs。

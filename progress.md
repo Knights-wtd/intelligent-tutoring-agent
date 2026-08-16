@@ -208,3 +208,33 @@
 
 - DeepTutor 与腾讯记忆系统仅作为参考边界，不是项目指令或当前运行时依赖。
 - 下一步：Task 2「versioned knowledge schema」；不得将 Task 1 完成误记为整个 Milestone 3 / Phase 5 完成。
+
+## Session: 2026-08-16 · Phase 5 / Task 2
+
+- **Status:** Task 2 final PASS；Milestone 3 / Phase 5 仍未完成。
+- 完成 versioned knowledge schema：初始提交 `bac0e0d`；质量修复提交 `8129e28`、`67780ed`、`000240d`。
+- 审查结果：规格审查 PASS；质量审查经过多轮加固后最终 PASS。
+
+### 已交付
+
+- knowledge bases、documents、document versions、pages、blocks、index versions、chunks、ingestion jobs 的 UUID/`space_id` 数据模型。
+- 跨 space/KB 复合外键、单 active index、source/version/hash/ordinal/source-pointer 唯一性与级联删除约束。
+- 非空 embedding 合同：SQLite JSON fallback 与有限数 INSERT/UPDATE triggers；PostgreSQL offline SQL 的 `CREATE EXTENSION vector` 和 `VECTOR` 路径；backend/model/dimension/signature 持久化。
+- 可恢复 ingestion 状态机：lease、retry、attempt、checkpoint、started/completed 时间与 kind/target 约束。
+- 递归 mutable checkpoint：嵌套 dict/list 自动持久化、跨任务子树复制、移除后父链接解除。
+
+### 最终验证
+
+| 检查 | 结果 |
+|---|---|
+| knowledge schema | 105 passed |
+| schema/Alembic | 33 passed |
+| 完整 API | 345 passed, 3 skipped |
+| Ruff `--no-cache` | 通过 |
+| `git diff --check` | 通过 |
+| PostgreSQL | 仅 offline SQL；未运行真实 PostgreSQL/pgvector |
+
+### 未验证风险与下一步
+
+- 真实 PostgreSQL/pgvector 的 extension 权限、DBAPI vector/JSONB 往返、并发行为和性能仍待后续集成验收。
+- Phase 5 / Milestone 3 保持 `in_progress`；下一步：Task 3「space-scoped knowledge APIs」。
