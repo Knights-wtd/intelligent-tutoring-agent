@@ -263,7 +263,7 @@ async def _prepare_upload(upload: UploadFile, max_bytes: int) -> PreparedUpload:
             raise _upload_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "文件内容无效")
         temporary_file.seek(0)
         return PreparedUpload(source_name, content_type, digest.hexdigest(), temporary_file)
-    except Exception:
+    except BaseException:
         temporary_file.close()
         raise
 
@@ -301,14 +301,13 @@ def _add_upload_request(
     return request
 
 
-async def upload_knowledge_document(
+def upload_prepared_knowledge_document(
     session: Session,
     user: User,
     knowledge_base_id: UUID,
-    upload: UploadFile,
+    prepared: PreparedUpload,
     idempotency_key: str,
-    object_storage: ObjectStorage | None,
-    max_bytes: int,
+    object_storage: ObjectStorage,
 ) -> KnowledgeUploadResult:
     authorized_knowledge_base = get_writable_knowledge_base(
         session, user, knowledge_base_id
@@ -320,10 +319,7 @@ async def upload_knowledge_document(
     )
     if knowledge_base is None:
         raise _upload_error(status.HTTP_404_NOT_FOUND, "资源不存在")
-    if object_storage is None:
-        raise _upload_error(status.HTTP_503_SERVICE_UNAVAILABLE, "上传服务暂不可用")
     request_key_hash = _normalize_idempotency_key(idempotency_key)
-    prepared = await _prepare_upload(upload, max_bytes)
     try:
         replay = session.scalar(
             select(KnowledgeUploadRequest).where(

@@ -1,29 +1,38 @@
+import asyncio
+import io
+import threading
 import unicodedata
 from hashlib import sha256
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
+from starlette.datastructures import Headers
 
 import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.identity.models  # noqa: F401
 import tutor_api.knowledge.models  # noqa: F401
+import tutor_api.knowledge.service as knowledge_service
 import tutor_api.spaces.models  # noqa: F401
 from tutor_api.classrooms.models import ClassroomRole
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
+from tutor_api.identity.models import User
 from tutor_api.knowledge.models import (
     Document,
     DocumentVersion,
     IngestionJob,
     KnowledgeUploadRequest,
 )
+from tutor_api.knowledge.router import post_knowledge_document
 from tutor_api.knowledge.service import (
     _normalize_idempotency_key,
     _normalize_source_name,
+    _prepare_upload,
 )
 from tutor_api.knowledge.storage import MemoryObjectStorage
 from tutor_api.main import create_app
@@ -91,6 +100,111 @@ def upload(
         headers={"Idempotency-Key": key},
         files={"file": (name, content, content_type)},
     )
+
+
+class BlockingStorage(MemoryObjectStorage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.thread_id: int | None = None
+
+    def put_file_if_absent(self, key, data, *, content_type):
+        self.thread_id = threading.get_ident()
+        self.started.set()
+        self.release.wait(timeout=2)
+        return super().put_file_if_absent(key, data, content_type=content_type)
+
+
+class RecordingSessionFactory:
+    def __init__(self, factory) -> None:
+        self.factory = factory
+        self.created_on: list[int] = []
+
+    def __call__(self):
+        self.created_on.append(threading.get_ident())
+        return self.factory()
+
+
+def test_upload_database_and_storage_work_do_not_block_the_event_loop() -> None:
+    client, engine, _ = make_client()
+    registration = register(client, "worker")
+    knowledge_base = create_knowledge_base(
+        client, registration["personal_space"]["id"], "worker knowledge"
+    )
+    factory = sessionmaker(bind=engine)
+    with factory() as session:
+        current_user = session.get(User, UUID(registration["user"]["id"]))
+        assert current_user is not None
+        session.expunge(current_user)
+
+    recording_factory = RecordingSessionFactory(factory)
+    storage = BlockingStorage()
+    client.app.state.session_factory = recording_factory
+    client.app.state.object_storage = storage
+    request = SimpleNamespace(app=client.app)
+    uploaded_file = UploadFile(
+        io.BytesIO(b"%PDF-1.7\nworker"),
+        filename="worker.pdf",
+        headers=Headers({"content-type": "application/pdf"}),
+    )
+    knowledge_base_id = UUID(knowledge_base["id"])
+
+    async def exercise() -> None:
+        event_loop_thread = threading.get_ident()
+        task = asyncio.create_task(
+            post_knowledge_document(
+                knowledge_base_id,
+                request,
+                current_user,
+                uploaded_file,
+                "worker-key",
+            )
+        )
+        try:
+            assert await asyncio.to_thread(storage.started.wait, 2)
+            assert storage.thread_id != event_loop_thread
+            assert recording_factory.created_on
+            assert all(
+                thread_id != event_loop_thread
+                for thread_id in recording_factory.created_on
+            )
+            assert storage.thread_id in recording_factory.created_on
+            await asyncio.sleep(0.01)
+            assert not task.done()
+        finally:
+            storage.release.set()
+        response = await task
+        assert response.knowledge_base_id == knowledge_base_id
+        assert uploaded_file.file.closed
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        storage.release.set()
+        client.close()
+        engine.dispose()
+
+
+def test_prepare_upload_closes_temporary_file_when_cancelled(monkeypatch) -> None:
+    temporary_file = io.BytesIO()
+    monkeypatch.setattr(
+        knowledge_service.tempfile,
+        "SpooledTemporaryFile",
+        lambda **_: temporary_file,
+    )
+
+    class CancellingUpload:
+        filename = "cancelled.pdf"
+        content_type = "application/pdf"
+
+        async def read(self, _: int) -> bytes:
+            raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_prepare_upload(CancellingUpload(), 1024))
+
+    assert temporary_file.closed
 
 
 def test_upload_settings_are_centralized_and_bounded() -> None:
