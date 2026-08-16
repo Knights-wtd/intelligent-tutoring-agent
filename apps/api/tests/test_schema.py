@@ -829,6 +829,10 @@ def test_create_all_and_migrated_sqlite_embedding_contracts_match(tmp_path) -> N
             "trg_chunks_validate_embedding_update",
         }
         assert create_all_triggers == migrated_triggers
+        assert all(
+            "abs(cast(value as real)) > 1.7976931348623157e308" in sql
+            for sql in create_all_triggers.values()
+        )
     finally:
         create_all_engine.dispose()
         migrated_engine.dispose()
@@ -939,6 +943,45 @@ def test_migrated_sqlite_raw_sql_rejects_non_finite_embeddings(
                     "SELECT embedding FROM chunks WHERE id = ?",
                     (finite_chunk_id,),
                 ).scalar().startswith("[-1e300")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "integer_value", [-9223372036854775808, 9223372036854775807]
+)
+@pytest.mark.parametrize("operation", ["insert", "update"])
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_migrated_sqlite_raw_sql_accepts_integer_embedding_boundaries(
+    tmp_path, integer_value: int, operation: str
+) -> None:
+    database_path = tmp_path / f"raw-integer-{operation}-{uuid4().hex}.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        with engine.begin() as connection:
+            assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 0
+            embedding_json = f"[{integer_value},0,0,0,0,0,0,0]"
+            if operation == "insert":
+                chunk_id = _raw_migrated_chunk_insert(
+                    connection, embedding_json, ordinal=0
+                )
+            else:
+                chunk_id = _raw_migrated_chunk_insert(
+                    connection, "[0,0,0,0,0,0,0,0]", ordinal=0
+                )
+                connection.exec_driver_sql(
+                    "UPDATE chunks SET embedding = ? WHERE id = ?",
+                    (embedding_json, chunk_id),
+                )
+            stored_embedding = connection.exec_driver_sql(
+                "SELECT embedding FROM chunks WHERE id = ?", (chunk_id,)
+            ).scalar()
+            assert str(integer_value) in stored_embedding
     finally:
         engine.dispose()
 

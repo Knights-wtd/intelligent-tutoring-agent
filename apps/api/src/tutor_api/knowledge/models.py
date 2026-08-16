@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
+from weakref import ref
 
 from sqlalchemy import (
     DDL,
@@ -539,7 +540,7 @@ _SQLITE_EMBEDDING_INSERT_TRIGGER = DDL(
         SELECT 1 FROM json_each(NEW.embedding)
         WHERE type NOT IN ('integer', 'real')
            OR value != value
-           OR abs(value) > 1.7976931348623157e308
+           OR abs(CAST(value AS REAL)) > 1.7976931348623157e308
     )
     BEGIN
         SELECT RAISE(ABORT, 'invalid embedding element');
@@ -554,7 +555,7 @@ _SQLITE_EMBEDDING_UPDATE_TRIGGER = DDL(
         SELECT 1 FROM json_each(NEW.embedding)
         WHERE type NOT IN ('integer', 'real')
            OR value != value
-           OR abs(value) > 1.7976931348623157e308
+           OR abs(CAST(value AS REAL)) > 1.7976931348623157e308
     )
     BEGIN
         SELECT RAISE(ABORT, 'invalid embedding element');
@@ -569,16 +570,29 @@ _CHECKPOINT_TYPE = JSON().with_variant(JSONB(), "postgresql")
 
 
 class _NestedMutable:
-    _container_parent: Any = None
+    _container_parent_ref: Any = None
+
+    def _container_parent(self) -> Any:
+        if self._container_parent_ref is None:
+            return None
+        return self._container_parent_ref()
 
     def _set_container_parent(self, parent: Any) -> None:
-        self._container_parent = parent
+        self._container_parent_ref = ref(parent)
+
+    def _clear_container_parent(self, parent: Any) -> None:
+        if self._container_parent() is parent:
+            self._container_parent_ref = None
 
     def changed(self) -> None:
-        if self._container_parent is not None:
-            self._container_parent.changed()
+        parent = self._container_parent()
+        if parent is not None:
+            parent.changed()
             return
         Mutable.changed(self)
+
+
+_MISSING = object()
 
 
 class MutableJSONDict(_NestedMutable, MutableDict):
@@ -592,13 +606,28 @@ class MutableJSONDict(_NestedMutable, MutableDict):
     @classmethod
     def coerce(cls, key: str, value: Any) -> "MutableJSONDict | None":
         if isinstance(value, cls):
-            return value
+            return cls(value)
         if isinstance(value, dict):
             return cls(value)
         return Mutable.coerce(key, value)
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "MutableJSONDict":
+        copied = type(self)(self)
+        memo[id(self)] = copied
+        return copied
+
     def __setitem__(self, key: Any, value: Any) -> None:
-        dict.__setitem__(self, key, _mutable_json_value(value, self))
+        wrapped = _mutable_json_value(value, self)
+        old_value = dict.get(self, key, _MISSING)
+        dict.__setitem__(self, key, wrapped)
+        if old_value is not _MISSING:
+            _detach_mutable_json_value(old_value, self)
+        self.changed()
+
+    def __delitem__(self, key: Any) -> None:
+        old_value = dict.__getitem__(self, key)
+        dict.__delitem__(self, key)
+        _detach_mutable_json_value(old_value, self)
         self.changed()
 
     def setdefault(self, key: Any, value: Any = None) -> Any:
@@ -610,8 +639,40 @@ class MutableJSONDict(_NestedMutable, MutableDict):
     def update(self, *args: Any, **kwargs: Any) -> None:
         values = dict(*args, **kwargs)
         for key, value in values.items():
-            dict.__setitem__(self, key, _mutable_json_value(value, self))
+            wrapped = _mutable_json_value(value, self)
+            old_value = dict.get(self, key, _MISSING)
+            dict.__setitem__(self, key, wrapped)
+            if old_value is not _MISSING:
+                _detach_mutable_json_value(old_value, self)
         if values:
+            self.changed()
+
+    def __ior__(self, value: Any) -> "MutableJSONDict":
+        self.update(value)
+        return self
+
+    def pop(self, key: Any, default: Any = _MISSING) -> Any:
+        if key not in self:
+            if default is _MISSING:
+                raise KeyError(key)
+            return default
+        old_value = dict.pop(self, key)
+        _detach_mutable_json_value(old_value, self)
+        self.changed()
+        return old_value
+
+    def popitem(self) -> tuple[Any, Any]:
+        key, old_value = dict.popitem(self)
+        _detach_mutable_json_value(old_value, self)
+        self.changed()
+        return key, old_value
+
+    def clear(self) -> None:
+        old_values = list(dict.values(self))
+        dict.clear(self)
+        for old_value in old_values:
+            _detach_mutable_json_value(old_value, self)
+        if old_values:
             self.changed()
 
 
@@ -622,12 +683,31 @@ class MutableJSONList(_NestedMutable, MutableList):
         list.__init__(self)
         list.extend(self, (_mutable_json_value(value, self) for value in values))
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "MutableJSONList":
+        copied = type(self)(self)
+        memo[id(self)] = copied
+        return copied
+
     def __setitem__(self, index: Any, value: Any) -> None:
         if isinstance(index, slice):
-            value = [_mutable_json_value(item, self) for item in value]
+            old_values = list.__getitem__(self, index)
+            wrapped = [_mutable_json_value(item, self) for item in value]
         else:
-            value = _mutable_json_value(value, self)
-        list.__setitem__(self, index, value)
+            old_values = [list.__getitem__(self, index)]
+            wrapped = _mutable_json_value(value, self)
+        list.__setitem__(self, index, wrapped)
+        for old_value in old_values:
+            _detach_mutable_json_value(old_value, self)
+        self.changed()
+
+    def __delitem__(self, index: Any) -> None:
+        if isinstance(index, slice):
+            old_values = list.__getitem__(self, index)
+        else:
+            old_values = [list.__getitem__(self, index)]
+        list.__delitem__(self, index)
+        for old_value in old_values:
+            _detach_mutable_json_value(old_value, self)
         self.changed()
 
     def append(self, value: Any) -> None:
@@ -644,20 +724,42 @@ class MutableJSONList(_NestedMutable, MutableList):
         list.insert(self, index, _mutable_json_value(value, self))
         self.changed()
 
+    def pop(self, index: int = -1) -> Any:
+        old_value = list.pop(self, index)
+        _detach_mutable_json_value(old_value, self)
+        self.changed()
+        return old_value
+
+    def remove(self, value: Any) -> None:
+        self.pop(self.index(value))
+
+    def clear(self) -> None:
+        old_values = list(self)
+        list.clear(self)
+        for old_value in old_values:
+            _detach_mutable_json_value(old_value, self)
+        if old_values:
+            self.changed()
+
 
 def _mutable_json_value(value: Any, parent: Any) -> Any:
-    if isinstance(value, (MutableJSONDict, MutableJSONList)):
-        value._set_container_parent(parent)
-        return value
-    if isinstance(value, dict):
+    if isinstance(value, MutableJSONDict):
         value = MutableJSONDict(value)
-        value._set_container_parent(parent)
-        return value
-    if isinstance(value, list):
+    elif isinstance(value, MutableJSONList):
         value = MutableJSONList(value)
-        value._set_container_parent(parent)
+    elif isinstance(value, dict):
+        value = MutableJSONDict(value)
+    elif isinstance(value, list):
+        value = MutableJSONList(value)
+    else:
         return value
+    value._set_container_parent(parent)
     return value
+
+
+def _detach_mutable_json_value(value: Any, parent: Any) -> None:
+    if isinstance(value, (MutableJSONDict, MutableJSONList)):
+        value._clear_container_parent(parent)
 
 
 class IngestionJob(Base):

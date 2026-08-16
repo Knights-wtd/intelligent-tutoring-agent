@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -998,6 +999,34 @@ def test_sqlite_raw_sql_rejects_non_finite_embeddings(
     assert session.get(Chunk, chunk.id).embedding == [0.1] * 8
 
 
+@pytest.mark.parametrize(
+    "integer_value", [-9223372036854775808, 9223372036854775807]
+)
+@pytest.mark.parametrize("operation", ["insert", "update"])
+def test_sqlite_raw_sql_accepts_integer_embedding_boundaries(
+    session: Session, integer_value: int, operation: str
+) -> None:
+    user, space = create_user_space(session, f"raw-integer-{operation}-{uuid4().hex}")
+    knowledge_base = create_knowledge_base(session, user, space)
+    _, version, page, block = create_document_graph(session, user, space, knowledge_base)
+    index = create_index(session, user, space, knowledge_base)
+    template = create_chunk(session, space, index, version, page, block)
+    session.commit()
+    embedding_json = f"[{integer_value},0,0,0,0,0,0,0]"
+
+    if operation == "insert":
+        chunk_id = _raw_chunk_clone_with_embedding(
+            session, template.id, embedding_json, ordinal=1
+        )
+    else:
+        chunk_id = template.id
+        _raw_chunk_update(session, chunk_id, embedding_json)
+    session.commit()
+    session.expire_all()
+
+    assert session.get(Chunk, chunk_id).embedding[0] == float(integer_value)
+
+
 def test_sqlite_raw_sql_accepts_large_finite_embeddings(session: Session) -> None:
     user, space = create_user_space(session, "raw-large-finite")
     knowledge_base = create_knowledge_base(session, user, space)
@@ -1366,6 +1395,134 @@ def test_nested_checkpoint_list_element_change_is_persisted(session: Session) ->
     assert session.is_modified(job, include_collections=True)
     session.commit()
     _assert_checkpoint_after_new_session(session, job.id, {"pages": [3]})
+
+
+@pytest.mark.parametrize(
+    ("subtree", "mutate", "source_expected", "target_expected"),
+    [
+        (
+            {"progress": {"page": 1}},
+            lambda value: value["progress"].update(page=2),
+            {"progress": {"page": 1}},
+            {"progress": {"page": 2}},
+        ),
+        (
+            [{"page": 1}],
+            lambda value: value.append({"page": 2}),
+            [{"page": 1}],
+            [{"page": 1}, {"page": 2}],
+        ),
+    ],
+)
+def test_wrapped_checkpoint_subtree_is_copied_between_persisted_jobs(
+    session: Session, subtree, mutate, source_expected, target_expected
+) -> None:
+    source = _new_checkpoint_job(
+        session, f"shared-source-{uuid4().hex}", {"shared": subtree}
+    )
+    target = _new_checkpoint_job(
+        session, f"shared-target-{uuid4().hex}", {"shared": {}}
+    )
+    source_id = source.id
+    target_id = target.id
+    source_subtree = source.checkpoint["shared"]
+    copied_subtree = deepcopy(source_subtree)
+    assert copied_subtree == source_subtree
+    assert copied_subtree is not source_subtree
+
+    target.checkpoint["shared"] = source_subtree
+    target_subtree = target.checkpoint["shared"]
+    assert target_subtree is not source_subtree
+    mutate(target_subtree)
+    assert source.checkpoint["shared"] == source_expected
+    assert target.checkpoint["shared"] == target_expected
+    session.commit()
+    session.close()
+
+    fresh_session = sessionmaker(bind=session.get_bind())()
+    try:
+        assert fresh_session.get(IngestionJob, source_id).checkpoint == {
+            "shared": source_expected
+        }
+        assert fresh_session.get(IngestionJob, target_id).checkpoint == {
+            "shared": target_expected
+        }
+    finally:
+        fresh_session.close()
+
+
+@pytest.mark.parametrize("operation", ["replace", "del", "pop", "popitem", "clear"])
+def test_removed_dict_child_is_detached_from_checkpoint_parent(
+    session: Session, operation: str
+) -> None:
+    job = _new_checkpoint_job(
+        session, f"detach-dict-{operation}", {"container": {"old": {"value": 1}}}
+    )
+    job_id = job.id
+    container = job.checkpoint["container"]
+    old_child = container["old"]
+    expected_container = {}
+
+    if operation == "replace":
+        container["old"] = {"value": 2}
+        expected_container = {"old": {"value": 2}}
+    elif operation == "del":
+        del container["old"]
+    elif operation == "pop":
+        assert container.pop("old") is old_child
+    elif operation == "popitem":
+        assert container.popitem() == ("old", old_child)
+    else:
+        container.clear()
+
+    session.commit()
+    old_child["value"] = 99
+    assert not session.is_modified(job, include_collections=True)
+    session.commit()
+    _assert_checkpoint_after_new_session(
+        session, job_id, {"container": expected_container}
+    )
+
+
+@pytest.mark.parametrize(
+    "operation", ["replace", "slice_replace", "del", "pop", "remove", "clear"]
+)
+def test_removed_list_child_is_detached_from_checkpoint_parent(
+    session: Session, operation: str
+) -> None:
+    job = _new_checkpoint_job(
+        session,
+        f"detach-list-{operation}",
+        {"items": [{"value": 1}, {"value": 2}]},
+    )
+    job_id = job.id
+    items = job.checkpoint["items"]
+    old_child = items[0]
+
+    if operation == "replace":
+        items[0] = {"value": 9}
+        expected_items = [{"value": 9}, {"value": 2}]
+    elif operation == "slice_replace":
+        items[:1] = [{"value": 9}]
+        expected_items = [{"value": 9}, {"value": 2}]
+    elif operation == "del":
+        del items[0]
+        expected_items = [{"value": 2}]
+    elif operation == "pop":
+        assert items.pop(0) is old_child
+        expected_items = [{"value": 2}]
+    elif operation == "remove":
+        items.remove(old_child)
+        expected_items = [{"value": 2}]
+    else:
+        items.clear()
+        expected_items = []
+
+    session.commit()
+    old_child["value"] = 99
+    assert not session.is_modified(job, include_collections=True)
+    session.commit()
+    _assert_checkpoint_after_new_session(session, job_id, {"items": expected_items})
 
 
 def _raw_job_insert(

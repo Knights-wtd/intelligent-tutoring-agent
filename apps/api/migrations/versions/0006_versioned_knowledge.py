@@ -427,7 +427,7 @@ def upgrade() -> None:
                     SELECT 1 FROM json_each(NEW.embedding)
                     WHERE type NOT IN ('integer', 'real')
                        OR value != value
-                       OR abs(value) > 1.7976931348623157e308
+                       OR abs(CAST(value AS REAL)) > 1.7976931348623157e308
                 )
                 BEGIN
                     SELECT RAISE(ABORT, 'invalid embedding element');
@@ -444,7 +444,7 @@ def upgrade() -> None:
                     SELECT 1 FROM json_each(NEW.embedding)
                     WHERE type NOT IN ('integer', 'real')
                        OR value != value
-                       OR abs(value) > 1.7976931348623157e308
+                       OR abs(CAST(value AS REAL)) > 1.7976931348623157e308
                 )
                 BEGIN
                     SELECT RAISE(ABORT, 'invalid embedding element');
