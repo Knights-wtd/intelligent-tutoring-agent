@@ -39,10 +39,10 @@
 
 **Files:** Create `knowledge/access.py`, `schemas.py`, `service.py`, `router.py`; modify `main.py`; test `tests/test_knowledge_bases.py`.
 
-- [ ] Test personal owner read/write; classroom member read; creator/teacher write; student write 403; non-member read 404.
-- [ ] Implement server-side membership checks only.
-- [ ] Add create/list/detail endpoints with trimmed, unique 1-120 character names.
-- [ ] Run tests; commit `feat: add scoped knowledge bases`.
+- [x] Test personal owner read/write; classroom member read; creator/teacher write; student write 403; non-member read 404.
+- [x] Implement server-side membership checks only.
+- [x] Add create/list/detail endpoints with trimmed, unique 1-120 character names.
+- [x] Run tests; commit `feat: add scoped knowledge bases`.
 
 ### Task 4: Safe immutable uploads
 

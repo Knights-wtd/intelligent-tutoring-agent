@@ -235,3 +235,26 @@
 
 - 当前只验证 PostgreSQL offline SQL，未运行真实 PostgreSQL/pgvector；extension 创建权限、DBAPI vector bind/result 往返、JSONB 真实往返、并发行为和性能仍待后续集成验收。
 - Task 2 最终 PASS，但 Phase 5 / Milestone 3 仍未完成；下一实施任务是 Task 3：space-scoped knowledge APIs。
+## 2026-08-16 Phase 5 · Task 3 关键结论
+
+### 交付与审查
+
+- Task 3 space-scoped knowledge APIs 由提交 `92261fe feat: add scoped knowledge bases` 完成。
+- 路由为 `POST/GET /api/v1/spaces/{space_id}/knowledge-bases` 与 `GET /api/v1/knowledge-bases/{knowledge_base_id}`，未扩展到上传、解析、OCR 或 worker。
+- 规格审查 PASS，直接相关聚焦结果为 20 passed；独立质量/安全审查 PASS，高价值聚焦结果为 5 passed。
+- 实现阶段最终基线：API focused 17 passed；schema uniqueness 3 passed；direct regression 179 passed；完整 API 365 passed、3 skipped；Ruff 与 `git diff --check` 通过。
+
+### 已确认的权限、API 与数据库边界
+
+- personal/classroom 访问控制完全由服务端查询 owner 与 membership：personal owner、classroom owner/teacher 可创建；classroom student 只读且创建返回 403；personal non-owner 与 classroom nonmember 返回 404；未认证返回 401。
+- 详情查询把知识库 ID 与授权条件放在同一个受限查询中；已知 UUID 不能绕过 personal/classroom 或跨空间权限边界。
+- 响应只暴露 `id`、`space_id`、`name`、`state`、`created_at`、`updated_at`，请求不能注入 owner、creator、role、state 或 body `space_id`。
+- name 先 strip，再验证 1–120 字符；同空间名称由数据库唯一约束保护并返回稳定 409，不同空间可重用，名称语义保持精确且区分大小写。
+- 列表严格限定 path `space_id`，并按 `created_at, id` 稳定排序。
+- ORM 与尚未发布的 Alembic `0006` 同步加入 `uq_knowledge_base_name_in_space(space_id, name)`；重复名称失败使用 savepoint，不破坏外层 session；无关 `IntegrityError` 不应映射为重名 409。
+
+### 保留风险与下一步
+
+- 本阶段未运行真实 PostgreSQL/pgvector；PostgreSQL constraint-name 异常提取、真实数据库往返、并发与性能仍待后续集成验收。
+- 非阻塞后续项：可补恰好 120 字符名称成功、同空间 `Physics` 与 `physics` 共存的回归测试；可进一步收窄 constraint-name substring fallback。
+- Task 3 已完成，但 Phase 5 / Milestone 3 仍为 `in_progress`；下一实施任务是 Task 4：safe immutable uploads。

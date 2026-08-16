@@ -135,8 +135,11 @@ Phase 5：知识与 Agent 能力实现
 - [x] Task 2「versioned knowledge schema（版本化知识 Schema）」已完成：初始提交 `bac0e0d`，质量修复 `8129e28`、`67780ed`、`000240d`。
 - [x] Task 2 规格审查 PASS；质量审查经过多轮约束与边界加固后最终 PASS。
 - [x] Task 2 最终验证：knowledge schema 105 passed；schema/Alembic 33 passed；完整 API 345 passed、3 skipped；Ruff 与 `git diff --check` 通过。
-- [ ] 整个 Milestone 3 / Phase 5 尚未完成。
-- [ ] 下一步：Task 3「space-scoped knowledge APIs」。
+- [x] Task 3「space-scoped knowledge APIs」已完成，实现提交：`92261fe feat: add scoped knowledge bases`。
+- [x] Task 3 规格审查 PASS（聚焦 20 passed）；质量/安全审查 PASS（高价值聚焦 5 passed）。
+- [x] Task 3 实现阶段最终基线：API focused 17 passed；schema uniqueness 3 passed；direct regression 179 passed；完整 API 365 passed、3 skipped；Ruff 与 `git diff --check` 通过。
+- [ ] 整个 Milestone 3 / Phase 5 尚未完成，状态保持 `in_progress`。
+- [ ] 下一步：Task 4「safe immutable uploads」。
 
 ### Task 1 已确认边界
 
@@ -157,4 +160,14 @@ Phase 5：知识与 Agent 能力实现
 - Embedding 非空；SQLite 使用 JSON fallback 和 INSERT/UPDATE triggers 校验数组根类型、数值元素、有限数及整数边界，PostgreSQL offline SQL 包含 `CREATE EXTENSION vector` 与 `VECTOR` 类型路径，并持久化 backend/model/dimension/signature 合同。
 - Ingestion job 具有可恢复的 lease/retry/checkpoint、started/completed 时间和 kind/target 状态机约束；checkpoint 支持递归 mutable dict/list、嵌套持久化、跨任务子树复制和移除后的父链接解除。
 - PostgreSQL 仅验证 offline SQL；未运行真实 PostgreSQL/pgvector。Extension 权限、DBAPI vector/JSONB 往返、并发行为和性能仍待后续集成验收。
-- Phase 5 / Milestone 3 仍为 `in_progress`；下一步是 Task 3：space-scoped knowledge APIs。
+- Task 2 已完成；真实 PostgreSQL/pgvector 的已知集成风险继续保留到后续验收。
+
+### Task 3 已确认 API、权限与验收边界
+
+- 已提供 `POST/GET /api/v1/spaces/{space_id}/knowledge-bases` 与 `GET /api/v1/knowledge-bases/{knowledge_base_id}`。
+- personal/classroom 权限全部由服务端判定：personal owner 与 classroom owner/teacher 可创建；classroom student 创建返回 403；personal non-owner 与 classroom nonmember 返回 404；未认证返回 401；已知知识库 UUID 不能绕过权限。
+- 响应仅包含 `id`、`space_id`、`name`、`state`、`created_at`、`updated_at`；名称 strip 后限制 1–120 字符。
+- 同空间名称由数据库唯一约束保护并稳定返回 409，不同空间可重用；列表稳定按 `created_at, id` 排序。ORM 与未发布的 `0006` 同步加入 `uq_knowledge_base_name_in_space(space_id, name)`。
+- 规格审查与质量/安全审查均 PASS；实现阶段完整 API 基线为 365 passed、3 skipped，Ruff 与 diff check 通过。
+- 未运行真实 PostgreSQL/pgvector。非阻塞后续项：补充恰好 120 字符成功、同空间 `Physics`/`physics` 共存测试；可进一步收窄 constraint-name substring fallback。
+- Phase 5 / Milestone 3 仍为 `in_progress`；下一步是 Task 4：safe immutable uploads。

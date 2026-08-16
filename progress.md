@@ -238,3 +238,35 @@
 
 - 真实 PostgreSQL/pgvector 的 extension 权限、DBAPI vector/JSONB 往返、并发行为和性能仍待后续集成验收。
 - Phase 5 / Milestone 3 保持 `in_progress`；下一步：Task 3「space-scoped knowledge APIs」。
+## Session: 2026-08-16 · Phase 5 / Task 3
+
+- **Status:** Task 3 final PASS；Milestone 3 / Phase 5 仍为 `in_progress`。
+- 完成 space-scoped knowledge APIs，实现提交：`92261fe feat: add scoped knowledge bases`。
+- 规格审查 PASS（聚焦 20 passed）；质量/安全审查 PASS（高价值聚焦 5 passed）。
+
+### 已交付
+
+- `POST/GET /api/v1/spaces/{space_id}/knowledge-bases` 与 `GET /api/v1/knowledge-bases/{knowledge_base_id}`。
+- server-side personal/classroom 权限矩阵：student create 403；personal non-owner/classroom nonmember 404；未认证 401；已知 UUID 无法越权。
+- 受限响应字段与禁止额外请求字段；name strip 后限制 1–120 字符。
+- 同空间名称数据库唯一与稳定 409，不同空间名称可重用；列表按 `created_at, id` 稳定排序。
+- ORM 与未发布 `0006` 同步增加 `uq_knowledge_base_name_in_space(space_id, name)`。
+
+### 验证记录
+
+| 检查 | 结果 |
+|---|---|
+| API focused | 17 passed |
+| schema uniqueness | 3 passed |
+| direct regression | 179 passed |
+| 完整 API | 365 passed, 3 skipped |
+| Ruff / `git diff --check` | 通过 |
+| 独立规格审查 | PASS；20 passed |
+| 独立质量/安全审查 | PASS；5 passed |
+| PostgreSQL/pgvector | 未运行真实环境 |
+
+### 非阻塞风险与下一步
+
+- 后续真实 PostgreSQL 集成验收继续覆盖 constraint-name 异常路径、DBAPI 往返、并发与性能。
+- 可补恰好 120 字符成功、同空间 `Physics`/`physics` 共存测试；可进一步收窄 constraint-name substring fallback。
+- 下一步：Task 4「safe immutable uploads」；不得将 Task 3 完成误记为整个 Milestone 3 / Phase 5 完成。
