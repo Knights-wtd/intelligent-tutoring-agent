@@ -14,6 +14,7 @@ from tutor_api.classrooms.router import router as classrooms_router
 from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
 from tutor_api.identity.router import router as identity_router
+from tutor_api.knowledge.router import router as knowledge_router
 from tutor_api.providers.router import router as providers_router
 from tutor_api.providers.service import synchronize_provider_profiles
 from tutor_api.spaces.router import router as spaces_router
@@ -68,6 +69,7 @@ def create_app(
     app.include_router(identity_router)
     app.include_router(spaces_router)
     app.include_router(classrooms_router)
+    app.include_router(knowledge_router)
     app.include_router(providers_router)
     app.include_router(billing_router)
     app.include_router(admin_router)

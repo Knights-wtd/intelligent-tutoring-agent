@@ -173,7 +173,10 @@ class IngestionJobState(StrEnum):
 
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
-    __table_args__ = (UniqueConstraint("id", "space_id", name="uq_knowledge_base_id_space"),)
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_knowledge_base_id_space"),
+        UniqueConstraint("space_id", "name", name="uq_knowledge_base_name_in_space"),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     space_id: Mapped[UUID] = mapped_column(

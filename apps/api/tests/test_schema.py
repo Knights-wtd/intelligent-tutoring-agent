@@ -1177,3 +1177,95 @@ def test_migrated_sqlite_rejects_cross_knowledge_base_chunks(tmp_path) -> None:
                 },
             )
     engine.dispose()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_migrated_knowledge_base_names_are_unique_per_space(tmp_path) -> None:
+    database_path = tmp_path / "knowledge-base-name-uniqueness.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    metadata = MetaData()
+    metadata.reflect(engine)
+    tables = metadata.tables
+
+    unique_constraints = {
+        constraint["name"]: tuple(constraint["column_names"])
+        for constraint in inspect(engine).get_unique_constraints("knowledge_bases")
+    }
+    assert unique_constraints["uq_knowledge_base_name_in_space"] == ("space_id", "name")
+
+    first_user_id = uuid4().hex
+    second_user_id = uuid4().hex
+    first_space_id = uuid4().hex
+    second_space_id = uuid4().hex
+    with engine.begin() as connection:
+        for user_id, suffix in (
+            (first_user_id, "first"),
+            (second_user_id, "second"),
+        ):
+            connection.execute(
+                tables["users"].insert(),
+                {
+                    "id": user_id,
+                    "email": f"kb-name-{suffix}@example.com",
+                    "username": f"kb-name-{suffix}",
+                    "password_hash": "hash",
+                },
+            )
+        for space_id, owner_id, suffix in (
+            (first_space_id, first_user_id, "first"),
+            (second_space_id, second_user_id, "second"),
+        ):
+            connection.execute(
+                tables["spaces"].insert(),
+                {
+                    "id": space_id,
+                    "owner_id": owner_id,
+                    "kind": "personal",
+                    "name": f"KB name {suffix}",
+                },
+            )
+        connection.execute(
+            tables["knowledge_bases"].insert(),
+            {
+                "id": uuid4().hex,
+                "space_id": first_space_id,
+                "owner_user_id": first_user_id,
+                "created_by_user_id": first_user_id,
+                "name": "shared-name",
+                "state": "active",
+            },
+        )
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                tables["knowledge_bases"].insert(),
+                {
+                    "id": uuid4().hex,
+                    "space_id": first_space_id,
+                    "owner_user_id": first_user_id,
+                    "created_by_user_id": first_user_id,
+                    "name": "shared-name",
+                    "state": "active",
+                },
+            )
+
+    with engine.begin() as connection:
+        connection.execute(
+            tables["knowledge_bases"].insert(),
+            {
+                "id": uuid4().hex,
+                "space_id": second_space_id,
+                "owner_user_id": second_user_id,
+                "created_by_user_id": second_user_id,
+                "name": "shared-name",
+                "state": "active",
+            },
+        )
+
+    engine.dispose()

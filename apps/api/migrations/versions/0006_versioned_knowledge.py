@@ -97,6 +97,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "space_id", name="uq_knowledge_base_id_space"),
+        sa.UniqueConstraint("space_id", "name", name="uq_knowledge_base_name_in_space"),
     )
     op.create_index("ix_knowledge_bases_space_id", "knowledge_bases", ["space_id"])
     op.create_index("ix_knowledge_bases_owner_user_id", "knowledge_bases", ["owner_user_id"])

@@ -1610,3 +1610,44 @@ def test_checkpoint_rejects_python_none(session: Session) -> None:
 
     with pytest.raises((IntegrityError, StatementError, TypeError, ValueError)):
         session.commit()
+
+
+def test_knowledge_base_names_are_unique_per_space(session: Session) -> None:
+    first_user, first_space = create_user_space(session, "kb-name-first")
+    create_knowledge_base(session, first_user, first_space, suffix="shared-name")
+    session.commit()
+
+    session.add(
+        KnowledgeBase(
+            space_id=first_space.id,
+            owner_user_id=first_user.id,
+            created_by_user_id=first_user.id,
+            name="shared-name knowledge",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+    second_user, second_space = create_user_space(session, "kb-name-second")
+    different_space = KnowledgeBase(
+        space_id=second_space.id,
+        owner_user_id=second_user.id,
+        created_by_user_id=second_user.id,
+        name="shared-name knowledge",
+    )
+    session.add(different_space)
+    session.commit()
+
+    assert different_space.id is not None
+
+
+def test_knowledge_base_name_unique_constraint_has_stable_name() -> None:
+    matching = [
+        constraint
+        for constraint in KnowledgeBase.__table__.constraints
+        if constraint.name == "uq_knowledge_base_name_in_space"
+    ]
+
+    assert len(matching) == 1
+    assert tuple(column.name for column in matching[0].columns) == ("space_id", "name")
