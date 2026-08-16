@@ -10,6 +10,7 @@ from typing import Any
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.types import UserDefinedType
 
 revision: str = "0006_versioned_knowledge"
@@ -55,10 +56,22 @@ def upgrade() -> None:
     embedding_type: sa.types.TypeEngine = (
         _PostgreSQLVector() if dialect_name == "postgresql" else sa.JSON()
     )
+    checkpoint_type = sa.JSON().with_variant(postgresql.JSONB(), "postgresql")
     embedding_dimension_check = (
-        "embedding IS NULL OR vector_dims(embedding) = embedding_dimension"
+        "vector_dims(embedding) = embedding_dimension"
         if dialect_name == "postgresql"
-        else "embedding IS NULL OR json_array_length(embedding) = embedding_dimension"
+        else "json_valid(embedding) AND json_type(embedding) = 'array' "
+        "AND json_array_length(embedding) = embedding_dimension"
+    )
+    checkpoint_object_check = (
+        "jsonb_typeof(checkpoint) = 'object'"
+        if dialect_name == "postgresql"
+        else "json_type(checkpoint) = 'object'"
+    )
+    checkpoint_object_constraint_name = (
+        "ck_ingestion_checkpoint_object_postgresql"
+        if dialect_name == "postgresql"
+        else "ck_ingestion_checkpoint_object_sqlite"
     )
 
     op.create_table(
@@ -126,6 +139,7 @@ def upgrade() -> None:
         "document_versions",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("space_id", sa.Uuid(), nullable=False),
+        sa.Column("knowledge_base_id", sa.Uuid(), nullable=False),
         sa.Column("document_id", sa.Uuid(), nullable=False),
         sa.Column("version_number", sa.Integer(), nullable=False),
         sa.Column("content_sha256", sa.String(length=64), nullable=False),
@@ -144,21 +158,35 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["space_id"], ["spaces.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"]),
         sa.ForeignKeyConstraint(
-            ["document_id", "space_id"],
-            ["documents.id", "documents.space_id"],
-            name="fk_document_version_document_space",
+            ["document_id", "knowledge_base_id", "space_id"],
+            ["documents.id", "documents.knowledge_base_id", "documents.space_id"],
+            name="fk_document_version_document_kb_space",
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "space_id", name="uq_document_version_id_space"),
         sa.UniqueConstraint(
-            "id", "document_id", "space_id", name="uq_document_version_id_document_space"
+            "id", "knowledge_base_id", "space_id", name="uq_document_version_id_kb_space"
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "document_id",
+            "knowledge_base_id",
+            "space_id",
+            name="uq_document_version_id_document_kb_space",
         ),
         sa.UniqueConstraint("document_id", "version_number", name="uq_document_version_number"),
         sa.UniqueConstraint("document_id", "content_sha256", name="uq_document_content_hash"),
         sa.UniqueConstraint("object_key", name="uq_document_version_object_key"),
     )
-    for column in ("space_id", "document_id", "content_sha256", "state", "created_by_user_id"):
+    for column in (
+        "space_id",
+        "knowledge_base_id",
+        "document_id",
+        "content_sha256",
+        "state",
+        "created_by_user_id",
+    ):
         op.create_index(f"ix_document_versions_{column}", "document_versions", [column])
 
     op.create_table(
@@ -282,6 +310,7 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint(
             "id",
+            "knowledge_base_id",
             "space_id",
             "embedding_dimension",
             "index_signature",
@@ -305,6 +334,7 @@ def upgrade() -> None:
         "chunks",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("space_id", sa.Uuid(), nullable=False),
+        sa.Column("knowledge_base_id", sa.Uuid(), nullable=False),
         sa.Column("index_version_id", sa.Uuid(), nullable=False),
         sa.Column("document_version_id", sa.Uuid(), nullable=False),
         sa.Column("page_id", sa.Uuid(), nullable=True),
@@ -315,7 +345,7 @@ def upgrade() -> None:
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("embedding_dimension", sa.Integer(), nullable=False),
         sa.Column("index_signature", sa.String(length=512), nullable=False),
-        sa.Column("embedding", embedding_type, nullable=True),
+        sa.Column("embedding", embedding_type, nullable=False),
         *_timestamps(),
         sa.CheckConstraint("ordinal >= 0", name="ck_chunk_ordinal_nonnegative"),
         sa.CheckConstraint(_sha256_check("content_sha256"), name="ck_chunk_sha256"),
@@ -325,9 +355,16 @@ def upgrade() -> None:
         sa.CheckConstraint(embedding_dimension_check, name="ck_chunk_embedding_dimension"),
         sa.ForeignKeyConstraint(["space_id"], ["spaces.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
-            ["index_version_id", "space_id", "embedding_dimension", "index_signature"],
+            [
+                "index_version_id",
+                "knowledge_base_id",
+                "space_id",
+                "embedding_dimension",
+                "index_signature",
+            ],
             [
                 "index_versions.id",
+                "index_versions.knowledge_base_id",
                 "index_versions.space_id",
                 "index_versions.embedding_dimension",
                 "index_versions.index_signature",
@@ -336,9 +373,13 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
-            ["document_version_id", "space_id"],
-            ["document_versions.id", "document_versions.space_id"],
-            name="fk_chunk_document_version_space",
+            ["document_version_id", "knowledge_base_id", "space_id"],
+            [
+                "document_versions.id",
+                "document_versions.knowledge_base_id",
+                "document_versions.space_id",
+            ],
+            name="fk_chunk_document_version_kb_space",
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
@@ -360,6 +401,7 @@ def upgrade() -> None:
     )
     for column in (
         "space_id",
+        "knowledge_base_id",
         "index_version_id",
         "document_version_id",
         "page_id",
@@ -368,6 +410,38 @@ def upgrade() -> None:
     ):
         op.create_index(f"ix_chunks_{column}", "chunks", [column])
 
+    if dialect_name == "sqlite":
+        op.execute(
+            sa.text(
+                """
+                CREATE TRIGGER trg_chunks_validate_embedding_insert
+                BEFORE INSERT ON chunks
+                WHEN EXISTS (
+                    SELECT 1 FROM json_each(NEW.embedding)
+                    WHERE type NOT IN ('integer', 'real')
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid embedding element');
+                END
+                """
+            )
+        )
+        op.execute(
+            sa.text(
+                """
+                CREATE TRIGGER trg_chunks_validate_embedding_update
+                BEFORE UPDATE OF embedding, embedding_dimension ON chunks
+                WHEN EXISTS (
+                    SELECT 1 FROM json_each(NEW.embedding)
+                    WHERE type NOT IN ('integer', 'real')
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid embedding element');
+                END
+                """
+            )
+        )
+
     op.create_table(
         "ingestion_jobs",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -375,6 +449,7 @@ def upgrade() -> None:
         sa.Column("knowledge_base_id", sa.Uuid(), nullable=False),
         sa.Column("document_id", sa.Uuid(), nullable=True),
         sa.Column("document_version_id", sa.Uuid(), nullable=True),
+        sa.Column("page_id", sa.Uuid(), nullable=True),
         sa.Column("index_version_id", sa.Uuid(), nullable=True),
         sa.Column("kind", sa.String(length=14), nullable=False),
         sa.Column("state", sa.String(length=10), server_default="queued", nullable=False),
@@ -386,7 +461,7 @@ def upgrade() -> None:
         ),
         sa.Column("lease_owner", sa.String(length=255), nullable=True),
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("checkpoint", sa.JSON(), nullable=False),
+        sa.Column("checkpoint", checkpoint_type, nullable=False),
         sa.Column("last_error_code", sa.String(length=100), nullable=True),
         sa.Column("last_error_detail", sa.String(length=1000), nullable=True),
         sa.Column("created_by_user_id", sa.Uuid(), nullable=False),
@@ -399,13 +474,40 @@ def upgrade() -> None:
             "attempt_count <= max_attempts", name="ck_ingestion_attempt_within_limit"
         ),
         sa.CheckConstraint(
-            "(lease_owner IS NULL AND lease_expires_at IS NULL) OR "
-            "(lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
-            name="ck_ingestion_lease_complete",
+            "(state = 'running' AND lease_owner IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL) OR "
+            "(state <> 'running' AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL)",
+            name="ck_ingestion_lease_matches_state",
         ),
         sa.CheckConstraint(
-            "document_version_id IS NULL OR document_id IS NOT NULL",
-            name="ck_ingestion_version_requires_document",
+            "(state IN ('completed', 'failed', 'cancelled') "
+            "AND completed_at IS NOT NULL) OR "
+            "(state NOT IN ('completed', 'failed', 'cancelled') "
+            "AND completed_at IS NULL)",
+            name="ck_ingestion_completed_at_matches_state",
+        ),
+        sa.CheckConstraint(
+            "(state IN ('queued', 'retry_wait') AND started_at IS NULL) OR "
+            "(state IN ('running', 'completed', 'failed', 'cancelled') "
+            "AND started_at IS NOT NULL)",
+            name="ck_ingestion_started_at_matches_state",
+        ),
+        sa.CheckConstraint(
+            "(kind = 'parse_document' AND document_id IS NOT NULL "
+            "AND document_version_id IS NOT NULL AND page_id IS NULL "
+            "AND index_version_id IS NULL) OR "
+            "(kind = 'ocr_page' AND document_id IS NOT NULL "
+            "AND document_version_id IS NOT NULL AND page_id IS NOT NULL "
+            "AND index_version_id IS NULL) OR "
+            "(kind = 'build_index' AND document_id IS NULL "
+            "AND document_version_id IS NULL AND page_id IS NULL "
+            "AND index_version_id IS NOT NULL)",
+            name="ck_ingestion_target_matches_kind",
+        ),
+        sa.CheckConstraint(
+            checkpoint_object_check,
+            name=checkpoint_object_constraint_name,
         ),
         sa.CheckConstraint(
             _enum_check("kind", ("parse_document", "ocr_page", "build_index")),
@@ -432,13 +534,20 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
-            ["document_version_id", "document_id", "space_id"],
+            ["document_version_id", "document_id", "knowledge_base_id", "space_id"],
             [
                 "document_versions.id",
                 "document_versions.document_id",
+                "document_versions.knowledge_base_id",
                 "document_versions.space_id",
             ],
-            name="fk_ingestion_version_document_space",
+            name="fk_ingestion_version_document_kb_space",
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["page_id", "document_version_id", "space_id"],
+            ["pages.id", "pages.document_version_id", "pages.space_id"],
+            name="fk_ingestion_page_version_space",
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
@@ -462,6 +571,7 @@ def upgrade() -> None:
         "knowledge_base_id",
         "document_id",
         "document_version_id",
+        "page_id",
         "index_version_id",
         "kind",
         "state",
@@ -474,6 +584,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        op.execute(sa.text("DROP TRIGGER IF EXISTS trg_chunks_validate_embedding_update"))
+        op.execute(sa.text("DROP TRIGGER IF EXISTS trg_chunks_validate_embedding_insert"))
     for column in (
         "created_by_user_id",
         "lease_expires_at",
@@ -482,6 +595,7 @@ def downgrade() -> None:
         "state",
         "kind",
         "index_version_id",
+        "page_id",
         "document_version_id",
         "document_id",
         "knowledge_base_id",
@@ -496,6 +610,7 @@ def downgrade() -> None:
         "page_id",
         "document_version_id",
         "index_version_id",
+        "knowledge_base_id",
         "space_id",
     ):
         op.drop_index(f"ix_chunks_{column}", table_name="chunks")
@@ -514,7 +629,14 @@ def downgrade() -> None:
         op.drop_index(f"ix_pages_{column}", table_name="pages")
     op.drop_table("pages")
 
-    for column in ("created_by_user_id", "state", "content_sha256", "document_id", "space_id"):
+    for column in (
+        "created_by_user_id",
+        "state",
+        "content_sha256",
+        "document_id",
+        "knowledge_base_id",
+        "space_id",
+    ):
         op.drop_index(f"ix_document_versions_{column}", table_name="document_versions")
     op.drop_table("document_versions")
 

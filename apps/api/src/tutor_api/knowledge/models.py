@@ -1,9 +1,12 @@
+import json
+import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    DDL,
     JSON,
     CheckConstraint,
     DateTime,
@@ -15,10 +18,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Dialect
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator, UserDefinedType
 
@@ -53,7 +59,7 @@ class _PostgreSQLVector(UserDefinedType):
 
 
 class EmbeddingVector(TypeDecorator[list[float]]):
-    """Use pgvector on PostgreSQL and JSON arrays in SQLite tests."""
+    """Use pgvector on PostgreSQL and strict JSON arrays in SQLite tests."""
 
     impl = JSON
     cache_ok = True
@@ -67,12 +73,50 @@ class EmbeddingVector(TypeDecorator[list[float]]):
             return dialect.type_descriptor(_PostgreSQLVector())
         return dialect.type_descriptor(JSON())
 
+    @staticmethod
+    def _normalize(value: object, *, allow_tuple: bool = False) -> list[float]:
+        accepted_root = (list, tuple) if allow_tuple else (list,)
+        if not isinstance(value, accepted_root):
+            raise TypeError("embedding must be a list of finite numbers")
+        normalized: list[float] = []
+        for component in value:
+            if isinstance(component, bool) or not isinstance(component, (int, float)):
+                raise TypeError("embedding components must be finite int or float values")
+            normalized_component = float(component)
+            if not math.isfinite(normalized_component):
+                raise ValueError("embedding components must be finite")
+            normalized.append(normalized_component)
+        return normalized
+
     def process_bind_param(
         self, value: list[float] | None, dialect: Dialect
-    ) -> list[float] | str | None:
-        if value is None or dialect.name != "postgresql":
-            return value
-        return "[" + ",".join(format(float(component), ".17g") for component in value) + "]"
+    ) -> list[float] | str:
+        normalized = self._normalize(value)
+        if dialect.name != "postgresql":
+            return normalized
+        return "[" + ",".join(format(component, ".17g") for component in normalized) + "]"
+
+    def process_result_value(self, value: object, dialect: Dialect) -> list[float]:
+        if dialect.name == "postgresql":
+            if isinstance(value, memoryview):
+                value = value.tobytes()
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise ValueError("embedding bytes must be valid UTF-8") from error
+            if isinstance(value, str):
+                try:
+                    value = json.loads(
+                        value,
+                        parse_constant=lambda constant: (_ for _ in ()).throw(
+                            ValueError(f"invalid embedding constant: {constant}")
+                        ),
+                    )
+                except json.JSONDecodeError as error:
+                    raise ValueError("embedding result must be a JSON-style vector") from error
+            return self._normalize(value, allow_tuple=True)
+        return self._normalize(value)
 
 
 class KnowledgeBaseState(StrEnum):
@@ -206,7 +250,14 @@ class DocumentVersion(Base):
     __table_args__ = (
         UniqueConstraint("id", "space_id", name="uq_document_version_id_space"),
         UniqueConstraint(
-            "id", "document_id", "space_id", name="uq_document_version_id_document_space"
+            "id", "knowledge_base_id", "space_id", name="uq_document_version_id_kb_space"
+        ),
+        UniqueConstraint(
+            "id",
+            "document_id",
+            "knowledge_base_id",
+            "space_id",
+            name="uq_document_version_id_document_kb_space",
         ),
         UniqueConstraint("document_id", "version_number", name="uq_document_version_number"),
         UniqueConstraint("document_id", "content_sha256", name="uq_document_content_hash"),
@@ -214,9 +265,9 @@ class DocumentVersion(Base):
         CheckConstraint("version_number > 0", name="ck_document_version_number_positive"),
         CheckConstraint(_sha256_check("content_sha256"), name="ck_document_version_sha256"),
         ForeignKeyConstraint(
-            ["document_id", "space_id"],
-            ["documents.id", "documents.space_id"],
-            name="fk_document_version_document_space",
+            ["document_id", "knowledge_base_id", "space_id"],
+            ["documents.id", "documents.knowledge_base_id", "documents.space_id"],
+            name="fk_document_version_document_kb_space",
             ondelete="CASCADE",
         ),
     )
@@ -225,6 +276,7 @@ class DocumentVersion(Base):
     space_id: Mapped[UUID] = mapped_column(
         ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     document_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -332,6 +384,7 @@ class IndexVersion(Base):
         ),
         UniqueConstraint(
             "id",
+            "knowledge_base_id",
             "space_id",
             "embedding_dimension",
             "index_signature",
@@ -404,9 +457,16 @@ class Chunk(Base):
             "block_id IS NULL OR page_id IS NOT NULL", name="ck_chunk_block_requires_page"
         ),
         ForeignKeyConstraint(
-            ["index_version_id", "space_id", "embedding_dimension", "index_signature"],
+            [
+                "index_version_id",
+                "knowledge_base_id",
+                "space_id",
+                "embedding_dimension",
+                "index_signature",
+            ],
             [
                 "index_versions.id",
+                "index_versions.knowledge_base_id",
                 "index_versions.space_id",
                 "index_versions.embedding_dimension",
                 "index_versions.index_signature",
@@ -415,9 +475,13 @@ class Chunk(Base):
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
-            ["document_version_id", "space_id"],
-            ["document_versions.id", "document_versions.space_id"],
-            name="fk_chunk_document_version_space",
+            ["document_version_id", "knowledge_base_id", "space_id"],
+            [
+                "document_versions.id",
+                "document_versions.knowledge_base_id",
+                "document_versions.space_id",
+            ],
+            name="fk_chunk_document_version_kb_space",
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
@@ -433,11 +497,12 @@ class Chunk(Base):
             ondelete="CASCADE",
         ),
         CheckConstraint(
-            "embedding IS NULL OR json_array_length(embedding) = embedding_dimension",
+            "json_valid(embedding) AND json_type(embedding) = 'array' "
+            "AND json_array_length(embedding) = embedding_dimension",
             name="ck_chunk_embedding_dimension_sqlite",
         ).ddl_if(dialect="sqlite"),
         CheckConstraint(
-            "embedding IS NULL OR vector_dims(embedding) = embedding_dimension",
+            "vector_dims(embedding) = embedding_dimension",
             name="ck_chunk_embedding_dimension_postgresql",
         ).ddl_if(dialect="postgresql"),
     )
@@ -446,6 +511,7 @@ class Chunk(Base):
     space_id: Mapped[UUID] = mapped_column(
         ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     index_version_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     document_version_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     page_id: Mapped[UUID | None] = mapped_column(index=True)
@@ -456,7 +522,7 @@ class Chunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
     index_signature: Mapped[str] = mapped_column(String(512), nullable=False)
-    embedding: Mapped[list[float] | None] = mapped_column(EmbeddingVector())
+    embedding: Mapped[list[float]] = mapped_column(EmbeddingVector(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -464,6 +530,38 @@ class Chunk(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
+
+_SQLITE_EMBEDDING_INSERT_TRIGGER = DDL(
+    """
+    CREATE TRIGGER trg_chunks_validate_embedding_insert
+    BEFORE INSERT ON chunks
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.embedding)
+        WHERE type NOT IN ('integer', 'real')
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid embedding element');
+    END
+    """
+).execute_if(dialect="sqlite")
+_SQLITE_EMBEDDING_UPDATE_TRIGGER = DDL(
+    """
+    CREATE TRIGGER trg_chunks_validate_embedding_update
+    BEFORE UPDATE OF embedding, embedding_dimension ON chunks
+    WHEN EXISTS (
+        SELECT 1 FROM json_each(NEW.embedding)
+        WHERE type NOT IN ('integer', 'real')
+    )
+    BEGIN
+        SELECT RAISE(ABORT, 'invalid embedding element');
+    END
+    """
+).execute_if(dialect="sqlite")
+event.listen(Chunk.__table__, "after_create", _SQLITE_EMBEDDING_INSERT_TRIGGER)
+event.listen(Chunk.__table__, "after_create", _SQLITE_EMBEDDING_UPDATE_TRIGGER)
+
+
+_CHECKPOINT_TYPE = JSON().with_variant(JSONB(), "postgresql")
 
 class IngestionJob(Base):
     __tablename__ = "ingestion_jobs"
@@ -476,14 +574,45 @@ class IngestionJob(Base):
         CheckConstraint("max_attempts > 0", name="ck_ingestion_max_attempts_positive"),
         CheckConstraint("attempt_count <= max_attempts", name="ck_ingestion_attempt_within_limit"),
         CheckConstraint(
-            "(lease_owner IS NULL AND lease_expires_at IS NULL) OR "
-            "(lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
-            name="ck_ingestion_lease_complete",
+            "(state = 'running' AND lease_owner IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL) OR "
+            "(state <> 'running' AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL)",
+            name="ck_ingestion_lease_matches_state",
         ),
         CheckConstraint(
-            "document_version_id IS NULL OR document_id IS NOT NULL",
-            name="ck_ingestion_version_requires_document",
+            "(state IN ('completed', 'failed', 'cancelled') "
+            "AND completed_at IS NOT NULL) OR "
+            "(state NOT IN ('completed', 'failed', 'cancelled') "
+            "AND completed_at IS NULL)",
+            name="ck_ingestion_completed_at_matches_state",
         ),
+        CheckConstraint(
+            "(state IN ('queued', 'retry_wait') AND started_at IS NULL) OR "
+            "(state IN ('running', 'completed', 'failed', 'cancelled') "
+            "AND started_at IS NOT NULL)",
+            name="ck_ingestion_started_at_matches_state",
+        ),
+        CheckConstraint(
+            "(kind = 'parse_document' AND document_id IS NOT NULL "
+            "AND document_version_id IS NOT NULL AND page_id IS NULL "
+            "AND index_version_id IS NULL) OR "
+            "(kind = 'ocr_page' AND document_id IS NOT NULL "
+            "AND document_version_id IS NOT NULL AND page_id IS NOT NULL "
+            "AND index_version_id IS NULL) OR "
+            "(kind = 'build_index' AND document_id IS NULL "
+            "AND document_version_id IS NULL AND page_id IS NULL "
+            "AND index_version_id IS NOT NULL)",
+            name="ck_ingestion_target_matches_kind",
+        ),
+        CheckConstraint(
+            "json_type(checkpoint) = 'object'",
+            name="ck_ingestion_checkpoint_object_sqlite",
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            "jsonb_typeof(checkpoint) = 'object'",
+            name="ck_ingestion_checkpoint_object_postgresql",
+        ).ddl_if(dialect="postgresql"),
         ForeignKeyConstraint(
             ["knowledge_base_id", "space_id"],
             ["knowledge_bases.id", "knowledge_bases.space_id"],
@@ -497,13 +626,20 @@ class IngestionJob(Base):
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
-            ["document_version_id", "document_id", "space_id"],
+            ["document_version_id", "document_id", "knowledge_base_id", "space_id"],
             [
                 "document_versions.id",
                 "document_versions.document_id",
+                "document_versions.knowledge_base_id",
                 "document_versions.space_id",
             ],
-            name="fk_ingestion_version_document_space",
+            name="fk_ingestion_version_document_kb_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["page_id", "document_version_id", "space_id"],
+            ["pages.id", "pages.document_version_id", "pages.space_id"],
+            name="fk_ingestion_page_version_space",
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(
@@ -525,6 +661,7 @@ class IngestionJob(Base):
     knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     document_id: Mapped[UUID | None] = mapped_column(index=True)
     document_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    page_id: Mapped[UUID | None] = mapped_column(index=True)
     index_version_id: Mapped[UUID | None] = mapped_column(index=True)
     kind: Mapped[IngestionJobKind] = mapped_column(
         _enum(IngestionJobKind, "ingestion_job_kind"), nullable=False, index=True
@@ -548,7 +685,9 @@ class IngestionJob(Base):
     )
     lease_owner: Mapped[str | None] = mapped_column(String(255), index=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(
+        MutableDict.as_mutable(_CHECKPOINT_TYPE), nullable=False, default=dict
+    )
     last_error_code: Mapped[str | None] = mapped_column(String(100))
     last_error_detail: Mapped[str | None] = mapped_column(String(1000))
     created_by_user_id: Mapped[UUID] = mapped_column(

@@ -668,8 +668,11 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
         )
         assert {
             "ck_ingestion_attempt_within_limit",
-            "ck_ingestion_lease_complete",
-            "ck_ingestion_version_requires_document",
+            "ck_ingestion_lease_matches_state",
+            "ck_ingestion_completed_at_matches_state",
+            "ck_ingestion_started_at_matches_state",
+            "ck_ingestion_target_matches_kind",
+            "ck_ingestion_checkpoint_object_sqlite",
         }.issubset(
             {
                 constraint["name"]
@@ -688,23 +691,57 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
         assert (
             (
                 "index_version_id",
+                "knowledge_base_id",
                 "space_id",
                 "embedding_dimension",
                 "index_signature",
             ),
             "index_versions",
-            ("id", "space_id", "embedding_dimension", "index_signature"),
+            (
+                "id",
+                "knowledge_base_id",
+                "space_id",
+                "embedding_dimension",
+                "index_signature",
+            ),
+            "CASCADE",
+        ) in chunk_foreign_keys
+        assert (
+            ("document_version_id", "knowledge_base_id", "space_id"),
+            "document_versions",
+            ("id", "knowledge_base_id", "space_id"),
             "CASCADE",
         ) in chunk_foreign_keys
         columns = {
             column["name"]: column for column in inspector.get_columns("chunks")
         }
+        assert columns["knowledge_base_id"]["nullable"] is False
         assert "JSON" in str(columns["embedding"]["type"]).upper()
+        assert columns["embedding"]["nullable"] is False
+        version_columns = {
+            column["name"]: column
+            for column in inspector.get_columns("document_versions")
+        }
+        assert version_columns["knowledge_base_id"]["nullable"] is False
+        job_columns = {
+            column["name"]: column
+            for column in inspector.get_columns("ingestion_jobs")
+        }
+        assert job_columns["page_id"]["nullable"] is True
+        assert "JSON" in str(job_columns["checkpoint"]["type"]).upper()
+        assert job_columns["checkpoint"]["nullable"] is False
         with engine.connect() as connection:
+            trigger_names = {
+                row[0]
+                for row in connection.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+                )
+            }
+            assert "trg_chunks_validate_embedding_insert" in trigger_names
+            assert "trg_chunks_validate_embedding_update" in trigger_names
             assert compare_metadata(
                 MigrationContext.configure(connection), Base.metadata
             ) == []
-        with engine.connect() as connection:
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
                 "0006_versioned_knowledge"
             )
@@ -726,6 +763,15 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
     engine = create_engine(config.get_main_option("sqlalchemy.url"))
     try:
         assert knowledge_tables.issubset(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            trigger_names = {
+                row[0]
+                for row in connection.execute(
+                    text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+                )
+            }
+        assert "trg_chunks_validate_embedding_insert" in trigger_names
+        assert "trg_chunks_validate_embedding_update" in trigger_names
     finally:
         engine.dispose()
 
@@ -743,7 +789,214 @@ def test_postgresql_offline_sql_enables_pgvector_and_uses_vector_type() -> None:
 
     command.upgrade(config, "head", sql=True)
 
-    sql = output.getvalue().lower()
+    sql = " ".join(output.getvalue().lower().split())
     assert "create extension if not exists vector" in sql
-    assert "embedding vector" in sql
+    assert "embedding vector not null" in sql
     assert "vector_dims(embedding) = embedding_dimension" in sql
+    assert "checkpoint jsonb not null" in sql
+    assert "jsonb_typeof(checkpoint) = 'object'" in sql
+    assert (
+        "foreign key(index_version_id, knowledge_base_id, space_id, "
+        "embedding_dimension, index_signature)"
+    ) in sql
+    assert (
+        "references index_versions (id, knowledge_base_id, space_id, "
+        "embedding_dimension, index_signature)"
+    ) in sql
+    assert (
+        "foreign key(document_version_id, knowledge_base_id, space_id)"
+    ) in sql
+    assert "create trigger trg_chunks_validate_embedding" not in sql
+
+
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_migrated_sqlite_rejects_cross_knowledge_base_chunks(tmp_path) -> None:
+    database_path = tmp_path / "cross-kb-chunks.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    metadata = MetaData()
+    metadata.reflect(engine)
+    assert "knowledge_base_id" in metadata.tables["document_versions"].c
+    assert "knowledge_base_id" in metadata.tables["chunks"].c
+
+    user_id = uuid4().hex
+    space_id = uuid4().hex
+    first_kb_id = uuid4().hex
+    second_kb_id = uuid4().hex
+    first_document_id = uuid4().hex
+    second_document_id = uuid4().hex
+    first_version_id = uuid4().hex
+    second_version_id = uuid4().hex
+    first_page_id = uuid4().hex
+    second_page_id = uuid4().hex
+    first_block_id = uuid4().hex
+    second_block_id = uuid4().hex
+    index_id = uuid4().hex
+    tables = metadata.tables
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        connection.execute(
+            tables["users"].insert(),
+            {
+                "id": user_id,
+                "email": "migrated-cross-kb@example.com",
+                "username": "migrated-cross-kb",
+                "password_hash": "hash",
+            },
+        )
+        connection.execute(
+            tables["spaces"].insert(),
+            {
+                "id": space_id,
+                "owner_id": user_id,
+                "kind": "personal",
+                "name": "migrated cross KB",
+            },
+        )
+        for knowledge_base_id, name in (
+            (first_kb_id, "first"),
+            (second_kb_id, "second"),
+        ):
+            connection.execute(
+                tables["knowledge_bases"].insert(),
+                {
+                    "id": knowledge_base_id,
+                    "space_id": space_id,
+                    "owner_user_id": user_id,
+                    "created_by_user_id": user_id,
+                    "name": name,
+                    "state": "active",
+                },
+            )
+        for document_id, knowledge_base_id, suffix in (
+            (first_document_id, first_kb_id, "first"),
+            (second_document_id, second_kb_id, "second"),
+        ):
+            connection.execute(
+                tables["documents"].insert(),
+                {
+                    "id": document_id,
+                    "space_id": space_id,
+                    "knowledge_base_id": knowledge_base_id,
+                    "owner_user_id": user_id,
+                    "created_by_user_id": user_id,
+                    "title": f"{suffix}.pdf",
+                    "source_kind": "upload",
+                    "source_key": f"uploads/{suffix}.pdf",
+                    "state": "active",
+                },
+            )
+        for version_id, document_id, knowledge_base_id, hash_character in (
+            (first_version_id, first_document_id, first_kb_id, "a"),
+            (second_version_id, second_document_id, second_kb_id, "b"),
+        ):
+            connection.execute(
+                tables["document_versions"].insert(),
+                {
+                    "id": version_id,
+                    "space_id": space_id,
+                    "knowledge_base_id": knowledge_base_id,
+                    "document_id": document_id,
+                    "version_number": 1,
+                    "content_sha256": hash_character * 64,
+                    "object_key": f"objects/{version_id}",
+                    "content_type": "application/pdf",
+                    "state": "ready",
+                    "created_by_user_id": user_id,
+                },
+            )
+        for page_id, version_id, hash_character in (
+            (first_page_id, first_version_id, "c"),
+            (second_page_id, second_version_id, "d"),
+        ):
+            connection.execute(
+                tables["pages"].insert(),
+                {
+                    "id": page_id,
+                    "space_id": space_id,
+                    "document_version_id": version_id,
+                    "page_number": 1,
+                    "source_pointer": "page:1",
+                    "content_sha256": hash_character * 64,
+                    "source_metadata": {},
+                },
+            )
+        for block_id, page_id, hash_character in (
+            (first_block_id, first_page_id, "e"),
+            (second_block_id, second_page_id, "f"),
+        ):
+            connection.execute(
+                tables["blocks"].insert(),
+                {
+                    "id": block_id,
+                    "space_id": space_id,
+                    "page_id": page_id,
+                    "ordinal": 0,
+                    "kind": "paragraph",
+                    "source_pointer": "page:1/block:0",
+                    "content_sha256": hash_character * 64,
+                    "text": "content",
+                },
+            )
+        connection.execute(
+            tables["index_versions"].insert(),
+            {
+                "id": index_id,
+                "space_id": space_id,
+                "knowledge_base_id": first_kb_id,
+                "version_number": 1,
+                "state": "ready",
+                "parser_signature": "parser:v1",
+                "ocr_signature": "ocr:none",
+                "chunking_signature": "chunk:v1",
+                "embedding_backend": "hash",
+                "embedding_model": "hash-v1",
+                "embedding_dimension": 8,
+                "index_signature": "index:v1",
+                "created_by_user_id": user_id,
+            },
+        )
+        connection.execute(
+            tables["chunks"].insert(),
+            {
+                "id": uuid4().hex,
+                "space_id": space_id,
+                "knowledge_base_id": first_kb_id,
+                "index_version_id": index_id,
+                "document_version_id": first_version_id,
+                "page_id": first_page_id,
+                "block_id": first_block_id,
+                "ordinal": 0,
+                "source_pointer": "first:chunk:0",
+                "content_sha256": "1" * 64,
+                "content": "valid same-KB chunk",
+                "embedding_dimension": 8,
+                "index_signature": "index:v1",
+                "embedding": [0.0] * 8,
+            },
+        )
+        with pytest.raises(IntegrityError):
+            connection.execute(
+                tables["chunks"].insert(),
+                {
+                    "id": uuid4().hex,
+                    "space_id": space_id,
+                    "knowledge_base_id": first_kb_id,
+                    "index_version_id": index_id,
+                    "document_version_id": second_version_id,
+                    "page_id": second_page_id,
+                    "block_id": second_block_id,
+                    "ordinal": 1,
+                    "source_pointer": "second:chunk:0",
+                    "content_sha256": "2" * 64,
+                    "content": "invalid cross-KB chunk",
+                    "embedding_dimension": 8,
+                    "index_signature": "index:v1",
+                    "embedding": [0.0] * 8,
+                },
+            )
+    engine.dispose()

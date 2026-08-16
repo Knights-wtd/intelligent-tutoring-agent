@@ -1,9 +1,10 @@
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import event, inspect, select
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,6 +18,7 @@ from tutor_api.knowledge.models import (
     DocumentState,
     DocumentVersion,
     DocumentVersionState,
+    EmbeddingVector,
     IndexVersion,
     IndexVersionState,
     IngestionJob,
@@ -94,6 +96,7 @@ def create_document_graph(
     session.flush()
     version = DocumentVersion(
         space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
         document_id=document.id,
         version_number=1,
         content_sha256=VALID_HASH,
@@ -174,6 +177,7 @@ def create_chunk(
     chunk_dimension = dimension if dimension is not None else index.embedding_dimension
     chunk = Chunk(
         space_id=space.id,
+        knowledge_base_id=version.knowledge_base_id,
         index_version_id=index.id,
         document_version_id=version.id,
         page_id=page.id,
@@ -307,6 +311,7 @@ def test_document_source_and_version_uniqueness_are_scoped_to_parent(session: Se
     session.add(
         DocumentVersion(
             space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
             document_id=document.id,
             version_number=1,
             content_sha256="e" * 64,
@@ -327,6 +332,7 @@ def test_document_rejects_duplicate_content_hash_versions(session: Session) -> N
     session.add(
         DocumentVersion(
             space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
             document_id=document.id,
             version_number=2,
             content_sha256=version.content_sha256,
@@ -359,6 +365,7 @@ def test_sha256_columns_reject_invalid_values(session: Session, invalid_hash: st
     session.add(
         DocumentVersion(
             space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
             document_id=document.id,
             version_number=1,
             content_sha256=invalid_hash,
@@ -514,8 +521,6 @@ def test_ingestion_job_persists_recovery_lease_retry_and_checkpoint(session: Ses
     job = IngestionJob(
         space_id=space.id,
         knowledge_base_id=knowledge_base.id,
-        document_id=document.id,
-        document_version_id=version.id,
         index_version_id=index.id,
         kind=IngestionJobKind.BUILD_INDEX,
         state=IngestionJobState.RUNNING,
@@ -527,6 +532,7 @@ def test_ingestion_job_persists_recovery_lease_retry_and_checkpoint(session: Ses
         lease_expires_at=datetime.now(UTC) + timedelta(minutes=5),
         checkpoint={"page": 12, "chunk": 4},
         created_by_user_id=user.id,
+        started_at=datetime.now(UTC),
     )
     session.add(job)
     session.commit()
@@ -539,10 +545,13 @@ def test_ingestion_job_persists_recovery_lease_retry_and_checkpoint(session: Ses
 def test_ingestion_job_rejects_incomplete_lease_and_invalid_retry_counts(session: Session) -> None:
     user, space = create_user_space(session, "invalid-job")
     knowledge_base = create_knowledge_base(session, user, space)
+    document, version, _, _ = create_document_graph(session, user, space, knowledge_base)
     session.add(
         IngestionJob(
             space_id=space.id,
             knowledge_base_id=knowledge_base.id,
+            document_id=document.id,
+            document_version_id=version.id,
             kind=IngestionJobKind.PARSE_DOCUMENT,
             state=IngestionJobState.RUNNING,
             idempotency_key="invalid-lease",
@@ -552,6 +561,7 @@ def test_ingestion_job_rejects_incomplete_lease_and_invalid_retry_counts(session
             lease_expires_at=None,
             checkpoint={},
             created_by_user_id=user.id,
+            started_at=datetime.now(UTC),
         )
     )
     with pytest.raises(IntegrityError):
@@ -567,21 +577,35 @@ def test_knowledge_deletions_cascade_without_orphans(session: Session, target: s
     )
     index = create_index(session, user, space, knowledge_base)
     chunk = create_chunk(session, space, index, version, page, block)
-    job = IngestionJob(
-        space_id=space.id,
-        knowledge_base_id=knowledge_base.id,
-        document_id=document.id,
-        document_version_id=version.id,
-        index_version_id=index.id,
-        kind=IngestionJobKind.BUILD_INDEX,
-        state=IngestionJobState.QUEUED,
-        idempotency_key=f"cascade:{target}",
-        attempt_count=0,
-        max_attempts=3,
-        available_at=datetime.now(UTC),
-        checkpoint={},
-        created_by_user_id=user.id,
-    )
+    if target in {"document", "version"}:
+        job = IngestionJob(
+            space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
+            document_id=document.id,
+            document_version_id=version.id,
+            kind=IngestionJobKind.PARSE_DOCUMENT,
+            state=IngestionJobState.QUEUED,
+            idempotency_key=f"cascade:{target}",
+            attempt_count=0,
+            max_attempts=3,
+            available_at=datetime.now(UTC),
+            checkpoint={},
+            created_by_user_id=user.id,
+        )
+    else:
+        job = IngestionJob(
+            space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
+            index_version_id=index.id,
+            kind=IngestionJobKind.BUILD_INDEX,
+            state=IngestionJobState.QUEUED,
+            idempotency_key=f"cascade:{target}",
+            attempt_count=0,
+            max_attempts=3,
+            available_at=datetime.now(UTC),
+            checkpoint={},
+            created_by_user_id=user.id,
+        )
     session.add(job)
     session.commit()
     ids = {
@@ -667,3 +691,499 @@ def test_embedding_is_stored_as_json_in_sqlite(session: Session) -> None:
     }
     assert "JSON" in str(columns["embedding"]["type"]).upper()
     assert session.scalar(select(Chunk).where(Chunk.id == chunk.id)) is not None
+
+
+
+def test_chunk_embedding_is_required_by_orm_persistence(session: Session) -> None:
+    user, space = create_user_space(session, "none-vector")
+    knowledge_base = create_knowledge_base(session, user, space)
+    _, version, page, block = create_document_graph(session, user, space, knowledge_base)
+    index = create_index(session, user, space, knowledge_base)
+    chunk = Chunk(
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        index_version_id=index.id,
+        document_version_id=version.id,
+        page_id=page.id,
+        block_id=block.id,
+        ordinal=0,
+        source_pointer="page:1/block:0/chunk:none-vector",
+        content_sha256="d" * 64,
+        content="Embedding is required for an immutable indexed chunk.",
+        embedding_dimension=index.embedding_dimension,
+        index_signature=index.index_signature,
+        embedding=None,  # type: ignore[arg-type]
+    )
+    session.add(chunk)
+
+    with pytest.raises((IntegrityError, StatementError, TypeError, ValueError)):
+        session.commit()
+
+
+def test_chunk_rejects_document_graph_from_another_knowledge_base(session: Session) -> None:
+    user, space = create_user_space(session, "cross-kb-chunk")
+    first_kb = create_knowledge_base(session, user, space, "first")
+    second_kb = create_knowledge_base(session, user, space, "second")
+    _, second_version, second_page, second_block = create_document_graph(
+        session, user, space, second_kb, suffix="second-book"
+    )
+    first_index = create_index(session, user, space, first_kb)
+
+    chunk = Chunk(
+        space_id=space.id,
+        knowledge_base_id=first_kb.id,
+        index_version_id=first_index.id,
+        document_version_id=second_version.id,
+        page_id=second_page.id,
+        block_id=second_block.id,
+        ordinal=0,
+        source_pointer="cross-kb:chunk:0",
+        content_sha256="d" * 64,
+        content="This chunk must not cross knowledge-base boundaries.",
+        embedding_dimension=first_index.embedding_dimension,
+        index_signature=first_index.index_signature,
+        embedding=[0.1] * first_index.embedding_dimension,
+    )
+    session.add(chunk)
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+def test_document_version_rejects_a_different_knowledge_base_identity(session: Session) -> None:
+    user, space = create_user_space(session, "cross-kb-version")
+    first_kb = create_knowledge_base(session, user, space, "first")
+    second_kb = create_knowledge_base(session, user, space, "second")
+    second_document, _, _, _ = create_document_graph(
+        session, user, space, second_kb, suffix="second-version"
+    )
+    version = DocumentVersion(
+        space_id=space.id,
+        knowledge_base_id=first_kb.id,
+        document_id=second_document.id,
+        version_number=2,
+        content_sha256="e" * 64,
+        object_key=f"spaces/{space.id}/cross-kb-version.pdf",
+        content_type="application/pdf",
+        state=DocumentVersionState.READY,
+        created_by_user_id=user.id,
+    )
+    session.add(version)
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+@pytest.mark.parametrize(
+    "invalid_embedding",
+    [
+        None,
+        True,
+        "[0.1]",
+        {"value": 0.1},
+        (0.1, 0.2),
+        [True],
+        [None],
+        [[0.1]],
+        [float("nan")],
+        [float("inf")],
+        [float("-inf")],
+    ],
+    ids=[
+        "none",
+        "bool-root",
+        "string-root",
+        "object-root",
+        "tuple-root",
+        "bool-element",
+        "null-element",
+        "nested-element",
+        "nan",
+        "positive-infinity",
+        "negative-infinity",
+    ],
+)
+def test_embedding_bind_rejects_invalid_python_values(invalid_embedding: object) -> None:
+    embedding_type = EmbeddingVector()
+
+    with pytest.raises((TypeError, ValueError)):
+        embedding_type.process_bind_param(invalid_embedding, sqlite.dialect())  # type: ignore[arg-type]
+
+
+def test_embedding_bind_normalizes_numeric_values_to_finite_floats() -> None:
+    value = EmbeddingVector().process_bind_param([1, 2.5], sqlite.dialect())
+
+    assert value == [1.0, 2.5]
+    assert all(type(component) is float for component in value)
+
+
+@pytest.mark.parametrize(
+    ("database_value", "expected"),
+    [
+        ([1, 2.5], [1.0, 2.5]),
+        ((1, 2.5), [1.0, 2.5]),
+        ("[1,2.5]", [1.0, 2.5]),
+        (b"[1,2.5]", [1.0, 2.5]),
+        (memoryview(b"[1,2.5]"), [1.0, 2.5]),
+    ],
+)
+def test_postgresql_embedding_result_processor_parses_common_dbapi_values(
+    database_value: object, expected: list[float]
+) -> None:
+    result = EmbeddingVector().process_result_value(database_value, postgresql.dialect())
+
+    assert result == expected
+    assert all(type(component) is float for component in result)
+
+
+@pytest.mark.parametrize(
+    "database_value",
+    [None, "null", "{}", "[true]", "[null]", "[NaN]", object()],
+)
+def test_postgresql_embedding_result_processor_rejects_invalid_values(
+    database_value: object,
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        EmbeddingVector().process_result_value(database_value, postgresql.dialect())
+
+
+def _raw_chunk_insert(
+    session: Session,
+    *,
+    knowledge_base: KnowledgeBase,
+    index: IndexVersion,
+    version: DocumentVersion,
+    page: Page,
+    block: Block,
+    embedding_json: str,
+) -> None:
+    all_values = {
+        "id": uuid4().hex,
+        "space_id": knowledge_base.space_id.hex,
+        "knowledge_base_id": knowledge_base.id.hex,
+        "index_version_id": index.id.hex,
+        "document_version_id": version.id.hex,
+        "page_id": page.id.hex,
+        "block_id": block.id.hex,
+        "ordinal": 99,
+        "source_pointer": f"raw:{uuid4()}",
+        "content_sha256": "f" * 64,
+        "content": "raw embedding contract",
+        "embedding_dimension": index.embedding_dimension,
+        "index_signature": index.index_signature,
+        "embedding": embedding_json,
+    }
+    available_columns = {
+        column["name"] for column in inspect(session.get_bind()).get_columns("chunks")
+    }
+    values = {name: value for name, value in all_values.items() if name in available_columns}
+    columns = ", ".join(values)
+    placeholders = ", ".join("?" for _ in values)
+    session.connection().exec_driver_sql(
+        f"INSERT INTO chunks ({columns}) VALUES ({placeholders})",
+        tuple(values.values()),
+    )
+
+
+@pytest.mark.parametrize(
+    "embedding_json",
+    [
+        "[true,0,0,0,0,0,0,0]",
+        "[null,0,0,0,0,0,0,0]",
+        '["0",0,0,0,0,0,0,0]',
+        "[{},0,0,0,0,0,0,0]",
+        "[[0],0,0,0,0,0,0,0]",
+    ],
+)
+def test_sqlite_rejects_non_numeric_embedding_elements(
+    session: Session, embedding_json: str
+) -> None:
+    user, space = create_user_space(session, f"raw-vector-{uuid4().hex}")
+    knowledge_base = create_knowledge_base(session, user, space)
+    _, version, page, block = create_document_graph(session, user, space, knowledge_base)
+    index = create_index(session, user, space, knowledge_base)
+
+    with pytest.raises(IntegrityError, match="invalid embedding element"):
+        _raw_chunk_insert(
+            session,
+            knowledge_base=knowledge_base,
+            index=index,
+            version=version,
+            page=page,
+            block=block,
+            embedding_json=embedding_json,
+        )
+
+
+@pytest.mark.parametrize("embedding_json", ["{}", '"text"', "null", "true", "1"])
+def test_sqlite_rejects_non_array_embedding_roots(
+    session: Session, embedding_json: str
+) -> None:
+    user, space = create_user_space(session, f"raw-vector-root-{uuid4().hex}")
+    knowledge_base = create_knowledge_base(session, user, space)
+    _, version, page, block = create_document_graph(session, user, space, knowledge_base)
+    index = create_index(session, user, space, knowledge_base)
+
+    with pytest.raises(IntegrityError):
+        _raw_chunk_insert(
+            session,
+            knowledge_base=knowledge_base,
+            index=index,
+            version=version,
+            page=page,
+            block=block,
+            embedding_json=embedding_json,
+        )
+
+
+def test_sqlite_embedding_constraint_requires_an_array_root() -> None:
+    constraints = {
+        constraint.name: str(constraint.sqltext)
+        for constraint in Chunk.__table__.constraints
+        if hasattr(constraint, "sqltext")
+    }
+
+    assert "json_type(embedding) = 'array'" in constraints[
+        "ck_chunk_embedding_dimension_sqlite"
+    ]
+
+
+def _make_job(
+    *,
+    user: User,
+    space: Space,
+    knowledge_base: KnowledgeBase,
+    kind: IngestionJobKind,
+    state: IngestionJobState = IngestionJobState.QUEUED,
+    document: Document | None = None,
+    version: DocumentVersion | None = None,
+    page: Page | None = None,
+    index: IndexVersion | None = None,
+    lease_owner: str | None = None,
+    lease_expires_at: datetime | None = None,
+    started_at: datetime | None = None,
+    completed_at: datetime | None = None,
+    checkpoint: dict[str, object] | None = None,
+) -> IngestionJob:
+    job = IngestionJob(
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        document_id=document.id if document else None,
+        document_version_id=version.id if version else None,
+        index_version_id=index.id if index else None,
+        kind=kind,
+        state=state,
+        idempotency_key=f"job:{uuid4()}",
+        attempt_count=0,
+        max_attempts=3,
+        available_at=datetime.now(UTC),
+        lease_owner=lease_owner,
+        lease_expires_at=lease_expires_at,
+        checkpoint={} if checkpoint is None else checkpoint,
+        created_by_user_id=user.id,
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+    job.page_id = page.id if page else None
+    return job
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "running_without_lease",
+        "completed_without_completed_at",
+        "queued_with_live_lease",
+        "parse_without_document",
+        "ocr_without_document",
+        "build_index_without_index",
+    ],
+)
+def test_ingestion_job_rejects_invalid_state_and_target_matrix(
+    session: Session, scenario: str
+) -> None:
+    user, space = create_user_space(session, f"job-matrix-{scenario}")
+    knowledge_base = create_knowledge_base(session, user, space)
+    document, version, page, _ = create_document_graph(session, user, space, knowledge_base)
+    now = datetime.now(UTC)
+    kwargs: dict[str, object] = {
+        "user": user,
+        "space": space,
+        "knowledge_base": knowledge_base,
+        "kind": IngestionJobKind.PARSE_DOCUMENT,
+        "document": document,
+        "version": version,
+    }
+    if scenario == "running_without_lease":
+        kwargs.update(state=IngestionJobState.RUNNING, started_at=now)
+    elif scenario == "completed_without_completed_at":
+        kwargs.update(state=IngestionJobState.COMPLETED, started_at=now)
+    elif scenario == "queued_with_live_lease":
+        kwargs.update(
+            lease_owner="worker-1", lease_expires_at=now + timedelta(minutes=5)
+        )
+    elif scenario == "parse_without_document":
+        kwargs.update(document=None, version=None)
+    elif scenario == "ocr_without_document":
+        kwargs.update(
+            kind=IngestionJobKind.OCR_PAGE,
+            document=None,
+            version=None,
+            page=None,
+        )
+    else:
+        kwargs.update(
+            kind=IngestionJobKind.BUILD_INDEX,
+            document=None,
+            version=None,
+            index=None,
+        )
+    session.add(_make_job(**kwargs))  # type: ignore[arg-type]
+
+    with pytest.raises(IntegrityError):
+        session.commit()
+
+
+@pytest.mark.parametrize("kind", list(IngestionJobKind))
+def test_ingestion_job_accepts_only_the_targets_for_its_kind(
+    session: Session, kind: IngestionJobKind
+) -> None:
+    user, space = create_user_space(session, f"valid-target-{kind.value}")
+    knowledge_base = create_knowledge_base(session, user, space)
+    document, version, page, _ = create_document_graph(session, user, space, knowledge_base)
+    index = create_index(session, user, space, knowledge_base)
+    targets = {
+        IngestionJobKind.PARSE_DOCUMENT: {"document": document, "version": version},
+        IngestionJobKind.OCR_PAGE: {
+            "document": document,
+            "version": version,
+            "page": page,
+        },
+        IngestionJobKind.BUILD_INDEX: {"index": index},
+    }
+    session.add(
+        _make_job(
+            user=user,
+            space=space,
+            knowledge_base=knowledge_base,
+            kind=kind,
+            **targets[kind],
+        )
+    )
+    session.commit()
+
+
+def test_checkpoint_in_place_mutation_is_persisted(session: Session) -> None:
+    user, space = create_user_space(session, "mutable-checkpoint")
+    knowledge_base = create_knowledge_base(session, user, space)
+    document, version, _, _ = create_document_graph(session, user, space, knowledge_base)
+    job = _make_job(
+        user=user,
+        space=space,
+        knowledge_base=knowledge_base,
+        kind=IngestionJobKind.PARSE_DOCUMENT,
+        document=document,
+        version=version,
+        checkpoint={"page": 1},
+    )
+    session.add(job)
+    session.commit()
+    job.checkpoint["page"] = 2
+
+    assert session.is_modified(job, include_collections=True)
+    session.commit()
+    job_id = job.id
+    session.close()
+
+    fresh_session = sessionmaker(bind=session.get_bind())()
+    try:
+        assert fresh_session.get(IngestionJob, job_id).checkpoint == {"page": 2}
+    finally:
+        fresh_session.close()
+
+
+def _raw_job_insert(
+    session: Session,
+    *,
+    user: User,
+    space: Space,
+    knowledge_base: KnowledgeBase,
+    document: Document,
+    version: DocumentVersion,
+    checkpoint_json: str,
+) -> None:
+    all_values = {
+        "id": uuid4().hex,
+        "space_id": space.id.hex,
+        "knowledge_base_id": knowledge_base.id.hex,
+        "document_id": document.id.hex,
+        "document_version_id": version.id.hex,
+        "page_id": None,
+        "index_version_id": None,
+        "kind": IngestionJobKind.PARSE_DOCUMENT.value,
+        "state": IngestionJobState.QUEUED.value,
+        "idempotency_key": f"raw-job:{uuid4()}",
+        "attempt_count": 0,
+        "max_attempts": 3,
+        "available_at": datetime.now(UTC).isoformat(),
+        "lease_owner": None,
+        "lease_expires_at": None,
+        "checkpoint": checkpoint_json,
+        "last_error_code": None,
+        "last_error_detail": None,
+        "created_by_user_id": user.id.hex,
+        "started_at": None,
+        "completed_at": None,
+    }
+    available_columns = {
+        column["name"]
+        for column in inspect(session.get_bind()).get_columns("ingestion_jobs")
+    }
+    values = {name: value for name, value in all_values.items() if name in available_columns}
+    columns = ", ".join(values)
+    placeholders = ", ".join("?" for _ in values)
+    session.connection().exec_driver_sql(
+        f"INSERT INTO ingestion_jobs ({columns}) VALUES ({placeholders})",
+        tuple(values.values()),
+    )
+
+
+@pytest.mark.parametrize("checkpoint_json", ["null", "[]", '"text"', "true", "1"])
+def test_checkpoint_database_contract_rejects_non_objects(
+    session: Session, checkpoint_json: str
+) -> None:
+    user, space = create_user_space(session, f"raw-checkpoint-{uuid4().hex}")
+    knowledge_base = create_knowledge_base(session, user, space)
+    document, version, _, _ = create_document_graph(session, user, space, knowledge_base)
+
+    with pytest.raises(
+        IntegrityError, match="ck_ingestion_checkpoint_object_sqlite"
+    ):
+        _raw_job_insert(
+            session,
+            user=user,
+            space=space,
+            knowledge_base=knowledge_base,
+            document=document,
+            version=version,
+            checkpoint_json=checkpoint_json,
+        )
+
+
+def test_checkpoint_rejects_python_none(session: Session) -> None:
+    user, space = create_user_space(session, "none-checkpoint")
+    knowledge_base = create_knowledge_base(session, user, space)
+    document, version, _, _ = create_document_graph(session, user, space, knowledge_base)
+    job = _make_job(
+        user=user,
+        space=space,
+        knowledge_base=knowledge_base,
+        kind=IngestionJobKind.PARSE_DOCUMENT,
+        document=document,
+        version=version,
+    )
+    job.checkpoint = None  # type: ignore[assignment]
+    session.add(job)
+
+    with pytest.raises((IntegrityError, StatementError, TypeError, ValueError)):
+        session.commit()
