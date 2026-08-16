@@ -1,16 +1,20 @@
 from collections.abc import Generator
 from datetime import UTC, datetime
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.migration import MigrationContext
 from sqlalchemy import MetaData, create_engine, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+import tutor_api.knowledge.models  # noqa: F401
 from tutor_api.billing.models import (
     LedgerEntry,
     LedgerEntryType,
@@ -467,7 +471,7 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0005_reversal_audit_group"
+        assert version == "0006_versioned_knowledge"
     finally:
         engine.dispose()
 
@@ -495,7 +499,7 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0005_reversal_audit_group"
+        assert version == "0006_versioned_knowledge"
     finally:
         engine.dispose()
 
@@ -630,3 +634,116 @@ def test_price_version_is_unique_per_profile_and_effective_at(session: Session) 
 
     with pytest.raises(IntegrityError):
         session.commit()
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
+    database_path = tmp_path / "versioned-knowledge.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+    knowledge_tables = {
+        "knowledge_bases",
+        "documents",
+        "document_versions",
+        "pages",
+        "blocks",
+        "index_versions",
+        "chunks",
+        "ingestion_jobs",
+    }
+
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        inspector = inspect(engine)
+        assert knowledge_tables.issubset(inspector.get_table_names())
+        assert "uq_active_index_per_knowledge_base" in {
+            index["name"] for index in inspector.get_indexes("index_versions")
+        }
+        assert {
+            "ck_chunk_embedding_dimension",
+            "ck_chunk_sha256",
+        }.issubset(
+            {constraint["name"] for constraint in inspector.get_check_constraints("chunks")}
+        )
+        assert {
+            "ck_ingestion_attempt_within_limit",
+            "ck_ingestion_lease_complete",
+            "ck_ingestion_version_requires_document",
+        }.issubset(
+            {
+                constraint["name"]
+                for constraint in inspector.get_check_constraints("ingestion_jobs")
+            }
+        )
+        chunk_foreign_keys = {
+            (
+                tuple(constraint["constrained_columns"]),
+                constraint["referred_table"],
+                tuple(constraint["referred_columns"]),
+                constraint["options"].get("ondelete"),
+            )
+            for constraint in inspector.get_foreign_keys("chunks")
+        }
+        assert (
+            (
+                "index_version_id",
+                "space_id",
+                "embedding_dimension",
+                "index_signature",
+            ),
+            "index_versions",
+            ("id", "space_id", "embedding_dimension", "index_signature"),
+            "CASCADE",
+        ) in chunk_foreign_keys
+        columns = {
+            column["name"]: column for column in inspector.get_columns("chunks")
+        }
+        assert "JSON" in str(columns["embedding"]["type"]).upper()
+        with engine.connect() as connection:
+            assert compare_metadata(
+                MigrationContext.configure(connection), Base.metadata
+            ) == []
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
+                "0006_versioned_knowledge"
+            )
+    finally:
+        engine.dispose()
+
+    command.downgrade(config, "0005_reversal_audit_group")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        assert not knowledge_tables.intersection(inspect(engine).get_table_names())
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
+                "0005_reversal_audit_group"
+            )
+    finally:
+        engine.dispose()
+
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        assert knowledge_tables.issubset(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_postgresql_offline_sql_enables_pgvector_and_uses_vector_type() -> None:
+    output = StringIO()
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"), output_buffer=output)
+    config.set_main_option(
+        "sqlalchemy.url",
+        "postgresql+psycopg://offline:offline@localhost:5432/offline",
+    )
+
+    command.upgrade(config, "head", sql=True)
+
+    sql = output.getvalue().lower()
+    assert "create extension if not exists vector" in sql
+    assert "embedding vector" in sql
+    assert "vector_dims(embedding) = embedding_dimension" in sql

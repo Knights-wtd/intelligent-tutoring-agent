@@ -1,13 +1,14 @@
 import os
 from logging.config import fileConfig
 
-from alembic import context
 import sqlalchemy as sa
+from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.billing.models  # noqa: F401
+import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.identity.models  # noqa: F401
+import tutor_api.knowledge.models  # noqa: F401
 import tutor_api.providers.models  # noqa: F401
 import tutor_api.spaces.models  # noqa: F401
 from tutor_api.core.database import Base

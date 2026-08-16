@@ -1,0 +1,564 @@
+from datetime import datetime
+from enum import StrEnum
+from typing import Any
+from uuid import UUID, uuid4
+
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.engine import Dialect
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import TypeDecorator, UserDefinedType
+
+from tutor_api.core.database import Base
+
+
+def _enum(enum_type: type[StrEnum], name: str) -> Enum:
+    return Enum(
+        enum_type,
+        name=name,
+        native_enum=False,
+        create_constraint=True,
+        validate_strings=True,
+        values_callable=lambda values: [member.value for member in values],
+    )
+
+
+def _sha256_check(column_name: str) -> str:
+    stripped = column_name
+    for character in "0123456789abcdef":
+        stripped = f"replace({stripped}, '{character}', '')"
+    return f"length({column_name}) = 64 AND {stripped} = ''"
+
+
+class _PostgreSQLVector(UserDefinedType):
+    """Compile to pgvector's unbounded VECTOR type without a runtime dependency."""
+
+    cache_ok = True
+
+    def get_col_spec(self, **_: Any) -> str:
+        return "VECTOR"
+
+
+class EmbeddingVector(TypeDecorator[list[float]]):
+    """Use pgvector on PostgreSQL and JSON arrays in SQLite tests."""
+
+    impl = JSON
+    cache_ok = True
+
+    @property
+    def python_type(self) -> type[list[float]]:
+        return list
+
+    def load_dialect_impl(self, dialect: Dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(_PostgreSQLVector())
+        return dialect.type_descriptor(JSON())
+
+    def process_bind_param(
+        self, value: list[float] | None, dialect: Dialect
+    ) -> list[float] | str | None:
+        if value is None or dialect.name != "postgresql":
+            return value
+        return "[" + ",".join(format(float(component), ".17g") for component in value) + "]"
+
+
+class KnowledgeBaseState(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class DocumentState(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class DocumentVersionState(StrEnum):
+    UPLOADED = "uploaded"
+    PARSING = "parsing"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class BlockKind(StrEnum):
+    TITLE = "title"
+    PARAGRAPH = "paragraph"
+    FORMULA = "formula"
+    TABLE = "table"
+    IMAGE_CAPTION = "image_caption"
+    EXAMPLE = "example"
+    QUESTION = "question"
+    ANSWER = "answer"
+
+
+class IndexVersionState(StrEnum):
+    BUILDING = "building"
+    READY = "ready"
+    ACTIVE = "active"
+    FAILED = "failed"
+    RETIRED = "retired"
+
+
+class IngestionJobKind(StrEnum):
+    PARSE_DOCUMENT = "parse_document"
+    OCR_PAGE = "ocr_page"
+    BUILD_INDEX = "build_index"
+
+
+class IngestionJobState(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    RETRY_WAIT = "retry_wait"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class KnowledgeBase(Base):
+    __tablename__ = "knowledge_bases"
+    __table_args__ = (UniqueConstraint("id", "space_id", name="uq_knowledge_base_id_space"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    state: Mapped[KnowledgeBaseState] = mapped_column(
+        _enum(KnowledgeBaseState, "knowledge_base_state"),
+        nullable=False,
+        default=KnowledgeBaseState.ACTIVE,
+        server_default=KnowledgeBaseState.ACTIVE.value,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Document(Base):
+    __tablename__ = "documents"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_document_id_space"),
+        UniqueConstraint("id", "knowledge_base_id", "space_id", name="uq_document_id_kb_space"),
+        UniqueConstraint(
+            "knowledge_base_id",
+            "source_kind",
+            "source_key",
+            name="uq_document_source_in_knowledge_base",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "space_id"],
+            ["knowledge_bases.id", "knowledge_bases.space_id"],
+            name="fk_document_knowledge_base_space",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    state: Mapped[DocumentState] = mapped_column(
+        _enum(DocumentState, "document_state"),
+        nullable=False,
+        default=DocumentState.ACTIVE,
+        server_default=DocumentState.ACTIVE.value,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class DocumentVersion(Base):
+    __tablename__ = "document_versions"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_document_version_id_space"),
+        UniqueConstraint(
+            "id", "document_id", "space_id", name="uq_document_version_id_document_space"
+        ),
+        UniqueConstraint("document_id", "version_number", name="uq_document_version_number"),
+        UniqueConstraint("document_id", "content_sha256", name="uq_document_content_hash"),
+        UniqueConstraint("object_key", name="uq_document_version_object_key"),
+        CheckConstraint("version_number > 0", name="ck_document_version_number_positive"),
+        CheckConstraint(_sha256_check("content_sha256"), name="ck_document_version_sha256"),
+        ForeignKeyConstraint(
+            ["document_id", "space_id"],
+            ["documents.id", "documents.space_id"],
+            name="fk_document_version_document_space",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_modified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[DocumentVersionState] = mapped_column(
+        _enum(DocumentVersionState, "document_version_state"),
+        nullable=False,
+        default=DocumentVersionState.UPLOADED,
+        server_default=DocumentVersionState.UPLOADED.value,
+        index=True,
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Page(Base):
+    __tablename__ = "pages"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_page_id_space"),
+        UniqueConstraint("id", "document_version_id", "space_id", name="uq_page_id_version_space"),
+        UniqueConstraint("document_version_id", "page_number", name="uq_page_number"),
+        UniqueConstraint("document_version_id", "source_pointer", name="uq_page_source_pointer"),
+        CheckConstraint("page_number > 0", name="ck_page_number_positive"),
+        CheckConstraint(_sha256_check("content_sha256"), name="ck_page_sha256"),
+        ForeignKeyConstraint(
+            ["document_version_id", "space_id"],
+            ["document_versions.id", "document_versions.space_id"],
+            name="fk_page_document_version_space",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_version_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_pointer: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    text_object_key: Mapped[str | None] = mapped_column(String(1024))
+    image_object_key: Mapped[str | None] = mapped_column(String(1024))
+    width: Mapped[int | None] = mapped_column(Integer)
+    height: Mapped[int | None] = mapped_column(Integer)
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Block(Base):
+    __tablename__ = "blocks"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_block_id_space"),
+        UniqueConstraint("id", "page_id", "space_id", name="uq_block_id_page_space"),
+        UniqueConstraint("page_id", "ordinal", name="uq_block_ordinal"),
+        UniqueConstraint("page_id", "source_pointer", name="uq_block_source_pointer"),
+        CheckConstraint("ordinal >= 0", name="ck_block_ordinal_nonnegative"),
+        CheckConstraint(_sha256_check("content_sha256"), name="ck_block_sha256"),
+        ForeignKeyConstraint(
+            ["page_id", "space_id"],
+            ["pages.id", "pages.space_id"],
+            name="fk_block_page_space",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[BlockKind] = mapped_column(_enum(BlockKind, "block_kind"), nullable=False)
+    source_pointer: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    text: Mapped[str | None] = mapped_column(Text)
+    bounding_box: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class IndexVersion(Base):
+    __tablename__ = "index_versions"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_index_version_id_space"),
+        UniqueConstraint(
+            "id", "knowledge_base_id", "space_id", name="uq_index_version_id_kb_space"
+        ),
+        UniqueConstraint(
+            "id",
+            "space_id",
+            "embedding_dimension",
+            "index_signature",
+            name="uq_index_embedding_contract",
+        ),
+        UniqueConstraint("knowledge_base_id", "version_number", name="uq_index_version_number"),
+        UniqueConstraint("knowledge_base_id", "index_signature", name="uq_index_signature"),
+        CheckConstraint("version_number > 0", name="ck_index_version_number_positive"),
+        CheckConstraint(
+            "embedding_dimension BETWEEN 8 AND 4096",
+            name="ck_index_embedding_dimension_range",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "space_id"],
+            ["knowledge_bases.id", "knowledge_bases.space_id"],
+            name="fk_index_knowledge_base_space",
+            ondelete="CASCADE",
+        ),
+        Index(
+            "uq_active_index_per_knowledge_base",
+            "knowledge_base_id",
+            unique=True,
+            postgresql_where=text("state = 'active'"),
+            sqlite_where=text("state = 'active'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[IndexVersionState] = mapped_column(
+        _enum(IndexVersionState, "index_version_state"),
+        nullable=False,
+        default=IndexVersionState.BUILDING,
+        server_default=IndexVersionState.BUILDING.value,
+        index=True,
+    )
+    parser_signature: Mapped[str] = mapped_column(String(255), nullable=False)
+    ocr_signature: Mapped[str] = mapped_column(String(255), nullable=False)
+    chunking_signature: Mapped[str] = mapped_column(String(255), nullable=False)
+    embedding_backend: Mapped[str] = mapped_column(String(100), nullable=False)
+    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
+    embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    index_signature: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_chunk_id_space"),
+        UniqueConstraint("index_version_id", "ordinal", name="uq_chunk_ordinal"),
+        UniqueConstraint("index_version_id", "source_pointer", name="uq_chunk_source_pointer"),
+        CheckConstraint("ordinal >= 0", name="ck_chunk_ordinal_nonnegative"),
+        CheckConstraint(_sha256_check("content_sha256"), name="ck_chunk_sha256"),
+        CheckConstraint(
+            "block_id IS NULL OR page_id IS NOT NULL", name="ck_chunk_block_requires_page"
+        ),
+        ForeignKeyConstraint(
+            ["index_version_id", "space_id", "embedding_dimension", "index_signature"],
+            [
+                "index_versions.id",
+                "index_versions.space_id",
+                "index_versions.embedding_dimension",
+                "index_versions.index_signature",
+            ],
+            name="fk_chunk_index_embedding_contract",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_version_id", "space_id"],
+            ["document_versions.id", "document_versions.space_id"],
+            name="fk_chunk_document_version_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["page_id", "document_version_id", "space_id"],
+            ["pages.id", "pages.document_version_id", "pages.space_id"],
+            name="fk_chunk_page_version_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["block_id", "page_id", "space_id"],
+            ["blocks.id", "blocks.page_id", "blocks.space_id"],
+            name="fk_chunk_block_page_space",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint(
+            "embedding IS NULL OR json_array_length(embedding) = embedding_dimension",
+            name="ck_chunk_embedding_dimension_sqlite",
+        ).ddl_if(dialect="sqlite"),
+        CheckConstraint(
+            "embedding IS NULL OR vector_dims(embedding) = embedding_dimension",
+            name="ck_chunk_embedding_dimension_postgresql",
+        ).ddl_if(dialect="postgresql"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    index_version_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    document_version_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    page_id: Mapped[UUID | None] = mapped_column(index=True)
+    block_id: Mapped[UUID | None] = mapped_column(index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_pointer: Mapped[str] = mapped_column(String(1024), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    index_signature: Mapped[str] = mapped_column(String(512), nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(EmbeddingVector())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class IngestionJob(Base):
+    __tablename__ = "ingestion_jobs"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_ingestion_job_id_space"),
+        UniqueConstraint(
+            "knowledge_base_id", "idempotency_key", name="uq_ingestion_job_idempotency"
+        ),
+        CheckConstraint("attempt_count >= 0", name="ck_ingestion_attempt_nonnegative"),
+        CheckConstraint("max_attempts > 0", name="ck_ingestion_max_attempts_positive"),
+        CheckConstraint("attempt_count <= max_attempts", name="ck_ingestion_attempt_within_limit"),
+        CheckConstraint(
+            "(lease_owner IS NULL AND lease_expires_at IS NULL) OR "
+            "(lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="ck_ingestion_lease_complete",
+        ),
+        CheckConstraint(
+            "document_version_id IS NULL OR document_id IS NOT NULL",
+            name="ck_ingestion_version_requires_document",
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "space_id"],
+            ["knowledge_bases.id", "knowledge_bases.space_id"],
+            name="fk_ingestion_knowledge_base_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_id", "knowledge_base_id", "space_id"],
+            ["documents.id", "documents.knowledge_base_id", "documents.space_id"],
+            name="fk_ingestion_document_kb_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["document_version_id", "document_id", "space_id"],
+            [
+                "document_versions.id",
+                "document_versions.document_id",
+                "document_versions.space_id",
+            ],
+            name="fk_ingestion_version_document_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["index_version_id", "knowledge_base_id", "space_id"],
+            [
+                "index_versions.id",
+                "index_versions.knowledge_base_id",
+                "index_versions.space_id",
+            ],
+            name="fk_ingestion_index_kb_space",
+            ondelete="CASCADE",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    document_id: Mapped[UUID | None] = mapped_column(index=True)
+    document_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    index_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    kind: Mapped[IngestionJobKind] = mapped_column(
+        _enum(IngestionJobKind, "ingestion_job_kind"), nullable=False, index=True
+    )
+    state: Mapped[IngestionJobState] = mapped_column(
+        _enum(IngestionJobState, "ingestion_job_state"),
+        nullable=False,
+        default=IngestionJobState.QUEUED,
+        server_default=IngestionJobState.QUEUED.value,
+        index=True,
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(255), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    checkpoint: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
+    last_error_detail: Mapped[str | None] = mapped_column(String(1000))
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
