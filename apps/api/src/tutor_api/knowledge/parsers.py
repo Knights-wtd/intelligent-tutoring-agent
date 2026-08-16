@@ -19,6 +19,7 @@ from xml.etree import ElementTree
 
 import yaml
 from pypdf import PdfReader
+from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _WINDOWS_DRIVE_PATH = re.compile(r"^[A-Za-z]:")
@@ -39,6 +40,21 @@ _DOCX_MAX_MEMBER_BYTES = 8 * 1024 * 1024
 _ARCHIVE_READ_CHUNK_BYTES = 64 * 1024
 _MAX_PNG_DECOMPRESSED_BYTES = 64 * 1024 * 1024
 _PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
+_DEFAULT_MAX_PDF_PAGES = 1_000
+_DEFAULT_MAX_PDF_PAGE_TEXT_CHARS = 1_000_000
+_DEFAULT_MAX_PDF_TOTAL_TEXT_CHARS = 16_000_000
+_DEFAULT_MAX_PDF_BLOCKS = 200_000
+_MAX_PDF_PAGE_TREE_DEPTH = 64
+_DEFAULT_MAX_PATH_BYTES = 1_024
+_DEFAULT_MAX_TOTAL_PATH_BYTES = 1024 * 1024
+_DEFAULT_MAX_PATH_DEPTH = 32
+_DEFAULT_MAX_MARKDOWN_MEMBER_BYTES = 16 * 1024 * 1024
+_DEFAULT_MAX_TOTAL_MARKDOWN_BYTES = 64 * 1024 * 1024
+_DEFAULT_MAX_MARKDOWN_LINES = 500_000
+_DEFAULT_MAX_MARKDOWN_BLOCKS = 200_000
+_DEFAULT_MAX_MARKDOWN_TAGS = 50_000
+_DEFAULT_MAX_MARKDOWN_WIKILINKS = 200_000
+_DEFAULT_MAX_MARKDOWN_LINE_CHARS = 1_000_000
 
 type FrozenScalar = str | int | float | bool | None
 type FrozenValue = (
@@ -55,6 +71,7 @@ class ParseErrorCode(StrEnum):
     ARCHIVE_LIMIT_EXCEEDED = "archive_limit_exceeded"
     UNSAFE_XML = "unsafe_xml"
     INVALID_FRONTMATTER = "invalid_frontmatter"
+    LIMIT_EXCEEDED = "limit_exceeded"
 
 
 _ERROR_MESSAGES = {
@@ -63,6 +80,7 @@ _ERROR_MESSAGES = {
     ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED: "archive limits exceeded",
     ParseErrorCode.UNSAFE_XML: "XML content is unsafe",
     ParseErrorCode.INVALID_FRONTMATTER: "frontmatter is invalid",
+    ParseErrorCode.LIMIT_EXCEEDED: "parser limits exceeded",
 }
 
 
@@ -77,7 +95,7 @@ class ParseError(RuntimeError):
         super().__init__(self.public_message)
 
 
-class BlockKind(StrEnum):
+class ParsedBlockKind(StrEnum):
     """Ordered native block types shared by source formats."""
 
     HEADING = "heading"
@@ -87,7 +105,7 @@ class BlockKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ParsedBlock:
-    kind: BlockKind
+    kind: ParsedBlockKind
     text: str
     order: int
     source_pointer: str
@@ -194,38 +212,157 @@ def _looks_like_ocr_candidate(text: str) -> bool:
     return sum(text.count(marker) for marker in mojibake_markers) >= 3
 
 
-def parse_pdf(data: bytes, *, source_name: str = "document.pdf") -> ParsedDocument:
-    """Extract native PDF text per page and flag weak pages for later OCR."""
+def _validate_pdf_limits(
+    *,
+    max_pages: int,
+    max_page_text_chars: int,
+    max_total_text_chars: int,
+    max_blocks: int,
+) -> None:
+    limits = (max_pages, max_page_text_chars, max_total_text_chars, max_blocks)
+    if any(isinstance(limit, bool) or not isinstance(limit, int) for limit in limits):
+        raise ValueError("PDF limits must be integers")
+    if max_pages < 1 or max_page_text_chars < 1 or max_total_text_chars < 1:
+        raise ValueError("PDF limits must be positive")
+    if max_blocks < 0:
+        raise ValueError("max_blocks must be non-negative")
 
+
+def _preflight_pdf_page_tree(reader: PdfReader, *, max_pages: int) -> int:
     try:
-        reader = PdfReader(BytesIO(bytes(data)), strict=True)
+        catalog_reference = reader.trailer.raw_get("/Root")
+        catalog = catalog_reference.get_object()
+        if not isinstance(catalog, DictionaryObject):
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        root = catalog.raw_get("/Pages")
+    except ParseError:
+        raise
+    except Exception:
+        _raise(ParseErrorCode.INVALID_FORMAT)
+
+    stack: list[tuple[object, int]] = [(root, 0)]
+    seen_references: set[tuple[int, int]] = set()
+    seen_direct: set[int] = set()
+    page_count = 0
+    node_count = 0
+    max_nodes = max_pages * 4 + 16
+    while stack:
+        candidate, depth = stack.pop()
+        if depth > _MAX_PDF_PAGE_TREE_DEPTH:
+            _raise(ParseErrorCode.LIMIT_EXCEEDED)
+        if isinstance(candidate, IndirectObject):
+            key = (candidate.idnum, candidate.generation)
+            if key in seen_references:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
+            seen_references.add(key)
+            node = candidate.get_object()
+        else:
+            node = candidate.get_object() if hasattr(candidate, "get_object") else candidate
+            identity = id(node)
+            if identity in seen_direct:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
+            seen_direct.add(identity)
+        node_count += 1
+        if node_count > max_nodes:
+            _raise(ParseErrorCode.LIMIT_EXCEEDED)
+        if not isinstance(node, DictionaryObject):
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        node_type = node.get("/Type")
+        if node_type == "/Page":
+            page_count += 1
+            if page_count > max_pages:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
+            continue
+        if node_type != "/Pages":
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        declared_count = node.get("/Count")
+        if (
+            isinstance(declared_count, bool)
+            or not isinstance(declared_count, int)
+            or declared_count < 0
+        ):
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        if declared_count > max_pages:
+            _raise(ParseErrorCode.LIMIT_EXCEEDED)
+        try:
+            kids = node.raw_get("/Kids")
+        except Exception:
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        if not isinstance(kids, ArrayObject) or not kids:
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        if len(kids) > max_nodes - node_count - len(stack):
+            _raise(ParseErrorCode.LIMIT_EXCEEDED)
+        for kid in reversed(kids):
+            if not isinstance(kid, IndirectObject | DictionaryObject):
+                _raise(ParseErrorCode.INVALID_FORMAT)
+            stack.append((kid, depth + 1))
+    if page_count == 0:
+        _raise(ParseErrorCode.INVALID_FORMAT)
+    return page_count
+
+
+def parse_pdf(
+    data: bytes,
+    *,
+    source_name: str = "document.pdf",
+    max_pages: int = _DEFAULT_MAX_PDF_PAGES,
+    max_page_text_chars: int = _DEFAULT_MAX_PDF_PAGE_TEXT_CHARS,
+    max_total_text_chars: int = _DEFAULT_MAX_PDF_TOTAL_TEXT_CHARS,
+    max_blocks: int = _DEFAULT_MAX_PDF_BLOCKS,
+) -> ParsedDocument:
+    """Extract bounded native PDF text after a bounded page-tree preflight."""
+
+    _validate_pdf_limits(
+        max_pages=max_pages,
+        max_page_text_chars=max_page_text_chars,
+        max_total_text_chars=max_total_text_chars,
+        max_blocks=max_blocks,
+    )
+    try:
+        reader = PdfReader(BytesIO(data), strict=True)
         if reader.is_encrypted:
             _raise(ParseErrorCode.INVALID_FORMAT)
+        page_count = _preflight_pdf_page_tree(reader, max_pages=max_pages)
         pages: list[ParsedPage] = []
         all_blocks: list[ParsedBlock] = []
-        for page_number, page in enumerate(reader.pages, start=1):
+        total_text_chars = 0
+        for page_index in range(page_count):
+            page_number = page_index + 1
+            page = reader.get_page(page_index)
             text = page.extract_text() or ""
-            lines = tuple(line.strip() for line in text.splitlines() if line.strip())
-            blocks = tuple(
-                ParsedBlock(
-                    kind=BlockKind.PARAGRAPH,
-                    text=line,
-                    order=order,
-                    source_pointer=f"{source_name}#page={page_number}&block={order + 1}",
-                    page_number=page_number,
+            if len(text) > max_page_text_chars:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
+            total_text_chars += len(text)
+            if total_text_chars > max_total_text_chars:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
+            blocks: list[ParsedBlock] = []
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if len(all_blocks) + len(blocks) >= max_blocks:
+                    _raise(ParseErrorCode.LIMIT_EXCEEDED)
+                order = len(blocks)
+                blocks.append(
+                    ParsedBlock(
+                        kind=ParsedBlockKind.PARAGRAPH,
+                        text=line,
+                        order=order,
+                        source_pointer=(
+                            f"{source_name}#page={page_number}&block={order + 1}"
+                        ),
+                        page_number=page_number,
+                    )
                 )
-                for order, line in enumerate(lines)
-            )
+            frozen_blocks = tuple(blocks)
             pages.append(
                 ParsedPage(
                     page_number=page_number,
-                    blocks=blocks,
+                    blocks=frozen_blocks,
                     needs_ocr=_looks_like_ocr_candidate(text),
                 )
             )
-            all_blocks.extend(blocks)
-        if not pages:
-            _raise(ParseErrorCode.INVALID_FORMAT)
+            all_blocks.extend(frozen_blocks)
         return ParsedDocument(
             source_name=source_name,
             media_type="application/pdf",
@@ -272,23 +409,69 @@ def _validate_archive_limits(
     max_uncompressed_bytes: int,
     max_member_bytes: int,
     max_compression_ratio: float,
+    max_path_bytes: int,
+    max_total_path_bytes: int,
+    max_path_depth: int,
 ) -> None:
+    integer_limits = (
+        max_files,
+        max_uncompressed_bytes,
+        max_member_bytes,
+        max_path_bytes,
+        max_total_path_bytes,
+        max_path_depth,
+    )
     if (
-        isinstance(max_files, bool)
-        or not isinstance(max_files, int)
-        or max_files < 1
-        or isinstance(max_uncompressed_bytes, bool)
-        or not isinstance(max_uncompressed_bytes, int)
-        or max_uncompressed_bytes < 1
-        or isinstance(max_member_bytes, bool)
-        or not isinstance(max_member_bytes, int)
-        or max_member_bytes < 1
+        any(
+            isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
+            for limit in integer_limits
+        )
         or isinstance(max_compression_ratio, bool)
         or not isinstance(max_compression_ratio, int | float)
         or not math.isfinite(max_compression_ratio)
         or max_compression_ratio < 1
     ):
         raise ValueError("archive limits must be positive finite values")
+
+
+def _preflight_classic_zip(data: bytes, *, max_entries: int) -> tuple[bytes, int]:
+    raw = data if isinstance(data, bytes) else bytes(data)
+    if len(raw) < 22:
+        _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    eocd = raw.rfind(b"PK\x05\x06", max(0, len(raw) - 65_557))
+    if eocd < 0 or eocd + 22 > len(raw):
+        _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    try:
+        (
+            disk_number,
+            central_disk,
+            disk_entries,
+            total_entries,
+            central_size,
+            central_offset,
+            comment_length,
+        ) = struct.unpack_from("<4H2LH", raw, eocd + 4)
+    except struct.error:
+        _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    if eocd + 22 + comment_length != len(raw):
+        _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    if (
+        disk_number != 0
+        or central_disk != 0
+        or disk_entries != total_entries
+        or total_entries == 0xFFFF
+        or central_size == 0xFFFFFFFF
+        or central_offset == 0xFFFFFFFF
+        or central_offset + central_size != eocd
+    ):
+        _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    if b"PK\x06\x07" in raw[max(0, eocd - 20) : eocd]:
+        _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    if total_entries and raw[central_offset : central_offset + 4] != b"PK\x01\x02":
+        _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    if total_entries > max_entries:
+        _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
+    return raw, total_entries
 
 
 def _read_archive(
@@ -299,33 +482,63 @@ def _read_archive(
     max_uncompressed_bytes: int,
     max_member_bytes: int,
     max_compression_ratio: float,
+    max_path_bytes: int = _DEFAULT_MAX_PATH_BYTES,
+    max_total_path_bytes: int = _DEFAULT_MAX_TOTAL_PATH_BYTES,
+    max_path_depth: int = _DEFAULT_MAX_PATH_DEPTH,
+    max_kept_member_bytes: int | None = None,
+    max_kept_total_bytes: int | None = None,
 ) -> _ArchiveContents:
     _validate_archive_limits(
         max_files=max_files,
         max_uncompressed_bytes=max_uncompressed_bytes,
         max_member_bytes=max_member_bytes,
         max_compression_ratio=max_compression_ratio,
+        max_path_bytes=max_path_bytes,
+        max_total_path_bytes=max_total_path_bytes,
+        max_path_depth=max_path_depth,
     )
+    if (max_kept_member_bytes is None) != (max_kept_total_bytes is None):
+        raise ValueError("kept member limits must be provided together")
+    if max_kept_member_bytes is not None and (
+        isinstance(max_kept_member_bytes, bool)
+        or not isinstance(max_kept_member_bytes, int)
+        or max_kept_member_bytes < 1
+        or isinstance(max_kept_total_bytes, bool)
+        or not isinstance(max_kept_total_bytes, int)
+        or max_kept_total_bytes < 1
+    ):
+        raise ValueError("kept member limits must be positive integers")
+    raw, declared_entries = _preflight_classic_zip(data, max_entries=max_files)
+    suffixes = tuple(suffix.casefold() for suffix in keep_suffixes)
     try:
-        with zipfile.ZipFile(BytesIO(bytes(data))) as archive:
+        with zipfile.ZipFile(BytesIO(raw)) as archive:
+            infos = archive.infolist()
+            if len(infos) != declared_entries:
+                _raise(ParseErrorCode.UNSAFE_ARCHIVE)
             entries: list[_ArchiveEntry] = []
             seen_paths: set[str] = set()
             declared_total = 0
-            file_count = 0
-            for info in archive.infolist():
+            declared_kept_total = 0
+            total_path_bytes = 0
+            for info in infos:
                 is_directory = info.is_dir()
                 path = _normalize_archive_path(info.orig_filename, is_directory=is_directory)
                 if path in seen_paths:
                     _raise(ParseErrorCode.UNSAFE_ARCHIVE)
                 seen_paths.add(path)
+                path_bytes = len(path.encode("utf-8"))
+                total_path_bytes += path_bytes
+                if (
+                    path_bytes > max_path_bytes
+                    or total_path_bytes > max_total_path_bytes
+                    or len(path.split("/")) > max_path_depth
+                ):
+                    _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
                 if info.flag_bits & 0x1 or _is_symlink(info):
                     _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+                entries.append(_ArchiveEntry(info=info, path=path, is_directory=is_directory))
                 if is_directory:
-                    entries.append(_ArchiveEntry(info=info, path=path, is_directory=True))
                     continue
-                file_count += 1
-                if file_count > max_files:
-                    _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
                 if info.file_size > max_member_bytes:
                     _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
                 declared_total += info.file_size
@@ -336,14 +549,20 @@ def _read_archive(
                         _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
                     if info.file_size / info.compress_size > max_compression_ratio:
                         _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
-                entries.append(_ArchiveEntry(info=info, path=path, is_directory=False))
+                if path.casefold().endswith(suffixes) and max_kept_member_bytes is not None:
+                    if info.file_size > max_kept_member_bytes:
+                        _raise(ParseErrorCode.LIMIT_EXCEEDED)
+                    declared_kept_total += info.file_size
+                    if declared_kept_total > max_kept_total_bytes:
+                        _raise(ParseErrorCode.LIMIT_EXCEEDED)
 
             kept: list[tuple[str, bytes]] = []
             actual_total = 0
-            suffixes = tuple(suffix.casefold() for suffix in keep_suffixes)
+            actual_kept_total = 0
             for entry in entries:
                 if entry.is_directory:
                     continue
+                keep = entry.path.casefold().endswith(suffixes)
                 member = bytearray()
                 actual_member = 0
                 with archive.open(entry.info, "r") as stream:
@@ -358,11 +577,20 @@ def _read_archive(
                             or actual_total > max_uncompressed_bytes
                         ):
                             _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
-                        if entry.path.casefold().endswith(suffixes):
+                        if keep:
+                            actual_kept_total += len(chunk)
+                            if (
+                                max_kept_member_bytes is not None
+                                and (
+                                    actual_member > max_kept_member_bytes
+                                    or actual_kept_total > max_kept_total_bytes
+                                )
+                            ):
+                                _raise(ParseErrorCode.LIMIT_EXCEEDED)
                             member.extend(chunk)
                 if actual_member != entry.info.file_size:
                     _raise(ParseErrorCode.UNSAFE_ARCHIVE)
-                if entry.path.casefold().endswith(suffixes):
+                if keep:
                     kept.append((entry.path, bytes(member)))
             return _ArchiveContents(entries=tuple(entries), kept=tuple(kept))
     except ParseError:
@@ -456,7 +684,7 @@ def parse_docx(data: bytes, *, source_name: str = "document.docx") -> ParsedDocu
             order = len(blocks)
             blocks.append(
                 ParsedBlock(
-                    kind=BlockKind.HEADING if heading_level else BlockKind.PARAGRAPH,
+                    kind=ParsedBlockKind.HEADING if heading_level else ParsedBlockKind.PARAGRAPH,
                     text=text,
                     order=order,
                     source_pointer=f"{source_name}#block={order + 1}",
@@ -471,7 +699,7 @@ def parse_docx(data: bytes, *, source_name: str = "document.docx") -> ParsedDocu
             columns = max((len(row) for row in rows), default=0)
             blocks.append(
                 ParsedBlock(
-                    kind=BlockKind.TABLE,
+                    kind=ParsedBlockKind.TABLE,
                     text="\n".join(" | ".join(row) for row in rows),
                     order=order,
                     source_pointer=f"{source_name}#block={order + 1}",
@@ -595,8 +823,24 @@ def _is_markdown_table(lines: list[str], index: int) -> bool:
     )
 
 
+def _validate_markdown_limits(
+    *,
+    max_lines: int,
+    max_blocks: int,
+    max_tags: int,
+    max_wikilinks: int,
+    max_line_chars: int,
+) -> None:
+    limits = (max_lines, max_blocks, max_tags, max_wikilinks, max_line_chars)
+    if any(
+        isinstance(limit, bool) or not isinstance(limit, int) or limit < 0
+        for limit in limits
+    ):
+        raise ValueError("Markdown limits must be non-negative integers")
+
+
 def _collect_wikilinks(
-    lines: list[str], source_name: str, start_index: int
+    lines: list[str], source_name: str, start_index: int, *, max_wikilinks: int
 ) -> tuple[WikiLink, ...]:
     links: list[WikiLink] = []
     for index in range(start_index, len(lines)):
@@ -607,6 +851,8 @@ def _collect_wikilinks(
             alias = raw_alias.strip() if separator and raw_alias.strip() else None
             if not target:
                 continue
+            if len(links) >= max_wikilinks:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
             links.append(
                 WikiLink(
                     target=target,
@@ -620,27 +866,50 @@ def _collect_wikilinks(
     return tuple(links)
 
 
-def _append_unique(values: list[str], candidate: str) -> None:
+def _append_unique(
+    values: list[str], seen: set[str], candidate: str, *, max_values: int
+) -> None:
     normalized = unicodedata.normalize("NFC", candidate.strip().lstrip("#"))
-    if normalized and normalized not in values:
-        values.append(normalized)
+    if not normalized or normalized in seen:
+        return
+    if len(values) >= max_values:
+        _raise(ParseErrorCode.LIMIT_EXCEEDED)
+    seen.add(normalized)
+    values.append(normalized)
 
 
-def parse_markdown(data: bytes, *, source_name: str = "document.md") -> ParsedDocument:
-    """Parse Markdown blocks while preserving exact one-based source line ranges."""
-
+def _parse_markdown(
+    data: bytes,
+    *,
+    source_name: str,
+    max_lines: int,
+    max_blocks: int,
+    max_tags: int,
+    max_wikilinks: int,
+    max_line_chars: int,
+) -> tuple[ParsedDocument, int]:
+    _validate_markdown_limits(
+        max_lines=max_lines,
+        max_blocks=max_blocks,
+        max_tags=max_tags,
+        max_wikilinks=max_wikilinks,
+        max_line_chars=max_line_chars,
+    )
     try:
-        text = bytes(data).decode("utf-8-sig")
-    except UnicodeDecodeError:
+        text = data.decode("utf-8-sig")
+    except (AttributeError, UnicodeDecodeError):
         _raise(ParseErrorCode.INVALID_FORMAT)
     lines = text.splitlines()
+    if len(lines) > max_lines or any(len(line) > max_line_chars for line in lines):
+        _raise(ParseErrorCode.LIMIT_EXCEEDED)
     body_start, frontmatter, frontmatter_tags = _parse_frontmatter(lines)
     tags: list[str] = []
+    seen_tags: set[str] = set()
     for tag in frontmatter_tags:
-        _append_unique(tags, tag)
+        _append_unique(tags, seen_tags, tag, max_values=max_tags)
     for line in lines[body_start:]:
         for match in _INLINE_TAG.finditer(line):
-            _append_unique(tags, match.group(1))
+            _append_unique(tags, seen_tags, match.group(1), max_values=max_tags)
 
     blocks: list[ParsedBlock] = []
     index = body_start
@@ -650,10 +919,12 @@ def parse_markdown(data: bytes, *, source_name: str = "document.md") -> ParsedDo
             continue
         heading = _MARKDOWN_HEADING.fullmatch(lines[index])
         if heading:
+            if len(blocks) >= max_blocks:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
             line_number = index + 1
             blocks.append(
                 ParsedBlock(
-                    kind=BlockKind.HEADING,
+                    kind=ParsedBlockKind.HEADING,
                     text=heading.group(2).strip(),
                     order=len(blocks),
                     source_pointer=_source_pointer(source_name, line_number, line_number),
@@ -674,12 +945,14 @@ def parse_markdown(data: bytes, *, source_name: str = "document.md") -> ParsedDo
                     break
                 rows.append(row)
                 index += 1
+            if len(blocks) >= max_blocks:
+                _raise(ParseErrorCode.LIMIT_EXCEEDED)
             line_start = start + 1
             line_end = index
             table = tuple(rows)
             blocks.append(
                 ParsedBlock(
-                    kind=BlockKind.TABLE,
+                    kind=ParsedBlockKind.TABLE,
                     text="\n".join(" | ".join(row) for row in table),
                     order=len(blocks),
                     source_pointer=_source_pointer(source_name, line_start, line_end),
@@ -698,16 +971,19 @@ def parse_markdown(data: bytes, *, source_name: str = "document.md") -> ParsedDo
         paragraph_lines: list[str] = []
         while index < len(lines) and lines[index].strip():
             if index != start and (
-                _MARKDOWN_HEADING.fullmatch(lines[index]) or _is_markdown_table(lines, index)
+                _MARKDOWN_HEADING.fullmatch(lines[index])
+                or _is_markdown_table(lines, index)
             ):
                 break
             paragraph_lines.append(lines[index].strip())
             index += 1
+        if len(blocks) >= max_blocks:
+            _raise(ParseErrorCode.LIMIT_EXCEEDED)
         line_start = start + 1
         line_end = start + len(paragraph_lines)
         blocks.append(
             ParsedBlock(
-                kind=BlockKind.PARAGRAPH,
+                kind=ParsedBlockKind.PARAGRAPH,
                 text="\n".join(paragraph_lines),
                 order=len(blocks),
                 source_pointer=_source_pointer(source_name, line_start, line_end),
@@ -716,14 +992,41 @@ def parse_markdown(data: bytes, *, source_name: str = "document.md") -> ParsedDo
             )
         )
 
-    return ParsedDocument(
+    document = ParsedDocument(
         source_name=source_name,
         media_type="text/markdown",
         blocks=tuple(blocks),
         frontmatter=frontmatter,
         tags=tuple(tags),
-        wikilinks=_collect_wikilinks(lines, source_name, body_start),
+        wikilinks=_collect_wikilinks(
+            lines, source_name, body_start, max_wikilinks=max_wikilinks
+        ),
     )
+    return document, len(lines)
+
+
+def parse_markdown(
+    data: bytes,
+    *,
+    source_name: str = "document.md",
+    max_lines: int = _DEFAULT_MAX_MARKDOWN_LINES,
+    max_blocks: int = _DEFAULT_MAX_MARKDOWN_BLOCKS,
+    max_tags: int = _DEFAULT_MAX_MARKDOWN_TAGS,
+    max_wikilinks: int = _DEFAULT_MAX_MARKDOWN_WIKILINKS,
+    max_line_chars: int = _DEFAULT_MAX_MARKDOWN_LINE_CHARS,
+) -> ParsedDocument:
+    """Parse Markdown with bounded ordered output and exact source lines."""
+
+    document, _ = _parse_markdown(
+        data,
+        source_name=source_name,
+        max_lines=max_lines,
+        max_blocks=max_blocks,
+        max_tags=max_tags,
+        max_wikilinks=max_wikilinks,
+        max_line_chars=max_line_chars,
+    )
+    return document
 
 
 def _validate_png_image_data(
@@ -863,9 +1166,26 @@ def parse_obsidian_vault_zip(
     max_files: int = 5_000,
     max_uncompressed_bytes: int = 500 * 1024 * 1024,
     max_compression_ratio: float = _DEFAULT_MAX_COMPRESSION_RATIO,
+    max_path_bytes: int = _DEFAULT_MAX_PATH_BYTES,
+    max_total_path_bytes: int = _DEFAULT_MAX_TOTAL_PATH_BYTES,
+    max_path_depth: int = _DEFAULT_MAX_PATH_DEPTH,
+    max_markdown_member_bytes: int = _DEFAULT_MAX_MARKDOWN_MEMBER_BYTES,
+    max_total_markdown_bytes: int = _DEFAULT_MAX_TOTAL_MARKDOWN_BYTES,
+    max_lines: int = _DEFAULT_MAX_MARKDOWN_LINES,
+    max_blocks: int = _DEFAULT_MAX_MARKDOWN_BLOCKS,
+    max_tags: int = _DEFAULT_MAX_MARKDOWN_TAGS,
+    max_wikilinks: int = _DEFAULT_MAX_MARKDOWN_WIKILINKS,
+    max_line_chars: int = _DEFAULT_MAX_MARKDOWN_LINE_CHARS,
 ) -> VaultParseResult:
-    """Parse Markdown notes from a bounded, traversal-safe Obsidian Vault ZIP."""
+    """Parse a bounded Vault; max_files counts every ZIP entry."""
 
+    _validate_markdown_limits(
+        max_lines=max_lines,
+        max_blocks=max_blocks,
+        max_tags=max_tags,
+        max_wikilinks=max_wikilinks,
+        max_line_chars=max_line_chars,
+    )
     contents = _read_archive(
         data,
         keep_suffixes=(".md",),
@@ -873,6 +1193,11 @@ def parse_obsidian_vault_zip(
         max_uncompressed_bytes=max_uncompressed_bytes,
         max_member_bytes=max_uncompressed_bytes,
         max_compression_ratio=max_compression_ratio,
+        max_path_bytes=max_path_bytes,
+        max_total_path_bytes=max_total_path_bytes,
+        max_path_depth=max_path_depth,
+        max_kept_member_bytes=max_markdown_member_bytes,
+        max_kept_total_bytes=max_total_markdown_bytes,
     )
     files = tuple(entry for entry in contents.entries if not entry.is_directory)
     note_bytes = dict(contents.kept)
@@ -886,12 +1211,28 @@ def parse_obsidian_vault_zip(
 
     notes: list[VaultNote] = []
     all_links: list[WikiLink] = []
+    total_lines = 0
+    total_blocks = 0
+    total_tags = 0
     for path in note_paths:
-        document = parse_markdown(note_bytes[path], source_name=path)
+        document, line_count = _parse_markdown(
+            note_bytes[path],
+            source_name=path,
+            max_lines=max_lines - total_lines,
+            max_blocks=max_blocks - total_blocks,
+            max_tags=max_tags - total_tags,
+            max_wikilinks=max_wikilinks - len(all_links),
+            max_line_chars=max_line_chars,
+        )
+        total_lines += line_count
+        total_blocks += len(document.blocks)
+        total_tags += len(document.tags)
         attachment_links: list[str] = []
+        seen_attachment_links: set[str] = set()
         for link in document.wikilinks:
             resolved = _resolve_vault_link(path, link.target)
-            if resolved in attachment_paths and resolved not in attachment_links:
+            if resolved in attachment_paths and resolved not in seen_attachment_links:
+                seen_attachment_links.add(resolved)
                 attachment_links.append(resolved)
         notes.append(
             VaultNote(
@@ -909,7 +1250,7 @@ def parse_obsidian_vault_zip(
 
 
 __all__ = [
-    "BlockKind",
+    "ParsedBlockKind",
     "ParseError",
     "ParseErrorCode",
     "ParsedBlock",

@@ -10,7 +10,7 @@ from io import BytesIO
 import pytest
 
 from tutor_api.knowledge.parsers import (
-    BlockKind,
+    ParsedBlockKind,
     ParseError,
     ParseErrorCode,
     parse_docx,
@@ -169,6 +169,15 @@ def patch_zip_filename(data: bytes, safe_name: str, unsafe_name: str) -> bytes:
     return data.replace(safe, unsafe)
 
 
+def patch_zip64_eocd_sentinel(data: bytes) -> bytes:
+    patched = bytearray(data)
+    eocd = patched.rfind(b"PK\x05\x06")
+    assert eocd >= 0
+    struct.pack_into("<H", patched, eocd + 8, 0xFFFF)
+    struct.pack_into("<H", patched, eocd + 10, 0xFFFF)
+    return bytes(patched)
+
+
 def patch_zip_encrypted(data: bytes) -> bytes:
     patched = bytearray(data)
     local = patched.find(b"PK\x03\x04")
@@ -223,10 +232,10 @@ def test_docx_preserves_heading_paragraph_table_order() -> None:
     parsed = parse_docx(make_docx(), source_name="lesson.docx")
 
     assert [block.kind for block in parsed.blocks] == [
-        BlockKind.HEADING,
-        BlockKind.PARAGRAPH,
-        BlockKind.TABLE,
-        BlockKind.PARAGRAPH,
+        ParsedBlockKind.HEADING,
+        ParsedBlockKind.PARAGRAPH,
+        ParsedBlockKind.TABLE,
+        ParsedBlockKind.PARAGRAPH,
     ]
     assert [block.text for block in parsed.blocks] == [
         "Chapter One",
@@ -289,11 +298,11 @@ See [[Other Note]].
     }
     assert parsed.tags == ("math", "algebra", "geometry")
     assert [block.kind for block in parsed.blocks] == [
-        BlockKind.HEADING,
-        BlockKind.PARAGRAPH,
-        BlockKind.TABLE,
-        BlockKind.HEADING,
-        BlockKind.PARAGRAPH,
+        ParsedBlockKind.HEADING,
+        ParsedBlockKind.PARAGRAPH,
+        ParsedBlockKind.TABLE,
+        ParsedBlockKind.HEADING,
+        ParsedBlockKind.PARAGRAPH,
     ]
     paragraph = parsed.blocks[1]
     assert (paragraph.line_start, paragraph.line_end) == (8, 9)
@@ -314,7 +323,7 @@ def test_markdown_parses_pipe_less_table_with_exact_line_range() -> None:
     )
 
     table = parsed.blocks[1]
-    assert table.kind is BlockKind.TABLE
+    assert table.kind is ParsedBlockKind.TABLE
     assert table.table == (("A", "B"), ("1", "2"))
     assert (table.line_start, table.line_end) == (3, 5)
     assert table.source_pointer == "pipe-less.md:L3-L5"
@@ -515,3 +524,151 @@ def test_vault_note_paths_are_nfc_and_posix() -> None:
 
     assert parsed.notes[0].path == unicodedata.normalize("NFC", "folder/cafe\u0301.md")
     assert "\\" not in parsed.notes[0].path
+
+
+def test_parser_block_kind_is_distinct_from_orm_block_kind() -> None:
+    from tutor_api.knowledge import ParsedBlockKind
+    from tutor_api.knowledge.models import BlockKind as ModelBlockKind
+
+    assert ParsedBlockKind.PARAGRAPH.value == ModelBlockKind.PARAGRAPH.value
+    assert ParsedBlockKind is not ModelBlockKind
+
+
+def test_pdf_rejects_duplicate_page_reference_before_text_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pypdf._page import PageObject
+
+    duplicate = make_pdf().replace(
+        b"/Kids [3 0 R 5 0 R]", b"/Kids [3 0 R 3 0 R]"
+    )
+    extraction_calls: list[PageObject] = []
+
+    def record_extract(page: PageObject, *args: object, **kwargs: object) -> str:
+        extraction_calls.append(page)
+        return "should not be extracted"
+
+    monkeypatch.setattr(PageObject, "extract_text", record_extract)
+
+    with pytest.raises(ParseError) as raised:
+        parse_pdf(duplicate, max_pages=2)
+
+    assert raised.value.code is ParseErrorCode.LIMIT_EXCEEDED
+    assert extraction_calls == []
+
+
+@pytest.mark.parametrize(
+    ("limits", "pdf"),
+    [
+        ({"max_page_text_chars": 20}, make_single_page_pdf("x" * 40)),
+        ({"max_total_text_chars": 50}, make_pdf()),
+        ({"max_blocks": 1}, make_pdf()),
+    ],
+)
+def test_pdf_enforces_text_and_block_budgets(
+    limits: dict[str, int], pdf: bytes
+) -> None:
+    with pytest.raises(ParseError) as raised:
+        parse_pdf(pdf, **limits)
+
+    assert raised.value.code is ParseErrorCode.LIMIT_EXCEEDED
+    assert str(raised.value) == "parser limits exceeded"
+
+
+def test_zip_entry_limit_counts_directories() -> None:
+    vault = make_zip([("folder/", b""), ("folder/note.md", b"body")])
+
+    with pytest.raises(ParseError) as raised:
+        parse_obsidian_vault_zip(vault, max_files=1)
+
+    assert raised.value.code is ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED
+
+
+def test_zip64_eocd_is_rejected_before_zipfile_parsing() -> None:
+    vault = patch_zip64_eocd_sentinel(make_zip([("note.md", b"body")]))
+
+    with pytest.raises(ParseError) as raised:
+        parse_obsidian_vault_zip(vault)
+
+    assert raised.value.code is ParseErrorCode.UNSAFE_ARCHIVE
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_path_bytes": 8},
+        {"max_path_depth": 1},
+        {"max_total_path_bytes": 8},
+    ],
+)
+def test_vault_enforces_path_name_budgets(limits: dict[str, int]) -> None:
+    vault = make_zip([("folder/note.md", b"body")])
+
+    with pytest.raises(ParseError) as raised:
+        parse_obsidian_vault_zip(vault, **limits)
+
+    assert raised.value.code is ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED
+
+
+@pytest.mark.parametrize(
+    ("markdown", "limits"),
+    [
+        (b"one\ntwo\n", {"max_lines": 1}),
+        (b"long line\n", {"max_line_chars": 4}),
+        (b"one\n\ntwo\n", {"max_blocks": 1}),
+        (b"#one #two\n", {"max_tags": 1}),
+        (b"[[one]] [[two]]\n", {"max_wikilinks": 1}),
+    ],
+)
+def test_markdown_enforces_output_budgets(
+    markdown: bytes, limits: dict[str, int]
+) -> None:
+    with pytest.raises(ParseError) as raised:
+        parse_markdown(markdown, **limits)
+
+    assert raised.value.code is ParseErrorCode.LIMIT_EXCEEDED
+
+
+def test_markdown_tags_are_ordered_and_deduplicated() -> None:
+    parsed = parse_markdown(
+        b"---\ntags: [alpha, beta, alpha]\n---\n#beta #gamma #alpha\n"
+    )
+
+    assert parsed.tags == ("alpha", "beta", "gamma")
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {"max_markdown_member_bytes": 3},
+        {"max_total_markdown_bytes": 7},
+    ],
+)
+def test_vault_enforces_markdown_byte_budgets(limits: dict[str, int]) -> None:
+    vault = make_zip([("one.md", b"body"), ("two.md", b"body")])
+
+    with pytest.raises(ParseError) as raised:
+        parse_obsidian_vault_zip(vault, **limits)
+
+    assert raised.value.code is ParseErrorCode.LIMIT_EXCEEDED
+
+
+@pytest.mark.parametrize(
+    ("entries", "limits"),
+    [
+        ([("one.md", b"body"), ("two.md", b"body")], {"max_lines": 1}),
+        ([("one.md", b"body"), ("two.md", b"body")], {"max_blocks": 1}),
+        ([("one.md", b"#one"), ("two.md", b"#two")], {"max_tags": 1}),
+        (
+            [("one.md", b"[[one]]"), ("two.md", b"[[two]]")],
+            {"max_wikilinks": 1},
+        ),
+    ],
+)
+def test_vault_output_budgets_are_cumulative_across_notes(
+    entries: list[tuple[str | zipfile.ZipInfo, bytes]], limits: dict[str, int]
+) -> None:
+    with pytest.raises(ParseError) as raised:
+        parse_obsidian_vault_zip(make_zip(entries), **limits)
+
+    assert raised.value.code is ParseErrorCode.LIMIT_EXCEEDED

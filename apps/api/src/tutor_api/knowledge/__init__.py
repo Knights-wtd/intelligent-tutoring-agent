@@ -9,8 +9,8 @@ from tutor_api.knowledge.ocr import (
     extract_text_safely,
 )
 from tutor_api.knowledge.parsers import (
-    BlockKind,
     ParsedBlock,
+    ParsedBlockKind,
     ParsedDocument,
     ParsedPage,
     ParseError,
@@ -35,7 +35,7 @@ from tutor_api.knowledge.storage import (
 )
 
 __all__ = [
-    "BlockKind",
+    "ParsedBlockKind",
     "DisabledOCRAdapter",
     "EmbeddingAdapter",
     "HashEmbeddingAdapter",
