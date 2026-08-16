@@ -270,3 +270,41 @@
 - 后续真实 PostgreSQL 集成验收继续覆盖 constraint-name 异常路径、DBAPI 往返、并发与性能。
 - 可补恰好 120 字符成功、同空间 `Physics`/`physics` 共存测试；可进一步收窄 constraint-name substring fallback。
 - 下一步：Task 4「safe immutable uploads」；不得将 Task 3 完成误记为整个 Milestone 3 / Phase 5 完成。
+
+## Session: 2026-08-16 · Phase 5 / Task 4
+
+- **Status:** Task 4 final PASS；Milestone 3 / Phase 5 仍为 `in_progress`。
+- 提交：`4ca2acf feat: add immutable knowledge uploads`、`07ec443 fix: harden immutable knowledge uploads`、`091e95f docs: checkpoint immutable upload review`、`53a253a fix: avoid blocking immutable upload worker`、`72c0194 fix: own upload temporary file in worker`。
+- 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。
+
+### 已交付
+
+- 安全不可变上传 API：MIME/extension/signature/size 校验、chunked SHA-256/spool、NFC 规范化与 control rejection、tenant permissions。
+- exact idempotency/conflict、SHA dedupe、version increment，以及 Document、DocumentVersion、queued ingestion job 和 KnowledgeUploadRequest。
+- production multipart lock 与 provider error redaction。
+- 并发加固：prepare 阶段无 DB lock；同步 DB/row-lock/storage/commit 全部在 worker thread；Session thread ownership；锁内最终权限重检；commit before response。
+- PreparedUpload lease 管理取消时 copied temp 生命周期；原 UploadFile 与临时资源确定性关闭。
+
+### 验证记录
+
+| 检查点 | 结果 |
+|---|---|
+| `07ec443` upload focused | 57 passed |
+| `07ec443` 相关 regression | 308 passed |
+| `07ec443` 完整 API | 425 passed, 3 skipped |
+| `07ec443` targeted Ruff / diff | 通过 |
+| 独立规格复审 | 61 focused passed；PASS |
+| `53a253a` Task 4 upload focused | 60 passed；仅完整运行一次 |
+| `53a253a` targeted Ruff / diff | 通过 |
+| `72c0194` 取消/线程定向 | 4 passed |
+| 增量规格复审 | 2 passed |
+| 最终质量复审 | PASS；静态检查 + 2,000 次内存竞争探针 |
+| 两个并发修复后完整 API | 未重跑 |
+| PostgreSQL/pgvector/MinIO/Docker/OCR/external services | 未运行真实环境 |
+
+### 保留风险与下一步
+
+- 真实 PostgreSQL 行锁/constraint diagnostics 和真实 MinIO conditional-create 未验证；object write + DB commit 非分布式事务，可能留下 immutable orphan。
+- 同 KB 慢 storage/锁等待可能消耗 AnyIO worker pool，需 timeout/limiter/queue；客户端取消后的 worker 可能后台完成，缺专门结果日志与可观测性；copied spool 落盘写可能带来短事件循环延迟。
+- lease duplicate claim 当前生产不可达但未显式拒绝；service caller-owned temp contract 应明确；DOCX 仅 ZIP magic，100 MiB 仅 service layer，digest 无 domain prefix。
+- 下一步：Task 5「native parsing and Obsidian import」；不得将 Task 4 完成误记为整个 Milestone 3 / Phase 5 完成。

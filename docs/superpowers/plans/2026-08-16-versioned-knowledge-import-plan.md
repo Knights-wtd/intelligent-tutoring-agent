@@ -48,10 +48,10 @@
 
 **Files:** Modify knowledge service/router/schemas; test `tests/test_knowledge_uploads.py`.
 
-- [ ] Test MIME/extension pairs, size limits, SHA-256 dedupe, filename sanitization, idempotency, and tenant isolation.
-- [ ] Stream to a temporary object while hashing, verify format, then promote to an immutable space/document/version key.
-- [ ] Create immutable metadata and a queued job. Replayed idempotency returns the same version; identical bytes may reuse storage without overwriting history.
-- [ ] Run tests; commit `feat: add immutable knowledge uploads`.
+- [x] Test MIME/extension pairs, size limits, SHA-256 dedupe, filename sanitization, idempotency, and tenant isolation.
+- [x] Stream to a temporary object while hashing, verify format, then promote to an immutable space/document/version key.
+- [x] Create immutable metadata and a queued job. Replayed idempotency returns the same version; identical bytes may reuse storage without overwriting history.
+- [x] Run tests; commit `feat: add immutable knowledge uploads`.
 
 ### Task 5: Native parsing and Obsidian import
 

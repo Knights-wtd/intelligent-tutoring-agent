@@ -138,8 +138,11 @@ Phase 5：知识与 Agent 能力实现
 - [x] Task 3「space-scoped knowledge APIs」已完成，实现提交：`92261fe feat: add scoped knowledge bases`。
 - [x] Task 3 规格审查 PASS（聚焦 20 passed）；质量/安全审查 PASS（高价值聚焦 5 passed）。
 - [x] Task 3 实现阶段最终基线：API focused 17 passed；schema uniqueness 3 passed；direct regression 179 passed；完整 API 365 passed、3 skipped；Ruff 与 `git diff --check` 通过。
+- [x] Task 4「safe immutable uploads」最终 PASS；实现与修复提交：`4ca2acf`、`07ec443`、`53a253a`、`72c0194`，交接文档提交：`091e95f`。
+- [x] Task 4 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。
+- [x] Task 4 验证记录已归档；两个并发修复后未重跑完整 API suite，且未运行真实 PostgreSQL/pgvector/MinIO/Docker/OCR/external services。
 - [ ] 整个 Milestone 3 / Phase 5 尚未完成，状态保持 `in_progress`。
-- [ ] 下一步：Task 4「safe immutable uploads」。
+- [ ] 下一步：Task 5「native parsing and Obsidian import」。
 
 ### Task 1 已确认边界
 
@@ -171,3 +174,21 @@ Phase 5：知识与 Agent 能力实现
 - 规格审查与质量/安全审查均 PASS；实现阶段完整 API 基线为 365 passed、3 skipped，Ruff 与 diff check 通过。
 - 未运行真实 PostgreSQL/pgvector。非阻塞后续项：补充恰好 120 字符成功、同空间 `Physics`/`physics` 共存测试；可进一步收窄 constraint-name substring fallback。
 - Phase 5 / Milestone 3 仍为 `in_progress`；下一步是 Task 4：safe immutable uploads。
+
+### Task 4 已确认上传、安全与并发边界
+
+- 安全不可变上传 API 已覆盖 MIME/extension/signature/size 校验、分块 SHA-256 与 spool、文件名 NFC 规范化和控制字符拒绝、租户权限、exact idempotency/conflict、SHA 去重与版本递增。
+- 成功路径创建 Document、DocumentVersion 与 queued ingestion job；请求边界使用 KnowledgeUploadRequest，生产 multipart 路径带锁，provider 错误保持脱敏。
+- 文件 prepare 阶段不持有数据库锁；同步数据库访问、行锁、对象存储与 commit 全部进入同一 worker thread，保证 Session thread ownership，并在锁内做最终权限重检且 commit before response。
+- PreparedUpload lease 接管 copied temporary file 的生命周期：客户端取消时 worker 可安全继续，原 UploadFile 与临时资源确定性关闭。
+
+### Task 4 验证边界与保留风险
+
+- `07ec443` 基线：upload focused 57 passed；相关 regression 308 passed；完整 API 425 passed、3 skipped；targeted Ruff 与 diff check 通过。
+- 独立规格复审：61 focused passed。`53a253a` 后 Task 4 upload focused 60 passed（仅完整运行一次），targeted Ruff 与 diff check 通过。
+- `72c0194` 后取消/线程定向 4 passed；增量规格复审另 2 passed；最终质量复审完成静态检查与 2,000 次内存竞争探针。两个并发修复后没有重跑完整 API suite。
+- 未运行真实 PostgreSQL/pgvector/MinIO/Docker/OCR/external services。
+- 保留风险：真实 PostgreSQL 行锁/constraint diagnostics 与真实 MinIO conditional-create 未验证；object write + DB commit 非分布式事务，可能留下 immutable orphan。
+- 同 KB 慢 storage/锁等待可能消耗 AnyIO worker pool，后续需 timeout/limiter/queue；客户端取消后已接管 worker 可能后台完成，尚缺专门结果日志与可观测性；copied spool 落盘写仍可能造成短事件循环延迟。
+- PreparedUpload lease duplicate claim 当前生产不可达但未显式拒绝；service caller-owned temp contract 后续应明确。DOCX 当前仅校验 ZIP magic，100 MiB 上限仅在 service layer，digest 尚无 domain prefix。
+- Task 4 已完成，但 Phase 5 / Milestone 3 仍为 `in_progress`；下一步是 Task 5：native parsing and Obsidian import。

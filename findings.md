@@ -258,3 +258,43 @@
 - 本阶段未运行真实 PostgreSQL/pgvector；PostgreSQL constraint-name 异常提取、真实数据库往返、并发与性能仍待后续集成验收。
 - 非阻塞后续项：可补恰好 120 字符名称成功、同空间 `Physics` 与 `physics` 共存的回归测试；可进一步收窄 constraint-name substring fallback。
 - Task 3 已完成，但 Phase 5 / Milestone 3 仍为 `in_progress`；下一实施任务是 Task 4：safe immutable uploads。
+
+## 2026-08-16 Phase 5 · Task 4 关键结论
+
+### 交付与审查
+
+- Task 4 safe immutable uploads 的提交序列为：初始实现 `4ca2acf feat: add immutable knowledge uploads`；首轮规格修复 `07ec443 fix: harden immutable knowledge uploads`；交接文档 `091e95f docs: checkpoint immutable upload review`；质量 P1 修复 `53a253a fix: avoid blocking immutable upload worker`；取消 ownership 修复 `72c0194 fix: own upload temporary file in worker`。
+- 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。
+
+### 已确认的上传与安全边界
+
+- **不可变上传协议：** API 校验 MIME/extension/signature/size 组合，以分块读取计算 SHA-256 并写入 spool；文件名先做 NFC 规范化，拒绝控制/格式字符与不安全名称。
+- **租户与幂等：** personal/classroom 权限由服务端判定；KnowledgeUploadRequest 约束请求；相同 idempotency key + 完全相同请求返回同一版本，不同请求稳定冲突；相同 SHA 可复用不可变对象但不覆盖历史，新内容按锁内状态递增版本。
+- **持久化结果：** 成功上传创建或复用 Document，创建不可变 DocumentVersion，并排入 queued ingestion job；响应只在数据库 commit 后返回。
+- **生产安全：** production multipart 初始化有进程内锁；provider/storage 异常映射为受限公共错误，避免泄露 provider 文本、堆栈与内部诊断。
+
+### 并发、线程与取消所有权
+
+- 文件 prepare（读取、校验、hash、spool）期间不持有数据库锁；同步数据库查询、行锁、对象存储写入和 commit 全部放入 worker thread，避免阻塞事件循环。
+- 同一 SQLAlchemy Session 的数据库工作保持在线程内，满足 Session thread ownership；拿到锁后执行最终权限重检，避免 prepare 期间权限变化被遗漏。
+- PreparedUpload lease 把 copied temporary file 的 ownership 交给已启动 worker。客户端取消后，worker 不会使用已被 request cleanup 提前关闭的临时文件；原 UploadFile、原 spool 与 worker-owned copy 均有确定性关闭路径。
+- commit before response 保证成功响应对应已提交状态；客户端取消后，已经接管 lease 的 worker 仍可能在后台完成。
+
+### 准确验证记录
+
+- `07ec443` 时：upload focused 57 passed；相关 regression 308 passed；完整 API 425 passed、3 skipped；targeted Ruff 与 `git diff --check` 通过。
+- 独立规格复审运行 61 focused passed。
+- `53a253a` 后：Task 4 upload focused 60 passed，仅完整运行一次；targeted Ruff 与 diff check 通过。
+- `72c0194` 后：取消/线程定向 4 passed；增量规格复审另 2 passed；最终质量复审执行静态检查与 2,000 次内存竞争探针。
+- 两个并发修复后没有重跑完整 API suite；未运行真实 PostgreSQL/pgvector/MinIO/Docker/OCR/external services。
+
+### 保留风险与下一步
+
+- 真实 PostgreSQL 行锁、constraint diagnostics 与真实 MinIO conditional-create 尚未验证。
+- object write + DB commit 不是分布式事务；数据库提交失败时可能留下不可变 orphan object。
+- 同一知识库上的慢 storage 或锁等待可能长期占用 AnyIO worker pool；后续需引入 timeout、limiter 或队列化方案。
+- 客户端取消后已接管的 worker 可能后台完成，目前缺少专门的结果日志、任务关联与可观测性。
+- copied spool 的落盘复制仍在异步路径中执行，可能造成短暂事件循环延迟。
+- lease duplicate claim 在当前生产调用路径不可达，但尚未显式拒绝；service 的 caller-owned temporary file contract 也应后续明确。
+- DOCX 只检查 ZIP magic；100 MiB 限制只在 service layer；digest 未加入 domain prefix。
+- Task 4 final PASS 不代表里程碑完成：Phase 5 / Milestone 3 继续保持 `in_progress`，下一步为 Task 5：native parsing and Obsidian import。
