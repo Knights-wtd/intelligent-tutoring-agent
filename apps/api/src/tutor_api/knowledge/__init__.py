@@ -8,6 +8,23 @@ from tutor_api.knowledge.ocr import (
     OCRErrorCode,
     extract_text_safely,
 )
+from tutor_api.knowledge.parsers import (
+    BlockKind,
+    ParsedBlock,
+    ParsedDocument,
+    ParsedPage,
+    ParseError,
+    ParseErrorCode,
+    VaultAttachment,
+    VaultNote,
+    VaultParseResult,
+    WikiLink,
+    parse_docx,
+    parse_markdown,
+    parse_obsidian_vault_zip,
+    parse_pdf,
+    parse_png,
+)
 from tutor_api.knowledge.storage import (
     MemoryObjectStorage,
     ObjectAlreadyExistsError,
@@ -18,10 +35,16 @@ from tutor_api.knowledge.storage import (
 )
 
 __all__ = [
+    "BlockKind",
     "DisabledOCRAdapter",
     "EmbeddingAdapter",
     "HashEmbeddingAdapter",
     "MemoryObjectStorage",
+    "ParseError",
+    "ParseErrorCode",
+    "ParsedBlock",
+    "ParsedDocument",
+    "ParsedPage",
     "OCRAdapter",
     "OCRError",
     "OCRErrorCode",
@@ -29,6 +52,15 @@ __all__ = [
     "ObjectNotFoundError",
     "ObjectStorage",
     "StoredObject",
+    "VaultAttachment",
+    "VaultNote",
+    "VaultParseResult",
+    "WikiLink",
     "build_document_object_key",
+    "parse_docx",
+    "parse_markdown",
+    "parse_obsidian_vault_zip",
+    "parse_pdf",
+    "parse_png",
     "extract_text_safely",
 ]
