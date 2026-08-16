@@ -320,147 +320,68 @@ def upload_prepared_knowledge_document(
     if knowledge_base is None:
         raise _upload_error(status.HTTP_404_NOT_FOUND, "资源不存在")
     request_key_hash = _normalize_idempotency_key(idempotency_key)
-    try:
-        replay = session.scalar(
-            select(KnowledgeUploadRequest).where(
-                KnowledgeUploadRequest.knowledge_base_id == knowledge_base.id,
-                KnowledgeUploadRequest.request_key_hash == request_key_hash,
-            )
+    replay = session.scalar(
+        select(KnowledgeUploadRequest).where(
+            KnowledgeUploadRequest.knowledge_base_id == knowledge_base.id,
+            KnowledgeUploadRequest.request_key_hash == request_key_hash,
         )
-        if replay is not None:
-            if (
-                replay.source_name != prepared.source_name
-                or replay.content_sha256 != prepared.content_sha256
-            ):
-                raise _upload_error(status.HTTP_409_CONFLICT, "幂等请求冲突")
-            return _load_upload_result(session, replay)
+    )
+    if replay is not None:
+        if (
+            replay.source_name != prepared.source_name
+            or replay.content_sha256 != prepared.content_sha256
+        ):
+            raise _upload_error(status.HTTP_409_CONFLICT, "幂等请求冲突")
+        return _load_upload_result(session, replay)
 
-        document = session.scalar(
-            select(Document).where(
-                Document.knowledge_base_id == knowledge_base.id,
-                Document.source_kind == _UPLOAD_SOURCE_KIND,
-                Document.source_key == prepared.source_name,
-            )
+    document = session.scalar(
+        select(Document).where(
+            Document.knowledge_base_id == knowledge_base.id,
+            Document.source_kind == _UPLOAD_SOURCE_KIND,
+            Document.source_key == prepared.source_name,
         )
-        new_document = document is None
-        if document is None:
-            document = Document(
-                id=uuid4(),
-                space_id=knowledge_base.space_id,
-                knowledge_base_id=knowledge_base.id,
-                owner_user_id=user.id,
-                created_by_user_id=user.id,
-                title=prepared.source_name,
-                source_kind=_UPLOAD_SOURCE_KIND,
-                source_key=prepared.source_name,
-                state=DocumentState.ACTIVE,
-            )
-
-        existing_version = None if new_document else session.scalar(
-            select(DocumentVersion).where(
-                DocumentVersion.document_id == document.id,
-                DocumentVersion.content_sha256 == prepared.content_sha256,
-            )
-        )
-        if existing_version is not None:
-            existing_job = session.scalar(
-                select(IngestionJob).where(
-                    IngestionJob.document_version_id == existing_version.id,
-                    IngestionJob.kind == IngestionJobKind.PARSE_DOCUMENT,
-                )
-            )
-            if existing_job is None:
-                raise RuntimeError("uploaded version has no parse job")
-            try:
-                with session.begin_nested():
-                    _add_upload_request(
-                        session,
-                        knowledge_base=knowledge_base,
-                        request_key_hash=request_key_hash,
-                        prepared=prepared,
-                        document=document,
-                        version=existing_version,
-                        job=existing_job,
-                    )
-                    session.flush()
-            except IntegrityError as error:
-                if not _is_upload_request_key_conflict(error):
-                    raise
-                replay = session.scalar(
-                    select(KnowledgeUploadRequest).where(
-                        KnowledgeUploadRequest.knowledge_base_id == knowledge_base.id,
-                        KnowledgeUploadRequest.request_key_hash == request_key_hash,
-                    )
-                )
-                if replay is None:
-                    raise
-                if (
-                    replay.source_name != prepared.source_name
-                    or replay.content_sha256 != prepared.content_sha256
-                ):
-                    raise _upload_error(status.HTTP_409_CONFLICT, "幂等请求冲突") from None
-                return _load_upload_result(session, replay)
-            return KnowledgeUploadResult(document, existing_version, existing_job)
-
-        next_version = 1 if new_document else (
-            session.scalar(
-                select(func.max(DocumentVersion.version_number)).where(
-                    DocumentVersion.document_id == document.id
-                )
-            )
-            or 0
-        ) + 1
-        version = DocumentVersion(
+    )
+    new_document = document is None
+    if document is None:
+        document = Document(
             id=uuid4(),
             space_id=knowledge_base.space_id,
             knowledge_base_id=knowledge_base.id,
-            document_id=document.id,
-            version_number=next_version,
-            content_sha256=prepared.content_sha256,
-            object_key="pending",
-            content_type=prepared.content_type,
-            state=DocumentVersionState.UPLOADED,
+            owner_user_id=user.id,
             created_by_user_id=user.id,
+            title=prepared.source_name,
+            source_kind=_UPLOAD_SOURCE_KIND,
+            source_key=prepared.source_name,
+            state=DocumentState.ACTIVE,
         )
-        version.object_key = build_document_object_key(
-            knowledge_base.space_id, document.id, version.id, prepared.source_name
+
+    existing_version = None if new_document else session.scalar(
+        select(DocumentVersion).where(
+            DocumentVersion.document_id == document.id,
+            DocumentVersion.content_sha256 == prepared.content_sha256,
         )
-        job = IngestionJob(
-            id=uuid4(),
-            space_id=knowledge_base.space_id,
-            knowledge_base_id=knowledge_base.id,
-            document_id=document.id,
-            document_version_id=version.id,
-            kind=IngestionJobKind.PARSE_DOCUMENT,
-            state=IngestionJobState.QUEUED,
-            idempotency_key=f"upload:{request_key_hash}",
-            checkpoint={},
-            created_by_user_id=user.id,
+    )
+    if existing_version is not None:
+        existing_job = session.scalar(
+            select(IngestionJob).where(
+                IngestionJob.document_version_id == existing_version.id,
+                IngestionJob.kind == IngestionJobKind.PARSE_DOCUMENT,
+            )
         )
+        if existing_job is None:
+            raise RuntimeError("uploaded version has no parse job")
         try:
             with session.begin_nested():
-                if new_document:
-                    session.add(document)
-                session.add_all([version, job])
                 _add_upload_request(
                     session,
                     knowledge_base=knowledge_base,
                     request_key_hash=request_key_hash,
                     prepared=prepared,
                     document=document,
-                    version=version,
-                    job=job,
+                    version=existing_version,
+                    job=existing_job,
                 )
                 session.flush()
-                prepared.temporary_file.seek(0)
-                _put_upload_object(
-                    object_storage,
-                    version.object_key,
-                    prepared.temporary_file,
-                    content_type=prepared.content_type,
-                )
-        except HTTPException:
-            raise
         except IntegrityError as error:
             if not _is_upload_request_key_conflict(error):
                 raise
@@ -478,8 +399,84 @@ def upload_prepared_knowledge_document(
             ):
                 raise _upload_error(status.HTTP_409_CONFLICT, "幂等请求冲突") from None
             return _load_upload_result(session, replay)
-        except Exception:
-            raise _upload_error(status.HTTP_503_SERVICE_UNAVAILABLE, "上传服务暂不可用") from None
-        return KnowledgeUploadResult(document, version, job)
-    finally:
-        prepared.temporary_file.close()
+        return KnowledgeUploadResult(document, existing_version, existing_job)
+
+    next_version = 1 if new_document else (
+        session.scalar(
+            select(func.max(DocumentVersion.version_number)).where(
+                DocumentVersion.document_id == document.id
+            )
+        )
+        or 0
+    ) + 1
+    version = DocumentVersion(
+        id=uuid4(),
+        space_id=knowledge_base.space_id,
+        knowledge_base_id=knowledge_base.id,
+        document_id=document.id,
+        version_number=next_version,
+        content_sha256=prepared.content_sha256,
+        object_key="pending",
+        content_type=prepared.content_type,
+        state=DocumentVersionState.UPLOADED,
+        created_by_user_id=user.id,
+    )
+    version.object_key = build_document_object_key(
+        knowledge_base.space_id, document.id, version.id, prepared.source_name
+    )
+    job = IngestionJob(
+        id=uuid4(),
+        space_id=knowledge_base.space_id,
+        knowledge_base_id=knowledge_base.id,
+        document_id=document.id,
+        document_version_id=version.id,
+        kind=IngestionJobKind.PARSE_DOCUMENT,
+        state=IngestionJobState.QUEUED,
+        idempotency_key=f"upload:{request_key_hash}",
+        checkpoint={},
+        created_by_user_id=user.id,
+    )
+    try:
+        with session.begin_nested():
+            if new_document:
+                session.add(document)
+            session.add_all([version, job])
+            _add_upload_request(
+                session,
+                knowledge_base=knowledge_base,
+                request_key_hash=request_key_hash,
+                prepared=prepared,
+                document=document,
+                version=version,
+                job=job,
+            )
+            session.flush()
+            prepared.temporary_file.seek(0)
+            _put_upload_object(
+                object_storage,
+                version.object_key,
+                prepared.temporary_file,
+                content_type=prepared.content_type,
+            )
+    except HTTPException:
+        raise
+    except IntegrityError as error:
+        if not _is_upload_request_key_conflict(error):
+            raise
+        replay = session.scalar(
+            select(KnowledgeUploadRequest).where(
+                KnowledgeUploadRequest.knowledge_base_id == knowledge_base.id,
+                KnowledgeUploadRequest.request_key_hash == request_key_hash,
+            )
+        )
+        if replay is None:
+            raise
+        if (
+            replay.source_name != prepared.source_name
+            or replay.content_sha256 != prepared.content_sha256
+        ):
+            raise _upload_error(status.HTTP_409_CONFLICT, "幂等请求冲突") from None
+        return _load_upload_result(session, replay)
+    except Exception:
+        raise _upload_error(status.HTTP_503_SERVICE_UNAVAILABLE, "上传服务暂不可用") from None
+    return KnowledgeUploadResult(document, version, job)

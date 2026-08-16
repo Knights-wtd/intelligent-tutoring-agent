@@ -10,12 +10,13 @@ import pytest
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from starlette.datastructures import Headers
 
 import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.identity.models  # noqa: F401
 import tutor_api.knowledge.models  # noqa: F401
+import tutor_api.knowledge.router as knowledge_router
 import tutor_api.knowledge.service as knowledge_service
 import tutor_api.spaces.models  # noqa: F401
 from tutor_api.classrooms.models import ClassroomRole
@@ -116,6 +117,16 @@ class BlockingStorage(MemoryObjectStorage):
         return super().put_file_if_absent(key, data, content_type=content_type)
 
 
+class TrackingTemporaryFile(io.BytesIO):
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        super().close()
+
+
 class RecordingSessionFactory:
     def __init__(self, factory) -> None:
         self.factory = factory
@@ -205,6 +216,118 @@ def test_prepare_upload_closes_temporary_file_when_cancelled(monkeypatch) -> Non
         asyncio.run(_prepare_upload(CancellingUpload(), 1024))
 
     assert temporary_file.closed
+
+
+def test_cancelled_upload_keeps_temporary_file_until_worker_finishes(monkeypatch) -> None:
+    client, engine, _ = make_client()
+    registration = register(client, "cancel-worker")
+    knowledge_base = create_knowledge_base(
+        client, registration["personal_space"]["id"], "cancel worker knowledge"
+    )
+    setup_factory = sessionmaker(bind=engine)
+    with setup_factory() as session:
+        current_user = session.get(User, UUID(registration["user"]["id"]))
+        assert current_user is not None
+        session.expunge(current_user)
+
+    session_events: list[tuple[int, str, int]] = []
+    worker_finished = threading.Event()
+
+    class ThreadRecordingSession(Session):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            self.owner_thread = threading.get_ident()
+            session_events.append((id(self), "create", self.owner_thread))
+
+        def commit(self) -> None:
+            session_events.append((id(self), "commit", threading.get_ident()))
+            super().commit()
+
+        def rollback(self) -> None:
+            session_events.append((id(self), "rollback", threading.get_ident()))
+            super().rollback()
+
+        def close(self) -> None:
+            session_events.append((id(self), "close", threading.get_ident()))
+            super().close()
+
+    original_commit = knowledge_router._commit_knowledge_upload
+
+    def record_worker_completion(*args, **kwargs):
+        try:
+            return original_commit(*args, **kwargs)
+        finally:
+            worker_finished.set()
+
+    monkeypatch.setattr(
+        knowledge_router, "_commit_knowledge_upload", record_worker_completion
+    )
+    temporary_file = TrackingTemporaryFile()
+    monkeypatch.setattr(
+        knowledge_service.tempfile,
+        "SpooledTemporaryFile",
+        lambda **_: temporary_file,
+    )
+
+    storage = BlockingStorage()
+    client.app.state.session_factory = sessionmaker(
+        bind=engine, class_=ThreadRecordingSession
+    )
+    client.app.state.object_storage = storage
+    request = SimpleNamespace(app=client.app)
+    uploaded_file = UploadFile(
+        io.BytesIO(b"%PDF-1.7\ncancel worker"),
+        filename="cancel-worker.pdf",
+        headers=Headers({"content-type": "application/pdf"}),
+    )
+    knowledge_base_id = UUID(knowledge_base["id"])
+
+    async def exercise() -> None:
+        event_loop_thread = threading.get_ident()
+        task = asyncio.create_task(
+            post_knowledge_document(
+                knowledge_base_id,
+                request,
+                current_user,
+                uploaded_file,
+                "cancel-worker-key",
+            )
+        )
+        try:
+            assert await asyncio.to_thread(storage.started.wait, 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert uploaded_file.file.closed
+            assert not temporary_file.closed
+            assert temporary_file.close_calls == 0
+        finally:
+            storage.release.set()
+        assert await asyncio.to_thread(worker_finished.wait, 2)
+        assert temporary_file.closed
+        assert temporary_file.close_calls == 1
+
+        owner_threads = {
+            session_id: thread_id
+            for session_id, event, thread_id in session_events
+            if event == "create"
+        }
+        assert len(owner_threads) == 2
+        assert any(event == "commit" for _, event, _ in session_events)
+        assert not any(event == "rollback" for _, event, _ in session_events)
+        assert all(thread_id != event_loop_thread for _, _, thread_id in session_events)
+        assert all(
+            thread_id == owner_threads[session_id]
+            for session_id, _, thread_id in session_events
+        )
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        storage.release.set()
+        worker_finished.wait(timeout=2)
+        client.close()
+        engine.dispose()
 
 
 def test_upload_settings_are_centralized_and_bounded() -> None:

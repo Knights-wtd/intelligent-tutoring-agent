@@ -1,3 +1,4 @@
+from threading import Lock
 from typing import Annotated
 from uuid import UUID
 
@@ -27,6 +28,35 @@ from tutor_api.knowledge.storage import ObjectStorage
 router = APIRouter(tags=["knowledge bases"])
 
 
+class _PreparedUploadLease:
+    def __init__(self, prepared: PreparedUpload) -> None:
+        self._prepared = prepared
+        self._lock = Lock()
+        self._worker_owned = False
+        self._closed = False
+
+    def claim_for_worker(self) -> PreparedUpload:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("prepared upload is no longer available")
+            self._worker_owned = True
+            return self._prepared
+
+    def close_if_route_owned(self) -> None:
+        with self._lock:
+            if self._worker_owned or self._closed:
+                return
+            self._closed = True
+        self._prepared.temporary_file.close()
+
+    def close_from_worker(self) -> None:
+        with self._lock:
+            if not self._worker_owned or self._closed:
+                return
+            self._closed = True
+        self._prepared.temporary_file.close()
+
+
 def _load_upload_user(session: Session, user_id: UUID) -> User:
     user = session.get(User, user_id)
     if user is None:
@@ -49,34 +79,38 @@ def _commit_knowledge_upload(
     session_factory: sessionmaker[Session],
     user_id: UUID,
     knowledge_base_id: UUID,
-    prepared: PreparedUpload,
+    upload_lease: _PreparedUploadLease,
     idempotency_key: str,
     object_storage: ObjectStorage,
 ) -> KnowledgeUploadResponse:
-    with session_scope(session_factory) as session:
-        result = upload_prepared_knowledge_document(
-            session,
-            _load_upload_user(session, user_id),
-            knowledge_base_id,
-            prepared,
-            idempotency_key,
-            object_storage,
-        )
-        return KnowledgeUploadResponse(
-            document_id=result.document.id,
-            document_version_id=result.version.id,
-            ingestion_job_id=result.job.id,
-            space_id=result.document.space_id,
-            knowledge_base_id=result.document.knowledge_base_id,
-            source_name=result.document.source_key,
-            version_number=result.version.version_number,
-            content_sha256=result.version.content_sha256,
-            content_type=result.version.content_type,
-            document_state=result.document.state,
-            version_state=result.version.state,
-            job_state=result.job.state,
-            created_at=result.version.created_at,
-        )
+    prepared = upload_lease.claim_for_worker()
+    try:
+        with session_scope(session_factory) as session:
+            result = upload_prepared_knowledge_document(
+                session,
+                _load_upload_user(session, user_id),
+                knowledge_base_id,
+                prepared,
+                idempotency_key,
+                object_storage,
+            )
+            return KnowledgeUploadResponse(
+                document_id=result.document.id,
+                document_version_id=result.version.id,
+                ingestion_job_id=result.job.id,
+                space_id=result.document.space_id,
+                knowledge_base_id=result.document.knowledge_base_id,
+                source_name=result.document.source_key,
+                version_number=result.version.version_number,
+                content_sha256=result.version.content_sha256,
+                content_type=result.version.content_type,
+                document_state=result.document.state,
+                version_state=result.version.state,
+                job_state=result.job.state,
+                created_at=result.version.created_at,
+            )
+    finally:
+        upload_lease.close_from_worker()
 
 
 @router.post(
@@ -139,6 +173,7 @@ async def post_knowledge_document(
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> KnowledgeUploadResponse:
     prepared: PreparedUpload | None = None
+    upload_lease: _PreparedUploadLease | None = None
     session_factory = _session_factory(request)
     try:
         await run_in_threadpool(
@@ -156,16 +191,19 @@ async def post_knowledge_document(
         prepared = await _prepare_upload(
             file, request.app.state.settings.knowledge_upload_max_bytes
         )
+        upload_lease = _PreparedUploadLease(prepared)
         return await run_in_threadpool(
             _commit_knowledge_upload,
             session_factory,
             current_user.id,
             knowledge_base_id,
-            prepared,
+            upload_lease,
             idempotency_key,
             object_storage,
         )
     finally:
-        if prepared is not None:
+        if upload_lease is not None:
+            upload_lease.close_if_route_owned()
+        elif prepared is not None:
             prepared.temporary_file.close()
         await file.close()
