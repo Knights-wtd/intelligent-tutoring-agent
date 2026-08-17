@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import ctypes
 import os
+import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+import tutor_api.knowledge.ocr as ocr_module
 from tutor_api.knowledge.ocr import (
     OCRError,
     OCRErrorCode,
@@ -94,7 +97,14 @@ class FakeOCR:
 
     backend = "fake"
 
-    def extract_text(self, image: bytes, *, languages: tuple[str, ...]) -> str:
+    def extract_text(
+        self,
+        image: bytes,
+        *,
+        languages: tuple[str, ...],
+        timeout_seconds: float | None = None,
+    ) -> str:
+        assert timeout_seconds is None or timeout_seconds > 0
         self.calls.append((image, languages))
         if image in self.fail_images:
             raise RuntimeError("/private/provider --token secret stderr details")
@@ -511,6 +521,168 @@ def _assert_process_stops(pid: int, *, timeout_seconds: float = 1.0) -> None:
     assert not _process_is_running(pid)
 
 
+def _stop_recorded_processes(processes: list[subprocess.Popen[bytes]]) -> None:
+    for process in processes:
+        for stream in (process.stdin, process.stdout):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1.0)
+
+
+def _live_ocr_io_threads() -> set[threading.Thread]:
+    targets = {ocr_module._read_process_stdout, ocr_module._write_process_stdin}
+    return {
+        thread
+        for thread in threading.enumerate()
+        if thread.name.startswith("ocr-") or getattr(thread, "_target", None) in targets
+    }
+
+
+def test_tesseract_second_thread_start_failure_cleans_process_and_started_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_pid_file = tmp_path / "thread-start-parent.pid"
+    child_pid_file = tmp_path / "thread-start-child.pid"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_PARENT_PID", str(parent_pid_file))
+    monkeypatch.setenv("OCR_CHILD_PID", str(child_pid_file))
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+Path(os.environ["OCR_PARENT_PID"]).write_text(str(os.getpid()), encoding="ascii")
+child = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(5)"],
+    stdin=sys.stdin,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+Path(os.environ["OCR_CHILD_PID"]).write_text(str(child.pid), encoding="ascii")
+time.sleep(5)
+""",
+    )
+    real_popen = ocr_module.subprocess.Popen
+    real_start = ocr_module.threading.Thread.start
+    processes: list[subprocess.Popen[bytes]] = []
+    helper_pids: list[int] = []
+    io_start_count = 0
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def fail_second_io_start(thread: threading.Thread) -> None:
+        nonlocal io_start_count
+        target = getattr(thread, "_target", None)
+        if target in {ocr_module._read_process_stdout, ocr_module._write_process_stdin}:
+            io_start_count += 1
+            if io_start_count == 2:
+                helper_pids.extend(
+                    [
+                        _wait_for_pid_file(parent_pid_file, timeout_seconds=3.0),
+                        _wait_for_pid_file(child_pid_file, timeout_seconds=3.0),
+                    ]
+                )
+                raise RuntimeError("private thread-start secret")
+        real_start(thread)
+
+    monkeypatch.setattr(ocr_module.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(ocr_module.threading.Thread, "start", fail_second_io_start)
+    before_threads = _live_ocr_io_threads()
+
+    try:
+        with pytest.raises(OCRError) as raised:
+            TesseractOCRAdapter(
+                executable=sys.executable,
+                timeout_seconds=2.0,
+            ).extract_text(b"image", languages=("eng",))
+
+        assert raised.value.code is OCRErrorCode.PROCESSING_FAILED
+        assert raised.value.__cause__ is None
+        assert raised.value.__context__ is None
+        assert "secret" not in repr(raised.value)
+        assert io_start_count == 2
+        assert len(processes) == 1
+        assert processes[0].poll() is not None
+        assert len(helper_pids) == 2
+        for helper_pid in helper_pids:
+            _assert_process_stops(helper_pid)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and _live_ocr_io_threads() != before_threads:
+            time.sleep(0.01)
+        assert _live_ocr_io_threads() == before_threads
+    finally:
+        _stop_recorded_processes(processes)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows suspended process and Job Object behavior")
+def test_tesseract_windows_job_failure_never_resumes_helper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    side_effect_file = tmp_path / "must-not-run.txt"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_SIDE_EFFECT_FILE", str(side_effect_file))
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+import time
+from pathlib import Path
+
+Path(os.environ["OCR_SIDE_EFFECT_FILE"]).write_text("ran", encoding="ascii")
+time.sleep(5)
+""",
+    )
+    real_popen = ocr_module.subprocess.Popen
+    processes: list[subprocess.Popen[bytes]] = []
+    resume_calls: list[int] = []
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def forbidden_resume(process_id: int) -> bool:
+        resume_calls.append(process_id)
+        return False
+
+    monkeypatch.setattr(ocr_module.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(ocr_module, "_create_windows_job", lambda process: None)
+    monkeypatch.setattr(ocr_module, "_resume_windows_process", forbidden_resume)
+
+    try:
+        with pytest.raises(OCRError) as raised:
+            TesseractOCRAdapter(
+                executable=sys.executable,
+                timeout_seconds=1.0,
+            ).extract_text(b"image", languages=("eng",))
+
+        assert raised.value.code is OCRErrorCode.PROCESSING_FAILED
+        assert raised.value.__cause__ is None
+        assert raised.value.__context__ is None
+        assert resume_calls == []
+        assert not side_effect_file.exists()
+        assert len(processes) == 1
+        assert processes[0].poll() is not None
+    finally:
+        _stop_recorded_processes(processes)
+
+
 def test_tesseract_rejects_input_before_starting_process(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -537,7 +709,9 @@ def test_tesseract_streams_bounded_stdout_and_terminates_early(
     _write_tesseract_helper(
         tmp_path,
         """import os
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -572,6 +746,17 @@ def test_tesseract_timeout_kills_descendant_holding_pipes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    windows_jobs: list[int | None] = []
+    if os.name == "nt":
+        real_create_windows_job = ocr_module._create_windows_job
+
+        def recording_create_windows_job(process: subprocess.Popen[bytes]) -> int | None:
+            job = real_create_windows_job(process)
+            windows_jobs.append(job)
+            return job
+
+        monkeypatch.setattr(ocr_module, "_create_windows_job", recording_create_windows_job)
+
     parent_pid_file = tmp_path / "parent.pid"
     child_pid_file = tmp_path / "child.pid"
     survivor_file = tmp_path / "survived.txt"
@@ -617,6 +802,66 @@ time.sleep(5)
     child_pid = _wait_for_pid_file(child_pid_file)
     assert raised.value.code is OCRErrorCode.TIMEOUT
     assert elapsed < 1.0
+    if os.name == "nt":
+        assert windows_jobs and all(job is not None for job in windows_jobs)
+    _assert_process_stops(parent_pid)
+    _assert_process_stops(child_pid)
+    time.sleep(0.7)
+    assert not survivor_file.exists()
+
+
+def test_tesseract_timeout_kills_descendant_inheriting_only_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_pid_file = tmp_path / "stdin-parent.pid"
+    child_pid_file = tmp_path / "stdin-child.pid"
+    survivor_file = tmp_path / "stdin-survived.txt"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_PARENT_PID", str(parent_pid_file))
+    monkeypatch.setenv("OCR_CHILD_PID", str(child_pid_file))
+    monkeypatch.setenv("OCR_SURVIVOR_FILE", str(survivor_file))
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+import subprocess
+import sys
+from pathlib import Path
+
+Path(os.environ["OCR_PARENT_PID"]).write_text(str(os.getpid()), encoding="ascii")
+child_code = (
+    "import os\\n"
+    "import time\\n"
+    "from pathlib import Path\\n"
+    "Path(os.environ['OCR_CHILD_PID']).write_text(str(os.getpid()), encoding='ascii')\\n"
+    "time.sleep(0.6)\\n"
+    "Path(os.environ['OCR_SURVIVOR_FILE']).write_text('alive', encoding='ascii')\\n"
+    "time.sleep(5)\\n"
+)
+subprocess.Popen(
+    [sys.executable, "-c", child_code],
+    stdin=sys.stdin,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+""",
+    )
+    adapter = TesseractOCRAdapter(
+        executable=sys.executable,
+        timeout_seconds=0.2,
+        max_input_bytes=16 * 1024 * 1024,
+        max_output_bytes=1024,
+    )
+    started = time.monotonic()
+
+    with pytest.raises(OCRError) as raised:
+        adapter.extract_text(b"x" * (8 * 1024 * 1024), languages=("eng",))
+
+    elapsed = time.monotonic() - started
+    parent_pid = _wait_for_pid_file(parent_pid_file)
+    child_pid = _wait_for_pid_file(child_pid_file)
+    assert raised.value.code is OCRErrorCode.TIMEOUT
+    assert 0.1 <= elapsed < 1.0
     _assert_process_stops(parent_pid)
     _assert_process_stops(child_pid)
     time.sleep(0.7)
@@ -656,8 +901,15 @@ class BudgetOCR:
 
     backend = "fake"
 
-    def extract_text(self, image: bytes, *, languages: tuple[str, ...]) -> str:
+    def extract_text(
+        self,
+        image: bytes,
+        *,
+        languages: tuple[str, ...],
+        timeout_seconds: float | None = None,
+    ) -> str:
         assert languages == ("eng",)
+        assert timeout_seconds is None or timeout_seconds > 0
         self.calls.append(image)
         return self.texts[image]
 
@@ -673,6 +925,88 @@ def _selected_pdf_document(page_count: int) -> ParsedDocument:
         blocks=(),
         pages=pages,
     )
+
+
+def test_selective_ocr_rejects_legacy_adapter_before_blocking_body() -> None:
+    class LegacyBlockingOCR:
+        backend = "legacy"
+
+        def __init__(self) -> None:
+            self.entered = False
+
+        def extract_text(self, image: bytes, *, languages: tuple[str, ...]) -> str:
+            del image, languages
+            self.entered = True
+            time.sleep(0.5)
+            return "late"
+
+    adapter = LegacyBlockingOCR()
+    renderer = BudgetRenderer(calls=[], images={1: b"a"})
+    started = time.monotonic()
+
+    result = apply_selective_ocr(
+        _selected_pdf_document(1),
+        b"pdf-source",
+        adapter=adapter,
+        renderer=renderer,
+        languages=("eng",),
+        max_pixels=10,
+        timeout_seconds=1.0,
+        max_evidence_bytes=10,
+        max_text_chars=10,
+        max_ocr_pages=1,
+        max_total_evidence_bytes=100,
+        max_total_text_chars=100,
+        max_total_seconds=0.1,
+    )
+
+    assert time.monotonic() - started < 0.2
+    assert adapter.entered is False
+    assert result.checkpoints[0].status is OCRPageStatus.FAILED
+    assert result.checkpoints[0].error_code is OCRErrorCode.PROCESSING_FAILED
+
+
+def test_selective_ocr_passes_positive_remaining_time_to_every_adapter() -> None:
+    class TimedOCR:
+        backend = "timed"
+
+        def __init__(self) -> None:
+            self.timeouts: list[float] = []
+
+        def extract_text(
+            self,
+            image: bytes,
+            *,
+            languages: tuple[str, ...],
+            timeout_seconds: float | None = None,
+        ) -> str:
+            del image, languages
+            assert timeout_seconds is not None
+            self.timeouts.append(timeout_seconds)
+            return "text"
+
+    adapter = TimedOCR()
+    renderer = BudgetRenderer(calls=[], images={1: b"a"})
+
+    result = apply_selective_ocr(
+        _selected_pdf_document(1),
+        b"pdf-source",
+        adapter=adapter,
+        renderer=renderer,
+        languages=("eng",),
+        max_pixels=10,
+        timeout_seconds=1.0,
+        max_evidence_bytes=10,
+        max_text_chars=10,
+        max_ocr_pages=1,
+        max_total_evidence_bytes=100,
+        max_total_text_chars=100,
+        max_total_seconds=0.2,
+    )
+
+    assert result.checkpoints[0].status is OCRPageStatus.SUCCEEDED
+    assert len(adapter.timeouts) == 1
+    assert 0 < adapter.timeouts[0] < 0.21
 
 
 def test_selective_ocr_enforces_cumulative_page_budget_before_render() -> None:
