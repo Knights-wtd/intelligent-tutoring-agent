@@ -524,6 +524,12 @@ class Chunk(Base):
     source_pointer: Mapped[str] = mapped_column(String(1024), nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    lexical_terms: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
     embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
     index_signature: Mapped[str] = mapped_column(String(512), nullable=False)
     embedding: Mapped[list[float]] = mapped_column(EmbeddingVector(), nullable=False)

@@ -20,17 +20,29 @@ from tutor_api.knowledge.access import (
     require_space_read_access,
     require_space_write_access,
 )
+from tutor_api.knowledge.indexing import (
+    ChunkingConfig,
+    EmbeddingAdapter,
+    IndexBuildRequest,
+    content_sha256,
+    prepare_index_build,
+)
 from tutor_api.knowledge.models import (
+    Block,
+    BlockKind,
     Document,
     DocumentState,
     DocumentVersion,
     DocumentVersionState,
+    IndexVersion,
     IngestionJob,
     IngestionJobKind,
     IngestionJobState,
     KnowledgeBase,
     KnowledgeUploadRequest,
+    Page,
 )
+from tutor_api.knowledge.parsers import ParsedBlock, ParsedBlockKind, ParsedDocument
 from tutor_api.knowledge.storage import (
     ObjectAlreadyExistsError,
     ObjectStorage,
@@ -480,3 +492,173 @@ def upload_prepared_knowledge_document(
     except Exception:
         raise _upload_error(status.HTTP_503_SERVICE_UNAVAILABLE, "上传服务暂不可用") from None
     return KnowledgeUploadResult(document, version, job)
+
+
+def _persisted_block_kind(block: ParsedBlock) -> BlockKind:
+    return {
+        ParsedBlockKind.HEADING: BlockKind.TITLE,
+        ParsedBlockKind.PARAGRAPH: BlockKind.PARAGRAPH,
+        ParsedBlockKind.TABLE: BlockKind.TABLE,
+    }[block.kind]
+
+
+def _parsed_page_groups(
+    parsed_document: ParsedDocument,
+) -> list[tuple[int, tuple[ParsedBlock, ...]]]:
+    if parsed_document.pages:
+        return [(page.page_number, page.blocks) for page in parsed_document.pages]
+    return [(1, parsed_document.blocks)]
+
+
+def _validate_existing_parsed_graph(
+    session: Session,
+    version: DocumentVersion,
+    parsed_document: ParsedDocument,
+) -> None:
+    pages = list(
+        session.scalars(
+            select(Page).where(Page.document_version_id == version.id).order_by(Page.page_number)
+        )
+    )
+    expected_pages = _parsed_page_groups(parsed_document)
+    if len(pages) != len(expected_pages):
+        raise RuntimeError("parsed_document_restart_conflict")
+    for page, (page_number, parsed_blocks) in zip(pages, expected_pages, strict=True):
+        expected_hash = content_sha256("\n".join(block.text for block in parsed_blocks))
+        expected_pointer = f"{parsed_document.source_name}#page={page_number}"
+        if (
+            page.space_id != version.space_id
+            or page.page_number != page_number
+            or page.source_pointer != expected_pointer
+            or page.content_sha256 != expected_hash
+        ):
+            raise RuntimeError("parsed_document_restart_conflict")
+        blocks = list(
+            session.scalars(select(Block).where(Block.page_id == page.id).order_by(Block.ordinal))
+        )
+        if len(blocks) != len(parsed_blocks):
+            raise RuntimeError("parsed_document_restart_conflict")
+        for ordinal, (stored, parsed) in enumerate(zip(blocks, parsed_blocks, strict=True)):
+            if (
+                stored.space_id != version.space_id
+                or stored.ordinal != ordinal
+                or stored.kind is not _persisted_block_kind(parsed)
+                or stored.source_pointer != parsed.source_pointer
+                or stored.content_sha256 != content_sha256(parsed.text)
+                or stored.text != parsed.text
+            ):
+                raise RuntimeError("parsed_document_restart_conflict")
+
+
+def _persist_parsed_graph(
+    session: Session,
+    version: DocumentVersion,
+    parsed_document: ParsedDocument,
+) -> None:
+    existing_page = session.scalar(
+        select(Page.id).where(Page.document_version_id == version.id).limit(1)
+    )
+    if existing_page is not None:
+        _validate_existing_parsed_graph(session, version, parsed_document)
+        return
+    for page_number, parsed_blocks in _parsed_page_groups(parsed_document):
+        page = Page(
+            space_id=version.space_id,
+            document_version_id=version.id,
+            page_number=page_number,
+            source_pointer=f"{parsed_document.source_name}#page={page_number}",
+            content_sha256=content_sha256("\n".join(block.text for block in parsed_blocks)),
+            source_metadata={},
+        )
+        session.add(page)
+        session.flush()
+        session.add_all(
+            [
+                Block(
+                    space_id=version.space_id,
+                    page_id=page.id,
+                    ordinal=ordinal,
+                    kind=_persisted_block_kind(block),
+                    source_pointer=block.source_pointer,
+                    content_sha256=content_sha256(block.text),
+                    text=block.text,
+                )
+                for ordinal, block in enumerate(parsed_blocks)
+            ]
+        )
+    session.flush()
+
+
+def _latest_ready_version_ids(session: Session, knowledge_base_id: UUID) -> tuple[UUID, ...]:
+    versions = session.scalars(
+        select(DocumentVersion)
+        .where(
+            DocumentVersion.knowledge_base_id == knowledge_base_id,
+            DocumentVersion.state == DocumentVersionState.READY,
+        )
+        .order_by(DocumentVersion.document_id, DocumentVersion.version_number.desc())
+    )
+    latest: dict[UUID, UUID] = {}
+    for version in versions:
+        latest.setdefault(version.document_id, version.id)
+    return tuple(sorted(latest.values(), key=str))
+
+
+def persist_parsed_document_and_enqueue_build(
+    session: Session,
+    *,
+    document_version_id: UUID,
+    parsed_document: ParsedDocument,
+    parser_signature: str,
+    ocr_signature: str,
+    chunking: ChunkingConfig,
+    embedding_adapter: EmbeddingAdapter,
+) -> IngestionJob:
+    """Persist immutable parser output and enqueue exactly one matching index build."""
+
+    version = session.get(DocumentVersion, document_version_id)
+    if version is None:
+        raise RuntimeError("document_version_not_found")
+    if version.state not in (DocumentVersionState.PARSING, DocumentVersionState.READY):
+        raise RuntimeError("document_version_not_parsing")
+    _persist_parsed_graph(session, version, parsed_document)
+    version.state = DocumentVersionState.READY
+    session.flush()
+    request = IndexBuildRequest(
+        space_id=version.space_id,
+        knowledge_base_id=version.knowledge_base_id,
+        created_by_user_id=version.created_by_user_id,
+        document_version_ids=_latest_ready_version_ids(session, version.knowledge_base_id),
+        parser_signature=parser_signature,
+        ocr_signature=ocr_signature,
+        chunking=chunking,
+    )
+    index: IndexVersion = prepare_index_build(session, request, embedding_adapter)
+    idempotency_key = f"build:{index.index_signature}"
+    existing = session.scalar(
+        select(IngestionJob).where(
+            IngestionJob.knowledge_base_id == version.knowledge_base_id,
+            IngestionJob.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        return existing
+    job = IngestionJob(
+        space_id=version.space_id,
+        knowledge_base_id=version.knowledge_base_id,
+        index_version_id=index.id,
+        kind=IngestionJobKind.BUILD_INDEX,
+        state=IngestionJobState.QUEUED,
+        idempotency_key=idempotency_key,
+        checkpoint={
+            "document_version_ids": [str(value) for value in request.document_version_ids],
+            "parser_signature": parser_signature,
+            "ocr_signature": ocr_signature,
+            "chunk_max_chars": chunking.max_chars,
+            "chunk_overlap_chars": chunking.overlap_chars,
+        },
+        created_by_user_id=version.created_by_user_id,
+    )
+    session.add(job)
+    session.flush()
+    return job
