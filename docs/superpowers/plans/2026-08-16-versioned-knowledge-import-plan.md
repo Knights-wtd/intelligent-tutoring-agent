@@ -66,10 +66,12 @@
 
 **Files:** Modify `knowledge/ocr.py`, `parsers.py`, and `apps/api/Dockerfile`; test `tests/test_knowledge_ocr.py`.
 
-- [ ] Test that OCR runs only for images/low-confidence PDF pages, preserves page numbers, bounds pixels/time/languages, and checkpoints partial failure without exposing provider details.
-- [ ] Implement Tesseract OCR and pypdfium2 page rendering only when needed.
-- [ ] Install English/Chinese Tesseract runtime packages in the container before returning to the non-root user.
-- [ ] Run fake-adapter tests and an optional local Tesseract smoke marker; commit `feat: add selective page OCR`.
+- [x] Test that OCR runs only for images/low-confidence PDF pages, preserves page numbers, bounds pixels/time/languages, and checkpoints partial failure without exposing provider details.
+- [x] Implement Tesseract OCR and pypdfium2 page rendering only when needed.
+- [x] Install English/Chinese Tesseract runtime packages in the container before returning to the non-root user.
+- [x] Run fake-adapter tests and an optional local Tesseract smoke marker; commit `feat: add selective page OCR`.
+
+**Delivery record (2026-08-17):** Task 6 final PASS. Delivery commits: `e2e2a6b feat: add selective page OCR`, `d9f244d fix: bound selective OCR resources`, and `5225691 fix: close OCR lifecycle gaps`. The initial complete specification review passed; the final independent incremental specification review passed with 11 focused tests, and the final independent quality/security review passed with 7 focused tests plus real BrokenPipe, Windows Job-handle, repeated-success, and repeated-timeout lifecycle probes. Final main-thread bounded verification: OCR 49 passed, adapter OCR 10 passed, parser 57 passed, targeted Ruff PASS, and `git diff --check d9f244d..5225691` PASS. Not run: the full API suite, real Tesseract/container smoke, Docker, PostgreSQL, MinIO, external services, a live POSIX process-group path, or a complex PDFium corpus.
 
 ### Task 7: Immutable indexing and reliable worker
 

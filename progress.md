@@ -340,3 +340,45 @@
 - PNG 仅为有界结构验证；XML 为字节模式 fail-closed 而非专用 hardened XML；YAML 在 `safe_load` 前只有 64 KiB 限制，节点/深度在 load 后检查。
 - ZIP 未拒绝 symlink 之外全部 Unix 特殊类型但当前不落盘；16 MiB 中央目录策略可能拒绝极端合法 ZIP，Vault 上层调高应限制可信调用方；输入仍先整体为 `bytes`。
 - 下一步：Task 6「selective OCR and page evidence」。不得将 Task 5 完成误记为整个“PDF/DOCX/Markdown/图片/Vault 导入”阶段或 Milestone 3 / Phase 5 完成。
+
+## Session: 2026-08-17 · Phase 5 / Task 6
+
+- **Status:** Task 6 final PASS；Milestone 3 / Phase 5 仍为 `in_progress`。
+- 交付提交：`e2e2a6b feat: add selective page OCR`、`d9f244d fix: bound selective OCR resources`、`5225691 fix: close OCR lifecycle gaps`。
+- 初始完整规格复审 PASS；最终独立增量规格复审 PASS；最终独立质量/安全复审 PASS。
+
+### 已交付
+
+- 选择性 OCR：仅 PNG 与 `needs_ocr=True` PDF 页进入 OCR；PDFium 子进程按需渲染，Tesseract adapter 处理页面，默认 backend disabled。
+- immutable evidence/checkpoint/result，保留 page number、block order 与 source pointer；支持 partial failure checkpoint，并对 provider error 做稳定映射和脱敏。
+- 单页 pixel/language/per-call output/input/time 上界，以及 document-level page/evidence/text/deadline 累计预算；subprocess stdout 有界。
+- 统一 `Popen` 后清理边界；Windows suspended + Job containment/fail-closed，移除 PID-tree fallback；POSIX process-group 静态路径；进程、pipe、I/O thread 与 handle 确定性清理。
+- 所有 adapter 使用 `timeout_seconds/remaining` 合同，legacy adapter body 前 fail-closed；stdin-only descendant deadline 映射为 `TIMEOUT`。
+- Dockerfile 在 non-root `USER` 前安装 English 与 Simplified Chinese Tesseract runtime 包。
+
+### 验证记录
+
+| 检查点 | 结果 |
+|---|---|
+| `d9f244d` 后 OCR / adapter OCR / parser | 44 / 10 / 57 passed |
+| `5225691` 后 `test_knowledge_ocr.py` | 49 passed |
+| `test_knowledge_adapters.py -k ocr` | 10 passed |
+| `test_knowledge_parsers.py` | 57 passed |
+| targeted Ruff | PASS |
+| `git diff --check d9f244d..5225691` | PASS |
+| 最终独立增量规格复审 | PASS；reviewer 11 focused passed |
+| 最终独立质量/安全复审 | PASS；reviewer 7 focused passed |
+| 生命周期探针 | 10× BrokenPipe 均 `PROCESSING_FAILED`；Windows Job handle 精确关闭 1 次；预热后 success 3×20 / timeout 3×10 handle 稳定、OCR I/O threads 归零 |
+| 完整 API suite | 未运行 |
+| 真实 Tesseract/container smoke、Docker、PostgreSQL、MinIO、外部服务 | 未运行 |
+| POSIX 实机 process-group、复杂 PDFium corpus | 未运行 |
+
+### 保留风险与下一步
+
+- 未运行真实 Tesseract/container smoke；POSIX process-group 路径未在实机执行，主动 `setsid`/改组 descendant 可逃离。
+- 未运行复杂 PDFium corpus；PDFium child 无 OS 级地址空间上限。每个 PDF OCR 页仍 spawn 并复制完整 PDF bytes，输入仍整体以 `bytes` 进入。
+- 安全预算可能拒绝极端合法页面；executable 必须为可信配置。
+- deadline-aware adapter 属于受信任 port 合同；若 adapter 声明支持但忽略 timeout，当前调用方无法强制终止。
+- Windows Job Assign 依赖 CPython `Popen._handle` 私有属性，需要随 Python 版本复核。
+- POSIX 强制 SIGKILL 位于第一次 bounded join 后，daemon I/O thread 理论上可能极短暂存活，但未观察到持久或线性泄漏。
+- 下一步：Task 7「immutable indexing and reliable worker」。不得将 Task 6 完成误记为整个导入阶段或 Milestone 3 / Phase 5 完成。

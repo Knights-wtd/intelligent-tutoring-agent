@@ -331,3 +331,37 @@
 - 16 MiB 中央目录是安全策略，可能拒绝极端 metadata-heavy 但合法的 ZIP；Vault 上层若允许调高预算，应只开放给可信调用方并继续设置上限。
 - 解析器调用前输入仍整体为 `bytes`；本轮资源限制主要防止解析阶段进一步无界物化，不限制上游完整上传缓冲。
 - Task 5 final PASS 不代表整个导入阶段或里程碑完成：选择性 OCR、页证据、索引、检索与引用仍未实现；Phase 5 / Milestone 3 保持 `in_progress`，下一步为 Task 6：selective OCR and page evidence。
+
+## 2026-08-17 Phase 5 · Task 6 关键结论
+
+### 最终状态与交付
+
+- Task 6「selective OCR and page evidence」final PASS；Phase 5 / Milestone 3 继续保持 `in_progress`。
+- 提交序列：`e2e2a6b feat: add selective page OCR`、`d9f244d fix: bound selective OCR resources`、`5225691 fix: close OCR lifecycle gaps`。
+- 初始完整规格复审 PASS。首轮质量复审指出 subprocess 输出/后代清理与文档累计资源预算问题，`d9f244d` 完成修复；后续质量复审又提出 4 个 Important，`5225691` 全部关闭。最终独立增量规格复审 PASS，最终独立质量/安全复审 PASS。
+
+### 设计与安全决策
+
+- OCR 仅针对 PNG 与 `needs_ocr=True` 的 PDF 页；PDFium child 按需渲染，Tesseract adapter 执行 OCR。默认 OCR backend 为 disabled，容器镜像只在 non-root `USER` 之前安装 English/Chinese Simplified Tesseract 包。
+- evidence、checkpoint 与 result 均为 immutable，保留 page number、block order、source pointer；partial failure 可恢复，provider 错误保持稳定映射与脱敏。
+- 预算采用双层边界：单页 pixel/language/per-call output/input/time 上限，以及 document-level page/evidence/text/deadline 累计上限；subprocess stdout 有界，避免文档规模线性放大单次调用资源。
+- `d9f244d` 补齐 bounded subprocess output、descendant 清理与文档累计预算。`5225691` 进一步统一 `Popen` 后清理边界，关闭第二个 `Thread.start` 失败泄漏；Windows 改为 suspended + Job fail-closed，并删除不安全 PID-tree fallback；所有 adapter 使用 `timeout_seconds/remaining` 合同，legacy adapter 在 body 前 fail-closed；stdin-only descendant deadline 正确映射为 `TIMEOUT`。
+- Windows Job containment、POSIX process-group 静态路径，以及进程、pipe、I/O thread、Job/process handle 的确定性清理共同构成生命周期边界。
+
+### 验证结论
+
+- `d9f244d` 后主线程验证：OCR 44 passed；adapter OCR 10 passed；parser 57 passed；targeted Ruff PASS；`git diff --check` PASS；新的增量规格复审 PASS。
+- `5225691` 后主线程最终限定验证：`test_knowledge_ocr.py` 49 passed；`test_knowledge_adapters.py -k ocr` 10 passed；`test_knowledge_parsers.py` 57 passed；targeted Ruff PASS；`git diff --check d9f244d..5225691` PASS。
+- 最终独立增量规格复审 PASS，reviewer 运行 11 focused passed。最终独立质量/安全复审 PASS，reviewer 运行 7 focused passed。
+- 质量 reviewer 的只读探针：10 次真实 BrokenPipe 全部稳定映射为 `PROCESSING_FAILED`；Windows Job handle 精确关闭 1 次；预热后成功 3×20 与 timeout 3×10 调用的 handle 数稳定，OCR I/O threads 归零。
+- 未运行完整 API suite、真实 Tesseract/container smoke、Docker、PostgreSQL、MinIO、外部服务、POSIX 实机 process-group 路径或复杂 PDFium corpus。
+
+### 非阻塞残余风险与下一步
+
+- 尚未运行真实 Tesseract/container smoke；尚未在 POSIX 实机执行 process-group 路径，主动 `setsid`/改组的 descendant 可能逃离。
+- 尚未运行复杂 PDFium corpus，PDFium child 没有 OS 级地址空间上限；每个 PDF OCR 页仍需 spawn 并复制完整 PDF bytes，输入也仍整体以 `bytes` 进入。
+- 安全预算可能拒绝极端但合法的页面；OCR executable 必须来自可信配置。
+- deadline-aware adapter 是受信任 port 合同；声明支持却忽略 timeout 的 adapter 无法由当前调用方强制终止。
+- Windows Job Assign 使用 CPython `Popen._handle` 私有属性，需要随 Python 版本复核。
+- POSIX 轻微风险：强制 SIGKILL 位于第一次 bounded join 后，理论上 daemon I/O thread 可能极短暂存活；现有重复探针没有发现持久或线性泄漏。
+- Task 6 final PASS 不代表整个导入阶段或 Milestone 3 完成；下一步为 Task 7「immutable indexing and reliable worker」。
