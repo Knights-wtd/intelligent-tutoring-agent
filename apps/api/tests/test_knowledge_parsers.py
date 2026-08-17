@@ -672,3 +672,38 @@ def test_vault_output_budgets_are_cumulative_across_notes(
         parse_obsidian_vault_zip(make_zip(entries), **limits)
 
     assert raised.value.code is ParseErrorCode.LIMIT_EXCEEDED
+
+
+def test_vault_rejects_large_central_directory_before_zipfile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    info = zipfile.ZipInfo("note.md")
+    info.comment = b"c" * 256
+    info.extra = b"\xfe\xca" + struct.pack("<H", 128) + b"x" * 128
+    vault = make_zip([(info, b"body")])
+    zipfile_calls: list[object] = []
+
+    def record_zipfile(*args: object, **kwargs: object) -> object:
+        zipfile_calls.append((args, kwargs))
+        raise AssertionError("ZipFile must not be constructed")
+
+    monkeypatch.setattr(
+        "tutor_api.knowledge.parsers.zipfile.ZipFile", record_zipfile
+    )
+
+    with pytest.raises(ParseError) as raised:
+        parse_obsidian_vault_zip(vault, max_central_directory_bytes=64)
+
+    assert raised.value.code is ParseErrorCode.LIMIT_EXCEEDED
+    assert zipfile_calls == []
+
+
+@pytest.mark.parametrize("invalid_limit", [0, -1, True, 1.5])
+def test_vault_rejects_invalid_central_directory_limit(
+    invalid_limit: object,
+) -> None:
+    with pytest.raises(ValueError):
+        parse_obsidian_vault_zip(
+            make_zip([("note.md", b"body")]),
+            max_central_directory_bytes=invalid_limit,  # type: ignore[arg-type]
+        )

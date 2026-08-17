@@ -34,6 +34,7 @@ _MAX_FRONTMATTER_BYTES = 64 * 1024
 _MAX_FRONTMATTER_NODES = 10_000
 _MAX_FRONTMATTER_DEPTH = 32
 _DEFAULT_MAX_COMPRESSION_RATIO = 100.0
+_DEFAULT_MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
 _DOCX_MAX_FILES = 2_048
 _DOCX_MAX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
 _DOCX_MAX_MEMBER_BYTES = 8 * 1024 * 1024
@@ -409,6 +410,7 @@ def _validate_archive_limits(
     max_uncompressed_bytes: int,
     max_member_bytes: int,
     max_compression_ratio: float,
+    max_central_directory_bytes: int,
     max_path_bytes: int,
     max_total_path_bytes: int,
     max_path_depth: int,
@@ -417,6 +419,7 @@ def _validate_archive_limits(
         max_files,
         max_uncompressed_bytes,
         max_member_bytes,
+        max_central_directory_bytes,
         max_path_bytes,
         max_total_path_bytes,
         max_path_depth,
@@ -434,7 +437,9 @@ def _validate_archive_limits(
         raise ValueError("archive limits must be positive finite values")
 
 
-def _preflight_classic_zip(data: bytes, *, max_entries: int) -> tuple[bytes, int]:
+def _preflight_classic_zip(
+    data: bytes, *, max_entries: int, max_central_directory_bytes: int
+) -> tuple[bytes, int]:
     raw = data if isinstance(data, bytes) else bytes(data)
     if len(raw) < 22:
         _raise(ParseErrorCode.UNSAFE_ARCHIVE)
@@ -469,6 +474,8 @@ def _preflight_classic_zip(data: bytes, *, max_entries: int) -> tuple[bytes, int
         _raise(ParseErrorCode.UNSAFE_ARCHIVE)
     if total_entries and raw[central_offset : central_offset + 4] != b"PK\x01\x02":
         _raise(ParseErrorCode.UNSAFE_ARCHIVE)
+    if central_size > max_central_directory_bytes:
+        _raise(ParseErrorCode.LIMIT_EXCEEDED)
     if total_entries > max_entries:
         _raise(ParseErrorCode.ARCHIVE_LIMIT_EXCEEDED)
     return raw, total_entries
@@ -482,6 +489,7 @@ def _read_archive(
     max_uncompressed_bytes: int,
     max_member_bytes: int,
     max_compression_ratio: float,
+    max_central_directory_bytes: int,
     max_path_bytes: int = _DEFAULT_MAX_PATH_BYTES,
     max_total_path_bytes: int = _DEFAULT_MAX_TOTAL_PATH_BYTES,
     max_path_depth: int = _DEFAULT_MAX_PATH_DEPTH,
@@ -493,6 +501,7 @@ def _read_archive(
         max_uncompressed_bytes=max_uncompressed_bytes,
         max_member_bytes=max_member_bytes,
         max_compression_ratio=max_compression_ratio,
+        max_central_directory_bytes=max_central_directory_bytes,
         max_path_bytes=max_path_bytes,
         max_total_path_bytes=max_total_path_bytes,
         max_path_depth=max_path_depth,
@@ -508,7 +517,11 @@ def _read_archive(
         or max_kept_total_bytes < 1
     ):
         raise ValueError("kept member limits must be positive integers")
-    raw, declared_entries = _preflight_classic_zip(data, max_entries=max_files)
+    raw, declared_entries = _preflight_classic_zip(
+        data,
+        max_entries=max_files,
+        max_central_directory_bytes=max_central_directory_bytes,
+    )
     suffixes = tuple(suffix.casefold() for suffix in keep_suffixes)
     try:
         with zipfile.ZipFile(BytesIO(raw)) as archive:
@@ -660,6 +673,7 @@ def parse_docx(data: bytes, *, source_name: str = "document.docx") -> ParsedDocu
         max_uncompressed_bytes=_DOCX_MAX_UNCOMPRESSED_BYTES,
         max_member_bytes=_DOCX_MAX_MEMBER_BYTES,
         max_compression_ratio=_DEFAULT_MAX_COMPRESSION_RATIO,
+        max_central_directory_bytes=_DEFAULT_MAX_CENTRAL_DIRECTORY_BYTES,
     )
     kept = dict(contents.kept)
     if "[Content_Types].xml" not in kept or "word/document.xml" not in kept:
@@ -1166,6 +1180,7 @@ def parse_obsidian_vault_zip(
     max_files: int = 5_000,
     max_uncompressed_bytes: int = 500 * 1024 * 1024,
     max_compression_ratio: float = _DEFAULT_MAX_COMPRESSION_RATIO,
+    max_central_directory_bytes: int = _DEFAULT_MAX_CENTRAL_DIRECTORY_BYTES,
     max_path_bytes: int = _DEFAULT_MAX_PATH_BYTES,
     max_total_path_bytes: int = _DEFAULT_MAX_TOTAL_PATH_BYTES,
     max_path_depth: int = _DEFAULT_MAX_PATH_DEPTH,
@@ -1193,6 +1208,7 @@ def parse_obsidian_vault_zip(
         max_uncompressed_bytes=max_uncompressed_bytes,
         max_member_bytes=max_uncompressed_bytes,
         max_compression_ratio=max_compression_ratio,
+        max_central_directory_bytes=max_central_directory_bytes,
         max_path_bytes=max_path_bytes,
         max_total_path_bytes=max_total_path_bytes,
         max_path_depth=max_path_depth,
