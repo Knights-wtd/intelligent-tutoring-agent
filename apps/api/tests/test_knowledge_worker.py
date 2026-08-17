@@ -578,6 +578,101 @@ def test_terminal_build_failure_fails_target_and_cleans_partial_chunks(
         ) == 0
 
 
+def test_changed_embedding_contract_requeues_build_without_replacing_active_index(
+    factory: sessionmaker[Session],
+) -> None:
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    with factory.begin() as session:
+        adapter, old_active, old_target, old_job, version = real_build_target(
+            session, suffix="changed-contract", now=now
+        )
+        old_active_id = old_active.id
+        old_target_id = old_target.id
+        old_job_id = old_job.id
+        old_job_key = old_job.idempotency_key
+
+    class SignatureChangedEmbedding:
+        backend = adapter.backend
+        model = adapter.model
+        dimension = adapter.dimension
+        signature = f"{adapter.signature}:adapter-v2"
+
+        def embed(self, text: str) -> list[float]:
+            return adapter.embed(text)
+
+    replacement_adapter = SignatureChangedEmbedding()
+    config = WorkerConfig(worker_id="changed-contract-worker", retry_delay=timedelta(0))
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.BUILD_INDEX: make_build_index_handler(replacement_adapter)},
+        config=config,
+        now=now,
+    )
+
+    with factory() as session:
+        completed_old_job = session.get(IngestionJob, old_job_id)
+        failed_old_target = session.get(IndexVersion, old_target_id)
+        preserved_active = session.get(IndexVersion, old_active_id)
+        replacements = list(
+            session.scalars(
+                select(IngestionJob).where(
+                    IngestionJob.kind == IngestionJobKind.BUILD_INDEX,
+                    IngestionJob.idempotency_key != old_job_key,
+                )
+            )
+        )
+        assert completed_old_job and completed_old_job.state is IngestionJobState.COMPLETED
+        assert completed_old_job.index_version_id == old_target_id
+        assert completed_old_job.idempotency_key == old_job_key
+        assert failed_old_target and failed_old_target.state is IndexVersionState.FAILED
+        assert preserved_active and preserved_active.state is IndexVersionState.ACTIVE
+        assert session.scalar(
+            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == old_target_id)
+        ) == 0
+        assert len(replacements) == 1
+        replacement = replacements[0]
+        replacement_target = session.get(IndexVersion, replacement.index_version_id)
+        assert replacement.state is IngestionJobState.QUEUED
+        assert replacement_target and replacement_target.state is IndexVersionState.BUILDING
+        assert replacement.index_version_id != old_target_id
+        assert replacement.idempotency_key == f"build:{replacement_target.index_signature}"
+        assert replacement.checkpoint == {
+            "document_version_ids": [str(version.id)],
+            "parser_signature": old_target.parser_signature,
+            "ocr_signature": old_target.ocr_signature,
+            "chunk_max_chars": ChunkingConfig().max_chars,
+            "chunk_overlap_chars": ChunkingConfig().overlap_chars,
+        }
+        replacement_job_id = replacement.id
+        replacement_target_id = replacement_target.id
+        replacement_available_at = replacement.available_at
+
+    with factory.begin() as session:
+        completed_old_job = session.get(IngestionJob, old_job_id)
+        assert completed_old_job is not None
+        make_build_index_handler(replacement_adapter)(session, completed_old_job)
+        assert session.scalar(
+            select(func.count()).select_from(IngestionJob).where(
+                IngestionJob.kind == IngestionJobKind.BUILD_INDEX
+            )
+        ) == 2
+
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.BUILD_INDEX: make_build_index_handler(replacement_adapter)},
+        config=config,
+        now=replacement_available_at + timedelta(seconds=1),
+    )
+
+    with factory() as session:
+        replacement_job = session.get(IngestionJob, replacement_job_id)
+        replacement_target = session.get(IndexVersion, replacement_target_id)
+        previous_active = session.get(IndexVersion, old_active_id)
+        assert replacement_job and replacement_job.state is IngestionJobState.COMPLETED
+        assert replacement_target and replacement_target.state is IndexVersionState.ACTIVE
+        assert previous_active and previous_active.state is IndexVersionState.RETIRED
+
+
 def test_stale_exhausted_build_fails_only_its_target(
     factory: sessionmaker[Session],
 ) -> None:

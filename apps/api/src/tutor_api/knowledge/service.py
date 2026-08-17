@@ -35,7 +35,6 @@ from tutor_api.knowledge.models import (
     DocumentState,
     DocumentVersion,
     DocumentVersionState,
-    IndexVersion,
     IngestionJob,
     IngestionJobKind,
     IngestionJobState,
@@ -605,6 +604,48 @@ def _latest_ready_version_ids(session: Session, knowledge_base_id: UUID) -> tupl
     return tuple(sorted(latest.values(), key=str))
 
 
+def enqueue_index_build(
+    session: Session,
+    *,
+    request: IndexBuildRequest,
+    embedding_adapter: EmbeddingAdapter,
+    knowledge_base_locked: bool = False,
+) -> IngestionJob:
+    """Create or reuse the build job for one immutable index target."""
+
+    index = prepare_index_build(
+        session, request, embedding_adapter, knowledge_base_locked=knowledge_base_locked
+    )
+    idempotency_key = f"build:{index.index_signature}"
+    existing = session.scalar(
+        select(IngestionJob).where(
+            IngestionJob.knowledge_base_id == request.knowledge_base_id,
+            IngestionJob.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        return existing
+    job = IngestionJob(
+        space_id=request.space_id,
+        knowledge_base_id=request.knowledge_base_id,
+        index_version_id=index.id,
+        kind=IngestionJobKind.BUILD_INDEX,
+        state=IngestionJobState.QUEUED,
+        idempotency_key=idempotency_key,
+        checkpoint={
+            "document_version_ids": [str(value) for value in request.document_version_ids],
+            "parser_signature": request.parser_signature,
+            "ocr_signature": request.ocr_signature,
+            "chunk_max_chars": request.chunking.max_chars,
+            "chunk_overlap_chars": request.chunking.overlap_chars,
+        },
+        created_by_user_id=request.created_by_user_id,
+    )
+    session.add(job)
+    session.flush()
+    return job
+
+
 def persist_parsed_document_and_enqueue_build(
     session: Session,
     *,
@@ -635,34 +676,9 @@ def persist_parsed_document_and_enqueue_build(
         ocr_signature=ocr_signature,
         chunking=chunking,
     )
-    index: IndexVersion = prepare_index_build(
-        session, request, embedding_adapter, knowledge_base_locked=True
+    return enqueue_index_build(
+        session,
+        request=request,
+        embedding_adapter=embedding_adapter,
+        knowledge_base_locked=True,
     )
-    idempotency_key = f"build:{index.index_signature}"
-    existing = session.scalar(
-        select(IngestionJob).where(
-            IngestionJob.knowledge_base_id == version.knowledge_base_id,
-            IngestionJob.idempotency_key == idempotency_key,
-        )
-    )
-    if existing is not None:
-        return existing
-    job = IngestionJob(
-        space_id=version.space_id,
-        knowledge_base_id=version.knowledge_base_id,
-        index_version_id=index.id,
-        kind=IngestionJobKind.BUILD_INDEX,
-        state=IngestionJobState.QUEUED,
-        idempotency_key=idempotency_key,
-        checkpoint={
-            "document_version_ids": [str(value) for value in request.document_version_ids],
-            "parser_signature": parser_signature,
-            "ocr_signature": ocr_signature,
-            "chunk_max_chars": chunking.max_chars,
-            "chunk_overlap_chars": chunking.overlap_chars,
-        },
-        created_by_user_id=version.created_by_user_id,
-    )
-    session.add(job)
-    session.flush()
-    return job

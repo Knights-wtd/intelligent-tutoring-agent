@@ -21,6 +21,7 @@ from tutor_api.knowledge.indexing import (
     IndexingError,
     build_index,
     make_pipeline_signature,
+    prepare_index_build,
 )
 from tutor_api.knowledge.models import (
     Chunk,
@@ -52,7 +53,10 @@ from tutor_api.knowledge.parsers import (
     parse_pdf,
     parse_png,
 )
-from tutor_api.knowledge.service import persist_parsed_document_and_enqueue_build
+from tutor_api.knowledge.service import (
+    enqueue_index_build,
+    persist_parsed_document_and_enqueue_build,
+)
 from tutor_api.knowledge.storage import ObjectStorage
 
 JobHandler = Callable[[Session, IngestionJob], None]
@@ -483,8 +487,36 @@ def make_build_index_handler(adapter: EmbeddingAdapter) -> JobHandler:
             ocr_signature=ocr_signature,
             chunking=chunking,
         )
+        current_target = prepare_index_build(session, request, adapter)
+        job_target = session.scalar(
+            select(IndexVersion)
+            .where(IndexVersion.id == job.index_version_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if job_target is None:
+            raise IndexingError("index_job_target_invalid")
+        same_embedding_contract = (
+            job_target.embedding_backend == current_target.embedding_backend
+            and job_target.embedding_model == current_target.embedding_model
+            and job_target.embedding_dimension == current_target.embedding_dimension
+            and job_target.embedding_contract_signature
+            == current_target.embedding_contract_signature
+        )
+        if not same_embedding_contract or job_target.id != current_target.id:
+            # A BUILD_INDEX job is permanently bound to its original target.  Its
+            # unactivated target never received the current adapter's vectors, so
+            # FAILED is the stable terminal state used for other unsuccessful builds.
+            _terminally_fail_build_target(session, job, datetime.now(UTC))
+            enqueue_index_build(
+                session,
+                request=request,
+                embedding_adapter=adapter,
+                knowledge_base_locked=True,
+            )
+            return
         result = build_index(session, request, adapter)
-        if result.index_version_id != index.id:
+        if result.index_version_id != job_target.id:
             raise IndexingError("index_job_signature_mismatch")
         job.checkpoint["chunk_count"] = result.chunk_count
         job.checkpoint["index_version_id"] = str(result.index_version_id)
