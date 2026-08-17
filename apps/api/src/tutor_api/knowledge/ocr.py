@@ -996,11 +996,11 @@ class _OCRDocumentLimitExceeded(Exception):
     pass
 
 
-def _remaining_document_seconds(deadline: float) -> float:
+def _remaining_document_seconds(deadline: float, *, maximum: float | None = None) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise _OCRDocumentLimitExceeded
-    return remaining
+    return min(remaining, maximum) if maximum is not None else remaining
 
 
 def apply_selective_ocr(
@@ -1059,7 +1059,7 @@ def apply_selective_ocr(
 
         evidence: PageEvidence | None = None
         try:
-            remaining = _remaining_document_seconds(deadline)
+            remaining = _remaining_document_seconds(deadline, maximum=float(max_total_seconds))
             rendered = _render_selected_page(
                 document,
                 page,
@@ -1068,7 +1068,7 @@ def apply_selective_ocr(
                 max_pixels=max_pixels,
                 timeout_seconds=min(float(timeout_seconds), remaining),
             )
-            _remaining_document_seconds(deadline)
+            _remaining_document_seconds(deadline, maximum=float(max_total_seconds))
             candidate_evidence = _make_evidence(
                 document,
                 page,
@@ -1082,14 +1082,14 @@ def apply_selective_ocr(
             evidence = candidate_evidence
             total_evidence_bytes += candidate_size
 
-            remaining = _remaining_document_seconds(deadline)
+            remaining = _remaining_document_seconds(deadline, maximum=float(max_total_seconds))
             extracted = extract_text_safely(
                 adapter,
                 evidence.image,
                 languages=normalized_languages,
                 timeout_seconds=remaining,
             )
-            _remaining_document_seconds(deadline)
+            _remaining_document_seconds(deadline, maximum=float(max_total_seconds))
             text = _sanitize_ocr_text(extracted, max_chars=max_text_chars)
             if total_text_chars + len(text) > max_total_text_chars:
                 raise _OCRDocumentLimitExceeded

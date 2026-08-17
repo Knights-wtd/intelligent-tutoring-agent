@@ -6,7 +6,7 @@ import hashlib
 import re
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
@@ -36,6 +36,9 @@ from tutor_api.knowledge.models import (
 from tutor_api.knowledge.ocr import (
     DisabledOCRAdapter,
     OCRAdapter,
+    OCRError,
+    OCRErrorCode,
+    OCRPageStatus,
     PDFiumPageRenderer,
     PDFPageRenderer,
     apply_selective_ocr,
@@ -43,6 +46,7 @@ from tutor_api.knowledge.ocr import (
 from tutor_api.knowledge.parsers import (
     ParsedDocument,
     parse_docx,
+    parse_jpeg,
     parse_markdown,
     parse_obsidian_vault_zip,
     parse_pdf,
@@ -57,6 +61,14 @@ _SAFE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
 class CodedWorkerError(Protocol):
     code: object
+
+
+class WorkerPublicError(RuntimeError):
+    """Stable, detail-free error emitted by the parse worker boundary."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +115,20 @@ def claim_job_statement(
     )
 
 
+_STALE_FAILURE_BATCH_SIZE = 100
+
+
+def _terminally_fail_parse_target(session: Session, job: IngestionJob) -> None:
+    if job.kind is not IngestionJobKind.PARSE_DOCUMENT or job.document_version_id is None:
+        return
+    version = session.scalar(
+        select(DocumentVersion)
+        .where(DocumentVersion.id == job.document_version_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if version is not None:
+        version.state = DocumentVersionState.FAILED
 def _terminally_fail_build_target(
     session: Session, job: IngestionJob, now: datetime
 ) -> None:
@@ -139,10 +165,19 @@ def _fail_exhausted_stale_jobs(
     if kinds is not None:
         filters.append(IngestionJob.kind.in_(kinds))
     jobs = session.scalars(
-        select(IngestionJob).where(*filters).with_for_update(skip_locked=True)
+        select(IngestionJob)
+        .where(*filters)
+        .order_by(
+            IngestionJob.lease_expires_at,
+            IngestionJob.created_at,
+            IngestionJob.id,
+        )
+        .limit(_STALE_FAILURE_BATCH_SIZE)
+        .with_for_update(skip_locked=True)
     ).all()
     for job in jobs:
         _terminally_fail_build_target(session, job, now)
+        _terminally_fail_parse_target(session, job)
         job.state = IngestionJobState.FAILED
         job.lease_owner = None
         job.lease_expires_at = None
@@ -249,6 +284,7 @@ def fail_job(
         job.state = IngestionJobState.FAILED
         job.completed_at = timestamp
         _terminally_fail_build_target(session, job, timestamp)
+        _terminally_fail_parse_target(session, job)
     session.flush()
     return job
 
@@ -269,6 +305,8 @@ def _parse_uploaded_document(
         return parse_markdown(data, source_name=source_name)
     if content_type == "image/png":
         return parse_png(data, source_name=source_name)
+    if content_type == "image/jpeg":
+        return parse_jpeg(data, source_name=source_name)
     if content_type == "application/zip":
         vault = parse_obsidian_vault_zip(
             data,
@@ -281,8 +319,21 @@ def _parse_uploaded_document(
             blocks=tuple(block for note in vault.notes for block in note.document.blocks),
             wikilinks=vault.wikilinks,
         )
-    raise RuntimeError("parse_content_type_unsupported")
+    raise WorkerPublicError("unsupported_content_type")
 
+
+def _component_signature_config(component: object) -> dict[str, object]:
+    """Expose only deterministic public runtime configuration to pipeline signatures."""
+
+    result: dict[str, object] = {
+        "type": f"{type(component).__module__}.{type(component).__qualname__}",
+    }
+    if is_dataclass(component) and not isinstance(component, type):
+        for item in fields(component):
+            value = getattr(component, item.name)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                result[item.name] = value
+    return result
 
 def make_parse_document_handler(
     object_storage: ObjectStorage,
@@ -303,12 +354,29 @@ def make_parse_document_handler(
     parser_signature = make_pipeline_signature(
         "parser",
         "native-upload",
-        "1",
-        max_vault_files,
-        max_vault_uncompressed_bytes,
+        "2",
+        {
+            "max_vault_files": max_vault_files,
+            "max_vault_uncompressed_bytes": max_vault_uncompressed_bytes,
+            "supported_content_types": [
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "text/markdown",
+                "image/jpeg",
+                "image/png",
+                "application/zip",
+            ],
+        },
     )
     ocr_signature = make_pipeline_signature(
-        "ocr", active_ocr.backend, "1", *ocr_languages
+        "ocr",
+        active_ocr.backend,
+        "2",
+        {
+            "adapter": _component_signature_config(active_ocr),
+            "languages": list(ocr_languages),
+            "renderer": _component_signature_config(active_renderer),
+        },
     )
 
     def handle(session: Session, job: IngestionJob) -> None:
@@ -325,7 +393,7 @@ def make_parse_document_handler(
             stored.content_type != version.content_type
             or hashlib.sha256(stored.data).hexdigest() != version.content_sha256
         ):
-            raise RuntimeError("parse_object_contract_invalid")
+            raise WorkerPublicError("object_content_mismatch")
         version.state = DocumentVersionState.PARSING
         parsed = _parse_uploaded_document(
             stored.data,
@@ -335,13 +403,28 @@ def make_parse_document_handler(
             max_vault_uncompressed_bytes=max_vault_uncompressed_bytes,
         )
         if parsed.needs_ocr:
-            parsed = apply_selective_ocr(
+            ocr_result = apply_selective_ocr(
                 parsed,
                 stored.data,
                 adapter=active_ocr,
                 renderer=active_renderer,
                 languages=ocr_languages,
-            ).document
+            )
+            failed_checkpoint = next(
+                (
+                    checkpoint
+                    for checkpoint in ocr_result.checkpoints
+                    if checkpoint.status is OCRPageStatus.FAILED
+                ),
+                None,
+            )
+            if failed_checkpoint is not None:
+                raise OCRError(failed_checkpoint.error_code or OCRErrorCode.PROCESSING_FAILED)
+            parsed = ocr_result.document
+            if parsed.needs_ocr:
+                raise WorkerPublicError("ocr_unavailable")
+            if any(not page.blocks for page in parsed.pages):
+                raise WorkerPublicError("ocr_empty_result")
         build_job = persist_parsed_document_and_enqueue_build(
             session,
             document_version_id=version.id,
@@ -368,7 +451,14 @@ def make_build_index_handler(adapter: EmbeddingAdapter) -> JobHandler:
         checkpoint = job.checkpoint
         raw_version_ids = checkpoint.get("document_version_ids")
         try:
+            if not isinstance(raw_version_ids, list) or not 1 <= len(raw_version_ids) <= 10_000:
+                raise ValueError
             version_ids = tuple(UUID(value) for value in raw_version_ids)
+            if any(
+                not isinstance(value, str) or str(parsed) != value
+                for value, parsed in zip(raw_version_ids, version_ids, strict=True)
+            ):
+                raise ValueError
             chunking = ChunkingConfig(
                 max_chars=checkpoint["chunk_max_chars"],
                 overlap_chars=checkpoint["chunk_overlap_chars"],
@@ -377,7 +467,12 @@ def make_build_index_handler(adapter: EmbeddingAdapter) -> JobHandler:
             ocr_signature = checkpoint["ocr_signature"]
         except (KeyError, TypeError, ValueError):
             raise IndexingError("index_job_checkpoint_invalid") from None
-        if not isinstance(parser_signature, str) or not isinstance(ocr_signature, str):
+        if (
+            not isinstance(parser_signature, str)
+            or not isinstance(ocr_signature, str)
+            or not 1 <= len(parser_signature) <= 255
+            or not 1 <= len(ocr_signature) <= 255
+        ):
             raise IndexingError("index_job_checkpoint_invalid")
         request = IndexBuildRequest(
             space_id=job.space_id,
@@ -431,7 +526,7 @@ def run_worker_once(
                 session,
                 job_id=job_id,
                 worker_id=config.worker_id,
-                now=timestamp,
+                now=datetime.now(UTC),
             )
     except Exception as error:
         with session_factory.begin() as session:
@@ -442,7 +537,7 @@ def run_worker_once(
                     worker_id=config.worker_id,
                     error=error,
                     retry_delay=config.retry_delay,
-                    now=timestamp,
+                    now=datetime.now(UTC),
                 )
             except RuntimeError as lease_error:
                 if str(lease_error) != "worker_lease_lost":

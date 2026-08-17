@@ -46,7 +46,7 @@ _DEFAULT_MAX_PDF_PAGE_TEXT_CHARS = 1_000_000
 _DEFAULT_MAX_PDF_TOTAL_TEXT_CHARS = 16_000_000
 _DEFAULT_MAX_PDF_BLOCKS = 200_000
 _MAX_PDF_PAGE_TREE_DEPTH = 64
-_DEFAULT_MAX_PATH_BYTES = 1_024
+_DEFAULT_MAX_PATH_BYTES = 1_000
 _DEFAULT_MAX_TOTAL_PATH_BYTES = 1024 * 1024
 _DEFAULT_MAX_PATH_DEPTH = 32
 _DEFAULT_MAX_MARKDOWN_MEMBER_BYTES = 16 * 1024 * 1024
@@ -1072,6 +1072,52 @@ def _validate_png_image_data(
         _raise(ParseErrorCode.INVALID_FORMAT)
 
 
+def parse_jpeg(data: bytes, *, source_name: str = "image.jpg") -> ParsedDocument:
+    """Validate JPEG framing and dimensions, then defer image text to OCR."""
+
+    raw = bytes(data)
+    if len(raw) < 4 or raw[:2] != b"\xff\xd8" or raw[-2:] != b"\xff\xd9":
+        _raise(ParseErrorCode.INVALID_FORMAT)
+    offset = 2
+    dimensions: tuple[int, int] | None = None
+    sof_markers = frozenset(
+        marker
+        for marker in range(0xC0, 0xD0)
+        if marker not in {0xC4, 0xC8, 0xCC}
+    )
+    while offset < len(raw) - 2:
+        if raw[offset] != 0xFF:
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        while offset < len(raw) - 1 and raw[offset] == 0xFF:
+            offset += 1
+        marker = raw[offset]
+        offset += 1
+        if marker in {0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+            continue
+        if offset + 2 > len(raw):
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        length = struct.unpack_from(">H", raw, offset)[0]
+        if length < 2 or offset + length > len(raw):
+            _raise(ParseErrorCode.INVALID_FORMAT)
+        segment = raw[offset + 2 : offset + length]
+        if marker in sof_markers:
+            if len(segment) < 6:
+                _raise(ParseErrorCode.INVALID_FORMAT)
+            height, width = struct.unpack_from(">HH", segment, 1)
+            if width == 0 or height == 0:
+                _raise(ParseErrorCode.INVALID_FORMAT)
+            dimensions = (width, height)
+            break
+        offset += length
+    if dimensions is None:
+        _raise(ParseErrorCode.INVALID_FORMAT)
+    width, height = dimensions
+    return ParsedDocument(
+        source_name=source_name,
+        media_type="image/jpeg",
+        pages=(ParsedPage(1, (), True, width=width, height=height),),
+    )
+
 def parse_png(data: bytes, *, source_name: str = "image.png") -> ParsedDocument:
     """Validate PNG chunks and bounded non-interlaced scanlines without OCR."""
 
@@ -1277,6 +1323,7 @@ __all__ = [
     "VaultParseResult",
     "WikiLink",
     "parse_docx",
+    "parse_jpeg",
     "parse_markdown",
     "parse_obsidian_vault_zip",
     "parse_pdf",

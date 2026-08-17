@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, BinaryIO, Protocol
 from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -35,7 +35,36 @@ class ObjectNotFoundError(RuntimeError):
     """Raised when an object key does not exist."""
 
     def __init__(self) -> None:
-        super().__init__("object_not_found")
+        self.code = "object_not_found"
+        super().__init__(self.code)
+
+
+class ObjectSizeLimitError(RuntimeError):
+    """Raised when an object exceeds the configured in-memory boundary."""
+
+    def __init__(self) -> None:
+        self.code = "object_size_limit_exceeded"
+        super().__init__(self.code)
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        del request, fp, code, msg, headers, newurl
+        return None
+
+
+def _read_bounded(data: BinaryIO, maximum: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = data.read(min(64 * 1024, maximum + 1 - total))
+        if not chunk:
+            return b"".join(chunks)
+        raw = bytes(chunk)
+        total += len(raw)
+        if total > maximum:
+            raise ObjectSizeLimitError
+        chunks.append(raw)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +177,7 @@ class S3ObjectStorage:
         bucket: str,
         region: str = "us-east-1",
         timeout_seconds: float = 30.0,
+        max_object_bytes: int = 100 * 1024 * 1024,
     ) -> None:
         parsed = urlsplit(endpoint)
         if (
@@ -162,13 +192,19 @@ class S3ObjectStorage:
             raise ValueError("object storage endpoint must be an absolute HTTP(S) origin")
         if not access_key or not secret_key or not bucket or "/" in bucket:
             raise ValueError("object storage credentials and bucket must not be blank")
+        if isinstance(max_object_bytes, bool) or not isinstance(max_object_bytes, int):
+            raise ValueError("max_object_bytes must be a positive integer")
+        if max_object_bytes <= 0:
+            raise ValueError("max_object_bytes must be a positive integer")
         self.endpoint = f"{parsed.scheme}://{parsed.netloc}"
         self.access_key = access_key
         self._secret_key = secret_key
         self.bucket = bucket
         self.region = region
         self.timeout_seconds = timeout_seconds
+        self.max_object_bytes = max_object_bytes
         self._host = parsed.netloc
+        self._opener = build_opener(_RejectRedirects())
 
     @staticmethod
     def _signing_key(secret_key: str, date_stamp: str, region: str) -> bytes:
@@ -191,6 +227,8 @@ class S3ObjectStorage:
         if not key or key.startswith("/"):
             raise ValueError("object key must be a non-empty relative path")
         payload = b"" if data is None else bytes(data)
+        if len(payload) > self.max_object_bytes:
+            raise ObjectSizeLimitError
         payload_hash = hashlib.sha256(payload).hexdigest()
         timestamp = datetime.now(UTC)
         amz_date = timestamp.strftime("%Y%m%dT%H%M%SZ")
@@ -237,11 +275,13 @@ class S3ObjectStorage:
             headers=headers,
         )
         try:
-            return urlopen(request, timeout=self.timeout_seconds)
+            return self._opener.open(request, timeout=self.timeout_seconds)
         except HTTPError as error:
-            if error.code == 404:
+            code = error.code
+            error.close()
+            if code == 404:
                 raise ObjectNotFoundError from None
-            if immutable_create and error.code in {409, 412}:
+            if immutable_create and code in {409, 412}:
                 raise ObjectAlreadyExistsError from None
             raise RuntimeError("object_storage_request_failed") from None
         except Exception:
@@ -270,13 +310,25 @@ class S3ObjectStorage:
         *,
         content_type: str,
     ) -> None:
-        self.put_if_absent(key, data.read(), content_type=content_type)
+        self.put_if_absent(
+            key,
+            _read_bounded(data, self.max_object_bytes),
+            content_type=content_type,
+        )
 
     def get_object(self, key: str) -> StoredObject:
         with self._request("GET", key) as response:
+            raw_length = response.headers.get("Content-Length")
+            if raw_length is not None:
+                try:
+                    content_length = int(raw_length)
+                except (TypeError, ValueError):
+                    content_length = None
+                if content_length is not None and content_length > self.max_object_bytes:
+                    raise ObjectSizeLimitError
             content_type = response.headers.get("Content-Type", "application/octet-stream")
             return StoredObject(
-                data=response.read(),
+                data=_read_bounded(response, self.max_object_bytes),
                 content_type=_normalize_content_type(content_type),
             )
 
@@ -290,13 +342,19 @@ def create_object_storage(settings: Settings) -> S3ObjectStorage:
         access_key=settings.object_storage_access_key,
         secret_key=secret_value,
         bucket=settings.object_storage_bucket,
+        max_object_bytes=settings.knowledge_upload_max_bytes,
     )
 
 
 class MemoryObjectStorage:
     """Thread-safe test storage with atomic immutable-create semantics."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_object_bytes: int = 100 * 1024 * 1024) -> None:
+        if isinstance(max_object_bytes, bool) or not isinstance(max_object_bytes, int):
+            raise ValueError("max_object_bytes must be a positive integer")
+        if max_object_bytes <= 0:
+            raise ValueError("max_object_bytes must be a positive integer")
+        self.max_object_bytes = max_object_bytes
         self._objects: dict[str, StoredObject] = {}
         self._lock = threading.Lock()
 
@@ -307,8 +365,11 @@ class MemoryObjectStorage:
         *,
         content_type: str,
     ) -> None:
+        raw = bytes(data)
+        if len(raw) > self.max_object_bytes:
+            raise ObjectSizeLimitError
         stored = StoredObject(
-            data=bytes(data),
+            data=raw,
             content_type=_normalize_content_type(content_type),
         )
         with self._lock:
@@ -323,10 +384,11 @@ class MemoryObjectStorage:
         *,
         content_type: str,
     ) -> None:
-        chunks: list[bytes] = []
-        while chunk := data.read(64 * 1024):
-            chunks.append(chunk)
-        self.put_if_absent(key, b"".join(chunks), content_type=content_type)
+        self.put_if_absent(
+            key,
+            _read_bounded(data, self.max_object_bytes),
+            content_type=content_type,
+        )
 
     def get_object(self, key: str) -> StoredObject:
         with self._lock:

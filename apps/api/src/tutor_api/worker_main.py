@@ -15,7 +15,12 @@ from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.models import IngestionJobKind
-from tutor_api.knowledge.ocr import DisabledOCRAdapter, PDFiumPageRenderer
+from tutor_api.knowledge.ocr import (
+    OCR_BACKEND_DISABLED,
+    DisabledOCRAdapter,
+    OCRAdapter,
+    PDFiumPageRenderer,
+)
 from tutor_api.knowledge.storage import create_object_storage
 from tutor_api.knowledge.worker import (
     JobHandler,
@@ -33,6 +38,13 @@ def create_session_factory(settings: Settings) -> sessionmaker[Session]:
     return sessionmaker(bind=engine)
 
 
+def create_ocr_adapter(settings: Settings) -> OCRAdapter:
+    """Construct only explicitly supported OCR backends from validated settings."""
+
+    if settings.ocr_backend == OCR_BACKEND_DISABLED:
+        return DisabledOCRAdapter()
+    raise RuntimeError("ocr_backend_unsupported")
+
 def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]:
     """Build immutable runtime handlers from validated application settings."""
 
@@ -46,7 +58,7 @@ def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]
         IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
             object_storage,
             adapter,
-            ocr_adapter=DisabledOCRAdapter(),
+            ocr_adapter=create_ocr_adapter(settings),
             renderer=PDFiumPageRenderer(),
             ocr_languages=settings.ocr_languages,
             max_vault_files=settings.max_vault_files,

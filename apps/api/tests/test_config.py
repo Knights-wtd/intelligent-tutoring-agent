@@ -217,6 +217,24 @@ def test_settings_accepts_production_safe_values() -> None:
     assert settings.production_errors() == []
 
 
+def test_production_requires_https_for_non_local_object_storage() -> None:
+    settings = Settings(
+        **(SAFE_PRODUCTION_SETTINGS | {"object_storage_endpoint": "http://objects.example.com"})
+    )
+
+    assert "OBJECT_STORAGE_ENDPOINT must use HTTPS in production" in settings.production_errors()
+
+
+@pytest.mark.parametrize("app_env", ["development", "test"])
+def test_non_production_object_storage_may_use_http(app_env: str) -> None:
+    settings = Settings(
+        app_env=app_env,
+        object_storage_endpoint="http://objects.example.com",
+    )
+
+    assert settings.production_errors() == []
+
+
 @pytest.mark.parametrize(
     "database_url",
     [

@@ -3,7 +3,9 @@ import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
+from urllib.error import HTTPError
 from uuid import UUID
 
 import pytest
@@ -19,6 +21,7 @@ from tutor_api.knowledge.ocr import (
 from tutor_api.knowledge.storage import (
     MemoryObjectStorage,
     ObjectAlreadyExistsError,
+    ObjectSizeLimitError,
     S3ObjectStorage,
     build_document_object_key,
     create_object_storage,
@@ -82,6 +85,184 @@ def test_settings_construct_real_shared_s3_object_storage() -> None:
     assert isinstance(storage, S3ObjectStorage)
     assert storage.endpoint == "http://minio:9000"
     assert storage.bucket == "knowledge-assets"
+    assert storage.max_object_bytes == settings.knowledge_upload_max_bytes
+
+
+def test_s3_signed_request_does_not_follow_redirect_or_leak_sensitive_headers() -> None:
+    received_headers: list[dict[str, str]] = []
+
+    class RedirectTarget(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received_headers.append(dict(self.headers.items()))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), RedirectTarget)
+
+    class RedirectSource(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(307)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{target.server_port}/stolen",
+            )
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    source = ThreadingHTTPServer(("127.0.0.1", 0), RedirectSource)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    source_thread = threading.Thread(target=source.serve_forever, daemon=True)
+    target_thread.start()
+    source_thread.start()
+    try:
+        storage = S3ObjectStorage(
+            endpoint=f"http://127.0.0.1:{source.server_port}",
+            access_key="access",
+            secret_key="secret",
+            bucket="bucket",
+            max_object_bytes=1024,
+        )
+
+        with pytest.raises(RuntimeError, match="object_storage_request_failed"):
+            storage.get_object("document.pdf")
+
+        assert received_headers == []
+    finally:
+        source.shutdown()
+        target.shutdown()
+        source.server_close()
+        target.server_close()
+        source_thread.join(timeout=2)
+        target_thread.join(timeout=2)
+
+
+def test_s3_http_error_is_closed_before_stable_failure() -> None:
+    body = BytesIO(b"provider details")
+    error = HTTPError(
+        "http://storage.invalid/bucket/key",
+        500,
+        "secret provider error",
+        {},
+        body,
+    )
+
+    class FailingOpener:
+        def open(self, request: object, timeout: float) -> object:
+            del request, timeout
+            raise error
+
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=1024,
+    )
+    storage._opener = FailingOpener()
+
+    with pytest.raises(RuntimeError, match="object_storage_request_failed"):
+        storage.get_object("document.pdf")
+
+    assert body.closed
+
+
+class _FakeStorageResponse:
+    def __init__(self, chunks: list[bytes], headers: dict[str, str]) -> None:
+        self._chunks = iter(chunks)
+        self.headers = headers
+        self.closed = False
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        return next(self._chunks, b"")
+
+    def close(self) -> None:
+        self.closed = True
+
+    def __enter__(self) -> "_FakeStorageResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        del args
+        self.close()
+
+
+class _FakeStorageOpener:
+    def __init__(self, response: _FakeStorageResponse) -> None:
+        self.response = response
+        self.calls = 0
+
+    def open(self, request: object, timeout: float) -> _FakeStorageResponse:
+        del request, timeout
+        self.calls += 1
+        return self.response
+
+
+def test_s3_get_rejects_oversized_content_length_without_reading_and_closes() -> None:
+    response = _FakeStorageResponse([], {"Content-Length": "5"})
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=4,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectSizeLimitError, match="object_size_limit_exceeded"):
+        storage.get_object("document.pdf")
+
+    assert response.read_sizes == []
+    assert response.closed
+
+
+def test_s3_get_bounds_chunked_or_unknown_length_response_and_closes() -> None:
+    response = _FakeStorageResponse(
+        [b"abc", b"de", b"ignored"],
+        {"Content-Type": "application/pdf"},
+    )
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=4,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectSizeLimitError, match="object_size_limit_exceeded"):
+        storage.get_object("document.pdf")
+
+    assert all(0 < size <= 5 for size in response.read_sizes)
+    assert response.closed
+
+
+def test_s3_put_file_is_bounded_before_network_request() -> None:
+    response = _FakeStorageResponse([], {})
+    opener = _FakeStorageOpener(response)
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=4,
+    )
+    storage._opener = opener
+
+    with pytest.raises(ObjectSizeLimitError, match="object_size_limit_exceeded"):
+        storage.put_file_if_absent(
+            "document.pdf",
+            BytesIO(b"12345"),
+            content_type="application/pdf",
+        )
+
+    assert opener.calls == 0
 
 
 def test_memory_object_storage_round_trips_bytes_and_normalized_content_type() -> None:

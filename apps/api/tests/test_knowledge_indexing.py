@@ -18,6 +18,7 @@ from tutor_api.knowledge.indexing import (
     make_index_signature,
     make_pipeline_signature,
     normalize_lexical_terms,
+    prepare_index_build,
 )
 from tutor_api.knowledge.models import (
     Block,
@@ -420,6 +421,36 @@ def test_idempotent_restart_reuses_version_without_duplicates(session: Session) 
     )
 
 
+def test_late_older_target_completion_never_replaces_newer_active_index(session: Session) -> None:
+    user, space, kb = graph(session, "late-target")
+    first_version = add_version(
+        session, user, space, kb, "first", ((BlockKind.PARAGRAPH, "first index"),)
+    )
+    first_request = request(user, space, kb, (first_version.id,))
+    older = prepare_index_build(session, first_request, CountingEmbedding())
+    session.commit()
+
+    second_version = add_version(
+        session, user, space, kb, "second", ((BlockKind.PARAGRAPH, "second index"),)
+    )
+    newer = build_index(
+        session,
+        request(user, space, kb, (first_version.id, second_version.id)),
+        CountingEmbedding(),
+    )
+    session.commit()
+
+    late = build_index(session, first_request, CountingEmbedding())
+    session.commit()
+
+    active = session.scalar(
+        select(IndexVersion).where(IndexVersion.state == IndexVersionState.ACTIVE)
+    )
+    retired = session.get(IndexVersion, older.id)
+    assert late.index_version_id == older.id
+    assert active and active.id == newer.index_version_id
+    assert retired and retired.state is IndexVersionState.RETIRED
+    assert retired.activated_at is None
 def test_retired_build_restart_does_not_replace_newer_active_index(session: Session) -> None:
     user, space, kb = graph(session, "retired-restart")
     first_version = add_version(

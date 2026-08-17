@@ -24,6 +24,7 @@ from tutor_api.knowledge.models import (
     DocumentVersionState,
     IndexVersion,
     IndexVersionState,
+    KnowledgeBase,
     Page,
 )
 
@@ -452,7 +453,34 @@ def _validate_persisted_index(
             raise IndexingError("index_validation_failed")
 
 
+def _lock_knowledge_base(session: Session, knowledge_base_id: UUID) -> None:
+    """Serialize index target creation and activation within one knowledge base."""
+
+    knowledge_base = session.scalar(
+        select(KnowledgeBase).where(KnowledgeBase.id == knowledge_base_id).with_for_update()
+    )
+    if knowledge_base is None:
+        raise IndexingError("index_source_contract_invalid")
+
+
 def _activate_building_index(session: Session, index: IndexVersion, now: datetime) -> None:
+    _lock_knowledge_base(session, index.knowledge_base_id)
+    session.refresh(index)
+    newer_active = session.scalar(
+        select(IndexVersion.id)
+        .where(
+            IndexVersion.knowledge_base_id == index.knowledge_base_id,
+            IndexVersion.state == IndexVersionState.ACTIVE,
+            IndexVersion.version_number > index.version_number,
+        )
+        .limit(1)
+    )
+    if newer_active is not None:
+        index.state = IndexVersionState.RETIRED
+        index.completed_at = now
+        index.activated_at = None
+        session.flush()
+        return
     session.execute(
         update(IndexVersion)
         .where(
@@ -477,6 +505,7 @@ def prepare_index_build(
     """Create or return the unique immutable target for one complete build contract."""
 
     versions = _load_versions(session, request)
+    _lock_knowledge_base(session, request.knowledge_base_id)
     embedding_contract_signature = _embedding_contract_signature(adapter)
     signature = make_index_signature(
         knowledge_base_id=request.knowledge_base_id,

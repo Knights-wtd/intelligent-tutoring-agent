@@ -317,6 +317,8 @@ class Settings(BaseSettings):
             or _is_local_host(object_endpoint.hostname, {"minio"})
         ):
             errors.append("OBJECT_STORAGE_ENDPOINT must use a non-local HTTP(S) endpoint")
+        elif object_endpoint.scheme.casefold() != "https":
+            errors.append("OBJECT_STORAGE_ENDPOINT must use HTTPS in production")
         object_access_key = self.object_storage_access_key
         trimmed_object_access_key = object_access_key.strip()
         if object_access_key != trimmed_object_access_key or len(trimmed_object_access_key) < 3:

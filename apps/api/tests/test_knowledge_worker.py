@@ -1,4 +1,7 @@
+import binascii
 import hashlib
+import struct
+import zlib
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -168,6 +171,7 @@ def real_build_target(
         chunking=ChunkingConfig(),
         embedding_adapter=adapter,
     )
+    job.available_at = now
     build_target = session.get(IndexVersion, job.index_version_id)
     page = session.scalar(select(Page).where(Page.document_version_id == version.id))
     block = session.scalar(select(Block).where(Block.page_id == page.id)) if page else None
@@ -266,11 +270,10 @@ def test_worker_claims_only_registered_handler_kinds(factory: sessionmaker[Sessi
 def test_uploaded_parse_job_runs_full_worker_pipeline_idempotently(
     factory: sessionmaker[Session],
 ) -> None:
-    import hashlib
 
     from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 
-    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    now = datetime.now(UTC)
     storage = MemoryObjectStorage()
     adapter = HashEmbeddingAdapter(dimension=8)
     with factory.begin() as session:
@@ -302,6 +305,7 @@ def test_uploaded_parse_job_runs_full_worker_pipeline_idempotently(
             "pipeline-request",
             storage,
         )
+        uploaded.job.available_at = now
         parse_job_id = uploaded.job.id
         version_id = uploaded.version.id
 
@@ -356,6 +360,60 @@ def test_uploaded_parse_job_runs_full_worker_pipeline_idempotently(
         assert session.scalar(select(func.count()).select_from(Chunk)) == chunk_count
 
 
+
+
+def test_parse_worker_fails_closed_when_ocr_is_disabled(factory: sessionmaker[Session]) -> None:
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", binascii.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    raw = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
+    storage = MemoryObjectStorage()
+    adapter = HashEmbeddingAdapter(dimension=8)
+    with factory.begin() as session:
+        user, kb, _ = target(session, "ocr-disabled")
+        uploaded = upload_prepared_knowledge_document(
+            session,
+            user,
+            kb.id,
+            PreparedUpload(
+                source_name="scan.png",
+                content_type="image/png",
+                content_sha256=hashlib.sha256(raw).hexdigest(),
+                temporary_file=BytesIO(raw),
+            ),
+            "ocr-disabled-request",
+            storage,
+        )
+        uploaded.job.max_attempts = 1
+        uploaded.job.available_at = now
+        job_id = uploaded.job.id
+        version_id = uploaded.version.id
+
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(storage, adapter)},
+        config=WorkerConfig(worker_id="ocr-disabled-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        job = session.get(IngestionJob, job_id)
+        version = session.get(DocumentVersion, version_id)
+        assert job and job.state is IngestionJobState.FAILED
+        assert job.last_error_code == "ocr_disabled" and job.last_error_detail is None
+        assert version and version.state is DocumentVersionState.FAILED
+        assert session.scalar(select(func.count()).select_from(Page)) == 0
 def test_worker_main_registers_parse_and_build_handlers() -> None:
     from tutor_api.core.config import Settings
     from tutor_api.worker_main import create_handlers
@@ -585,9 +643,11 @@ def test_stale_exhausted_build_fails_only_its_target(
         failed_target = session.get(IndexVersion, target_id)
         untouched = session.get(IndexVersion, unrelated_id)
         stale_parse = session.get(IngestionJob, parse_job_id)
+        stale_version = session.get(DocumentVersion, version.id)
         assert failed_target and failed_target.state is IndexVersionState.FAILED
         assert untouched and untouched.state is IndexVersionState.BUILDING
         assert stale_parse and stale_parse.state is IngestionJobState.FAILED
+        assert stale_version and stale_version.state is DocumentVersionState.FAILED
         assert session.scalar(
             select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
         ) == 0

@@ -11,9 +11,11 @@ import pytest
 
 from tutor_api.knowledge.parsers import (
     ParsedBlockKind,
+    ParsedPage,
     ParseError,
     ParseErrorCode,
     parse_docx,
+    parse_jpeg,
     parse_markdown,
     parse_obsidian_vault_zip,
     parse_pdf,
@@ -337,6 +339,24 @@ def test_markdown_rejects_non_mapping_frontmatter() -> None:
     assert str(raised.value) == "frontmatter is invalid"
 
 
+
+
+def test_jpeg_reads_dimensions_and_defers_ocr() -> None:
+    jpeg = (
+        b"\xff\xd8"
+        + b"\xff\xc0\x00\x11\x08\x00\x02\x00\x03\x03\x01\x11\x00\x02\x11\x00\x03\x11\x00"
+        + b"\xff\xd9"
+    )
+
+    parsed = parse_jpeg(jpeg, source_name="scan.jpg")
+
+    assert parsed.media_type == "image/jpeg"
+    assert parsed.pages == (ParsedPage(1, (), True, width=3, height=2),)
+
+
+def test_jpeg_rejects_missing_frame_dimensions() -> None:
+    with pytest.raises(ParseError, match="source could not be parsed"):
+        parse_jpeg(b"\xff\xd8\xff\xd9")
 def test_png_validates_structure_reads_dimensions_and_defers_ocr() -> None:
     parsed = parse_png(make_png(), source_name="scan.png")
 
