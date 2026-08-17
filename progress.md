@@ -308,3 +308,35 @@
 - 同 KB 慢 storage/锁等待可能消耗 AnyIO worker pool，需 timeout/limiter/queue；客户端取消后的 worker 可能后台完成，缺专门结果日志与可观测性；copied spool 落盘写可能带来短事件循环延迟。
 - lease duplicate claim 当前生产不可达但未显式拒绝；service caller-owned temp contract 应明确；DOCX 仅 ZIP magic，100 MiB 仅 service layer，digest 无 domain prefix。
 - 下一步：Task 5「native parsing and Obsidian import」；不得将 Task 4 完成误记为整个 Milestone 3 / Phase 5 完成。
+
+## Session: 2026-08-17 · Phase 5 / Task 5
+
+- **Status:** Task 5 final PASS；Milestone 3 / Phase 5 仍为 `in_progress`。
+- 实现提交：`2dc8ce1 feat: parse supported knowledge formats`、`30014ae fix: harden native knowledge parsers`、`5c70d87 fix: bound native parser resources`、`75997c7 fix: bound zip central directory`。
+- 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。
+
+### 已交付
+
+- 确定性微型 PDF、DOCX、Markdown、PNG 与 Vault ZIP fixture，以及页码/有序块、frontmatter/tags/table、附件、wikilink、路径穿越和 ZIP bomb 等测试合同。
+- 原生优先解析：PDF 低文本/乱码页标记 `needs_ocr`；DOCX 使用安全 ZIP/XML；Markdown 保留行范围；Vault 路径规范化且不落盘解压。
+- 解析器资源预算覆盖 PDF 页面树/页数/文本/块、ZIP EOCD/Zip64/多磁盘/条目/内容/路径、Vault 累计 Markdown/行/块/tag/wikilink，以及 PNG zlib/scanline。
+- 关闭中央目录 P1：EOCD `central_size` 在 `ZipFile` 构造前受限；DOCX 固定、Vault 默认 16 MiB，非法限制值 fail-closed，spy 证明超限时不构造 `ZipFile`。
+
+### 验证记录
+
+| 检查点 | 结果 |
+|---|---|
+| 聚焦解析器测试 | 57 passed |
+| 目标 Ruff（两个修改文件，`--no-cache`） | All checks passed |
+| `git diff --check` | pass |
+| 增量规格复审 | PASS；7 passed |
+| 增量质量/安全复审 | PASS；8 passed + 只读安全探针 |
+| 完整 API suite | 未运行 |
+| Docker/PostgreSQL/MinIO/OCR/外部服务/大型真实文档集成 | 未运行 |
+
+### 保留风险与下一步
+
+- `pypdf.extract_text` 无子进程隔离/墙钟超时，单次调用仍可能瞬时占用 CPU/内存；未做真实大文件集成。
+- PNG 仅为有界结构验证；XML 为字节模式 fail-closed 而非专用 hardened XML；YAML 在 `safe_load` 前只有 64 KiB 限制，节点/深度在 load 后检查。
+- ZIP 未拒绝 symlink 之外全部 Unix 特殊类型但当前不落盘；16 MiB 中央目录策略可能拒绝极端合法 ZIP，Vault 上层调高应限制可信调用方；输入仍先整体为 `bytes`。
+- 下一步：Task 6「selective OCR and page evidence」。不得将 Task 5 完成误记为整个“PDF/DOCX/Markdown/图片/Vault 导入”阶段或 Milestone 3 / Phase 5 完成。

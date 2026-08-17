@@ -57,10 +57,10 @@
 
 **Files:** Create `knowledge/parsers.py` plus deterministic fixtures/tests in `tests/test_knowledge_parsers.py`.
 
-- [ ] Generate tiny PDF, DOCX, Markdown, PNG, and Vault ZIP fixtures in test code.
-- [ ] Assert page numbers, ordered blocks, frontmatter/tags, tables, attachments, wikilinks, and ZIP traversal/bomb rejection.
-- [ ] Implement native-first parsing. Low-text/garbled PDF pages become `needs_ocr`; DOCX uses safe ZIP/XML; Markdown retains line ranges; Vault entries are normalized and cannot escape a temporary sandbox.
-- [ ] Run tests; commit `feat: parse supported knowledge formats`.
+- [x] Generate tiny PDF, DOCX, Markdown, PNG, and Vault ZIP fixtures in test code.
+- [x] Assert page numbers, ordered blocks, frontmatter/tags, tables, attachments, wikilinks, and ZIP traversal/bomb rejection.
+- [x] Implement native-first parsing. Low-text/garbled PDF pages become `needs_ocr`; DOCX uses safe ZIP/XML; Markdown retains line ranges; Vault entries are normalized and cannot escape a temporary sandbox.
+- [x] Run tests; commit `feat: parse supported knowledge formats`.
 
 ### Task 6: Selective OCR and page evidence
 

@@ -298,3 +298,36 @@
 - lease duplicate claim 在当前生产调用路径不可达，但尚未显式拒绝；service 的 caller-owned temporary file contract 也应后续明确。
 - DOCX 只检查 ZIP magic；100 MiB 限制只在 service layer；digest 未加入 domain prefix。
 - Task 4 final PASS 不代表里程碑完成：Phase 5 / Milestone 3 继续保持 `in_progress`，下一步为 Task 5：native parsing and Obsidian import。
+
+## 2026-08-17 Phase 5 · Task 5 关键结论
+
+### 交付与审查
+
+- Task 5 native parsing and Obsidian import 的提交序列为：`2dc8ce1 feat: parse supported knowledge formats`、`30014ae fix: harden native knowledge parsers`、`5c70d87 fix: bound native parser resources`、`75997c7 fix: bound zip central directory`。
+- 最终独立规格复审为 **Task 5 specification review PASS**；最终独立质量/安全复审为 **Task 5 quality/security review PASS**。
+
+### 已确认的解析与资源边界
+
+- 测试代码生成确定性微型 PDF、DOCX、Markdown、PNG 与 Vault ZIP fixture；解析结果保留 PDF 页码/块顺序、DOCX 标题/段落/表格顺序、Markdown 行范围/frontmatter/tags/table，以及 Vault 的规范化路径、附件和 wikilink。
+- PDF 原生优先提取，低文本或乱码页标记为 `needs_ocr`；页面树、页数、文本和块均有预算。DOCX 使用安全 ZIP/XML 路径；XML 防护为编码感知的字节模式 fail-closed。Markdown frontmatter 受 64 KiB 限制并对深 YAML 错误脱敏。PNG 聚合 IDAT 后执行有界 zlib/scanline 结构验证。
+- Vault ZIP 拒绝路径穿越、drive-relative、bomb、Zip64、多磁盘和超预算输入；目录计入条目限制，路径字节/深度、单 Markdown、累计 Markdown、行/块/tag/wikilink 均有界，tag 使用有序 O(1) 去重。
+- 质量/安全复审最后一个 P1 已关闭：经典 EOCD 的 `central_size` 在 `zipfile.ZipFile` 构造前检查。DOCX 固定、Vault 默认使用 16 MiB 中央目录预算；Vault 参数可注入但必须是非 bool 的严格正整数。真实 ZIP entry comment/extra 测试及 spy 确认预检拒绝时 `ZipFile` 从未构造。
+
+### 准确验证记录
+
+- 聚焦解析器测试：57 passed。
+- 目标 Ruff：`parsers.py` + `test_knowledge_parsers.py`，`--no-cache`，All checks passed。
+- `git diff --check`：pass。
+- 增量规格复审：PASS；聚焦 7 passed，确认正常 DOCX/Vault 未回归且中央目录限制稳定 fail-closed。
+- 增量质量/安全复审：PASS；聚焦 8 passed，并完成 DOCX/Vault 预构造拒绝、Zip64、多磁盘与最大 EOCD comment 等只读安全探针。
+- 未运行完整 API suite；未使用 Docker、PostgreSQL、MinIO、OCR、外部服务或大型真实文档集成测试。
+
+### 保留风险与下一步
+
+- `pypdf.extract_text` 仍无子进程隔离或墙钟超时；单次第三方提取调用在返回文本预算检查前仍可能瞬时消耗 CPU/内存。
+- 未执行真实大文件/复杂 PDF、DOCX、PNG 或 Obsidian Vault 集成；PNG 是有界结构验证器而非完整 PNG 一致性实现。
+- XML 加固是编码感知的字节模式 fail-closed 防御，不是专用 hardened XML 库。YAML 在 `safe_load` 前仅由 64 KiB frontmatter 上限约束，节点/深度预算在 load 后执行。
+- ZIP 当前未拒绝 symlink 之外的所有 Unix 特殊类型，但当前解析流程不把归档内容落盘解压。
+- 16 MiB 中央目录是安全策略，可能拒绝极端 metadata-heavy 但合法的 ZIP；Vault 上层若允许调高预算，应只开放给可信调用方并继续设置上限。
+- 解析器调用前输入仍整体为 `bytes`；本轮资源限制主要防止解析阶段进一步无界物化，不限制上游完整上传缓冲。
+- Task 5 final PASS 不代表整个导入阶段或里程碑完成：选择性 OCR、页证据、索引、检索与引用仍未实现；Phase 5 / Milestone 3 保持 `in_progress`，下一步为 Task 6：selective OCR and page evidence。

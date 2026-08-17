@@ -141,8 +141,11 @@ Phase 5：知识与 Agent 能力实现
 - [x] Task 4「safe immutable uploads」最终 PASS；实现与修复提交：`4ca2acf`、`07ec443`、`53a253a`、`72c0194`，交接文档提交：`091e95f`。
 - [x] Task 4 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。
 - [x] Task 4 验证记录已归档；两个并发修复后未重跑完整 API suite，且未运行真实 PostgreSQL/pgvector/MinIO/Docker/OCR/external services。
+- [x] Task 5「native parsing and Obsidian import」最终 PASS；实现与修复提交：`2dc8ce1`、`30014ae`、`5c70d87`、`75997c7`。
+- [x] Task 5 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。聚焦解析器 57 passed；目标 Ruff 与 `git diff --check` 通过。
+- [x] Task 5 未运行完整 API suite，且未使用 Docker、PostgreSQL、MinIO、OCR、外部服务或大型真实文档集成测试。
 - [ ] 整个 Milestone 3 / Phase 5 尚未完成，状态保持 `in_progress`。
-- [ ] 下一步：Task 5「native parsing and Obsidian import」。
+- [ ] 下一步：Task 6「selective OCR and page evidence」。
 
 ### Task 1 已确认边界
 
@@ -192,3 +195,14 @@ Phase 5：知识与 Agent 能力实现
 - 同 KB 慢 storage/锁等待可能消耗 AnyIO worker pool，后续需 timeout/limiter/queue；客户端取消后已接管 worker 可能后台完成，尚缺专门结果日志与可观测性；copied spool 落盘写仍可能造成短事件循环延迟。
 - PreparedUpload lease duplicate claim 当前生产不可达但未显式拒绝；service caller-owned temp contract 后续应明确。DOCX 当前仅校验 ZIP magic，100 MiB 上限仅在 service layer，digest 尚无 domain prefix。
 - Task 4 已完成，但 Phase 5 / Milestone 3 仍为 `in_progress`；下一步是 Task 5：native parsing and Obsidian import。
+
+### Task 5 已确认解析、安全与验收边界
+
+- 原生优先解析已覆盖确定性微型 PDF、DOCX、Markdown、PNG 与 Obsidian Vault ZIP；保留 PDF 页码与有序块、DOCX 段落/标题/表格顺序、Markdown 行范围与 frontmatter/tags/table、Vault 规范化路径、附件与 wikilink；低文本或乱码 PDF 页标记为 `needs_ocr`。
+- DOCX/Vault ZIP 采用 fail-closed 预检与资源预算，覆盖 traversal、bomb、Zip64、多磁盘、路径深度/字节、条目/内容/行/块/tag/wikilink 等限制；PNG 执行有界 zlib/scanline 结构验证；解析错误保持稳定且脱敏。
+- 已解决质量/安全复审唯一剩余 P1：经典 EOCD 的 `central_size` 在构造 `zipfile.ZipFile` 前受限；DOCX 固定、Vault 默认使用 16 MiB 中央目录预算，Vault 可注入但必须是严格正整数。真实 ZIP metadata 测试和 spy 证明超限时不会构造 `ZipFile`。
+- 实现提交链：`2dc8ce1 feat: parse supported knowledge formats`、`30014ae fix: harden native knowledge parsers`、`5c70d87 fix: bound native parser resources`、`75997c7 fix: bound zip central directory`。最终独立规格复审 PASS；最终独立质量/安全复审 PASS。
+- 验证：聚焦解析器 57 passed；目标 Ruff（`parsers.py` 与 `test_knowledge_parsers.py`，`--no-cache`）通过；`git diff --check` 通过；增量规格复审 7 passed；增量质量/安全复审 8 passed，并完成只读安全探针。未运行完整 API suite，也未使用 Docker、PostgreSQL、MinIO、OCR、外部服务或大型真实文档集成测试。
+- 保留风险：`pypdf.extract_text` 没有子进程隔离或墙钟超时，单次调用仍可能瞬时消耗 CPU/内存；未做真实大文件集成；PNG 是有界结构验证而非完整一致性实现；XML 是字节模式 fail-closed 而非专用 hardened XML；YAML 在 `safe_load` 前只有 64 KiB 限制，节点/深度预算在 load 后执行。
+- 继续保留：ZIP 当前未拒绝 symlink 之外的所有 Unix 特殊类型，但解析器不落盘解压；16 MiB 中央目录策略可能拒绝极端合法 ZIP，若 Vault 上层允许调高应仅限可信调用方；解析器输入仍先整体进入 `bytes`。
+- Task 5 已完成，但“实现 PDF/DOCX/Markdown/图片/Vault 导入”阶段仍包含选择性 OCR 与原页证据等后续工作；Phase 5 / Milestone 3 保持 `in_progress`，下一步是 Task 6：selective OCR and page evidence。
