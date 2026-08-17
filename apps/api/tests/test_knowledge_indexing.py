@@ -490,6 +490,92 @@ def test_retired_build_restart_does_not_replace_newer_active_index(session: Sess
     )
 
 
+def test_persisted_parse_freezes_ready_set_and_enqueues_job_under_kb_lock(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tutor_api.knowledge import indexing, service
+    from tutor_api.knowledge.models import IngestionJob
+    from tutor_api.knowledge.parsers import ParsedBlock, ParsedBlockKind, ParsedDocument
+
+    user, space, kb = graph(session, "serialized-ready-snapshot")
+    existing = add_version(
+        session, user, space, kb, "already-ready", ((BlockKind.PARAGRAPH, "existing"),)
+    )
+    document = Document(
+        space_id=space.id,
+        knowledge_base_id=kb.id,
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+        title="newly-ready",
+        source_kind="upload",
+        source_key="newly-ready.md",
+        state=DocumentState.ACTIVE,
+    )
+    session.add(document)
+    session.flush()
+    version = DocumentVersion(
+        space_id=space.id,
+        knowledge_base_id=kb.id,
+        document_id=document.id,
+        version_number=1,
+        content_sha256=content_sha256("newly ready"),
+        object_key="objects/newly-ready",
+        content_type="text/markdown",
+        state=DocumentVersionState.PARSING,
+        created_by_user_id=user.id,
+    )
+    session.add(version)
+    session.flush()
+
+    events: list[str] = []
+    real_lock = indexing._lock_knowledge_base
+    real_snapshot = service._latest_ready_version_ids
+    real_prepare = service.prepare_index_build
+    real_add = session.add
+
+    def record_lock(*args: object, **kwargs: object) -> None:
+        events.append("lock")
+        real_lock(*args, **kwargs)
+
+    def record_snapshot(*args: object, **kwargs: object) -> tuple[UUID, ...]:
+        assert events == ["lock"]
+        events.append("snapshot")
+        return real_snapshot(*args, **kwargs)
+
+    def record_prepare(*args: object, **kwargs: object) -> IndexVersion:
+        assert events == ["lock", "snapshot"]
+        assert kwargs["knowledge_base_locked"] is True
+        events.append("target")
+        return real_prepare(*args, **kwargs)
+
+    def record_add(instance: object, *args: object, **kwargs: object) -> None:
+        if isinstance(instance, IngestionJob):
+            assert events == ["lock", "snapshot", "target"]
+            events.append("job")
+        real_add(instance, *args, **kwargs)
+
+    monkeypatch.setattr(indexing, "_lock_knowledge_base", record_lock)
+    monkeypatch.setattr(service, "_latest_ready_version_ids", record_snapshot)
+    monkeypatch.setattr(service, "prepare_index_build", record_prepare)
+    monkeypatch.setattr(session, "add", record_add)
+
+    job = service.persist_parsed_document_and_enqueue_build(
+        session,
+        document_version_id=version.id,
+        parsed_document=ParsedDocument(
+            source_name="newly-ready.md",
+            media_type="text/markdown",
+            blocks=(ParsedBlock(ParsedBlockKind.PARAGRAPH, "newly ready", 0, "newly-ready.md#L1"),),
+        ),
+        parser_signature=make_pipeline_signature("parser", "native", "1"),
+        ocr_signature=make_pipeline_signature("ocr", "disabled", "1"),
+        chunking=ChunkingConfig(max_chars=80, overlap_chars=16),
+        embedding_adapter=CountingEmbedding(),
+    )
+
+    assert events == ["lock", "snapshot", "target", "job"]
+    assert set(job.checkpoint["document_version_ids"]) == {str(existing.id), str(version.id)}
+
 def test_parsed_document_persistence_enqueues_one_idempotent_build(session: Session) -> None:
     from tutor_api.knowledge.models import IngestionJob, IngestionJobKind
     from tutor_api.knowledge.parsers import ParsedBlock, ParsedBlockKind, ParsedDocument

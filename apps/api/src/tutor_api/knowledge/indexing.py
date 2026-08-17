@@ -501,11 +501,14 @@ def prepare_index_build(
     session: Session,
     request: IndexBuildRequest,
     adapter: EmbeddingAdapter,
+    *,
+    knowledge_base_locked: bool = False,
 ) -> IndexVersion:
     """Create or return the unique immutable target for one complete build contract."""
 
+    if not knowledge_base_locked:
+        _lock_knowledge_base(session, request.knowledge_base_id)
     versions = _load_versions(session, request)
-    _lock_knowledge_base(session, request.knowledge_base_id)
     embedding_contract_signature = _embedding_contract_signature(adapter)
     signature = make_index_signature(
         knowledge_base_id=request.knowledge_base_id,

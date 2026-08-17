@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from tutor_api.identity.models import User
+from tutor_api.knowledge import indexing
 from tutor_api.knowledge.access import (
     get_readable_knowledge_base,
     get_writable_knowledge_base,
@@ -624,6 +625,7 @@ def persist_parsed_document_and_enqueue_build(
     _persist_parsed_graph(session, version, parsed_document)
     version.state = DocumentVersionState.READY
     session.flush()
+    indexing._lock_knowledge_base(session, version.knowledge_base_id)
     request = IndexBuildRequest(
         space_id=version.space_id,
         knowledge_base_id=version.knowledge_base_id,
@@ -633,7 +635,9 @@ def persist_parsed_document_and_enqueue_build(
         ocr_signature=ocr_signature,
         chunking=chunking,
     )
-    index: IndexVersion = prepare_index_build(session, request, embedding_adapter)
+    index: IndexVersion = prepare_index_build(
+        session, request, embedding_adapter, knowledge_base_locked=True
+    )
     idempotency_key = f"build:{index.index_signature}"
     existing = session.scalar(
         select(IngestionJob).where(
