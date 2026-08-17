@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import subprocess
+import ctypes
+import os
+import sys
 import time
 from dataclasses import dataclass
-from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -341,6 +343,12 @@ def test_ocr_languages_reject_empty_unknown_and_parameter_injection(languages: o
         {"timeout_seconds": float("nan")},
         {"max_evidence_bytes": 0},
         {"max_text_chars": False},
+        {"max_ocr_pages": 0},
+        {"max_ocr_pages": True},
+        {"max_total_evidence_bytes": 0},
+        {"max_total_text_chars": False},
+        {"max_total_seconds": 0},
+        {"max_total_seconds": float("inf")},
     ],
 )
 def test_selective_ocr_rejects_invalid_resource_limits(override: dict[str, object]) -> None:
@@ -364,49 +372,60 @@ def test_selective_ocr_rejects_invalid_resource_limits(override: dict[str, objec
 
 
 def test_tesseract_adapter_uses_safe_argument_list_stdin_stdout_and_hard_timeout(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    args_file = tmp_path / "args.txt"
+    input_file = tmp_path / "input.bin"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_ARGS_FILE", str(args_file))
+    monkeypatch.setenv("OCR_INPUT_FILE", str(input_file))
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+import sys
+from pathlib import Path
 
-    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
-        captured["command"] = command
-        captured.update(kwargs)
-        return SimpleNamespace(
-            returncode=0,
-            stdout=b" recognized\x00\r\ntext \n",
-            stderr=b"provider stderr must stay private",
-        )
-
-    monkeypatch.setattr("tutor_api.knowledge.ocr.subprocess.run", fake_run)
-    adapter = TesseractOCRAdapter(timeout_seconds=1.25)
+Path(os.environ["OCR_ARGS_FILE"]).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+Path(os.environ["OCR_INPUT_FILE"]).write_bytes(sys.stdin.buffer.read())
+sys.stderr.write("provider stderr must stay private")
+sys.stdout.buffer.write(b" recognized\\x00\\r\\ntext \\n")
+""",
+    )
+    adapter = TesseractOCRAdapter(executable=sys.executable, timeout_seconds=1.25)
 
     text = adapter.extract_text(b"P5\n1 1\n255\n\x00", languages=("chi_sim", "eng", "eng"))
 
     assert text == "recognized\ntext"
-    assert captured["command"] == ["tesseract", "stdin", "stdout", "-l", "chi_sim+eng"]
-    assert captured["input"] == b"P5\n1 1\n255\n\x00"
-    assert captured["capture_output"] is True
-    assert captured["timeout"] == 1.25
-    assert captured["check"] is False
-    assert captured["shell"] is False
+    assert args_file.read_text(encoding="utf-8").splitlines() == [
+        "stdout",
+        "-l",
+        "chi_sim+eng",
+    ]
+    assert input_file.read_bytes() == b"P5\n1 1\n255\n\x00"
 
 
 def test_tesseract_timeout_maps_to_context_free_public_code(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    secret = b"C:\\secret\\provider.exe --token hidden stderr"
+    monkeypatch.chdir(tmp_path)
+    _write_tesseract_helper(
+        tmp_path,
+        """import sys
+import time
 
-    def timeout(*args: object, **kwargs: object) -> None:
-        del args, kwargs
-        raise subprocess.TimeoutExpired("secret-command", 0.01, stderr=secret)
-
-    monkeypatch.setattr("tutor_api.knowledge.ocr.subprocess.run", timeout)
+sys.stderr.write("C:\\secret\\provider.exe --token hidden stderr")
+sys.stderr.flush()
+time.sleep(5)
+""",
+    )
 
     with pytest.raises(OCRError) as raised:
-        TesseractOCRAdapter(timeout_seconds=0.01).extract_text(
-            b"image",
-            languages=("eng",),
-        )
+        TesseractOCRAdapter(
+            executable=sys.executable,
+            timeout_seconds=0.1,
+        ).extract_text(b"image", languages=("eng",))
 
     assert raised.value.code is OCRErrorCode.TIMEOUT
     assert raised.value.__cause__ is None
@@ -436,3 +455,392 @@ def test_pdfium_renderer_enforces_wall_clock_timeout_in_isolated_process() -> No
     assert raised.value.code is OCRErrorCode.TIMEOUT
     assert raised.value.__cause__ is None
     assert raised.value.__context__ is None
+
+
+def _write_tesseract_helper(tmp_path: Path, source: str) -> None:
+    (tmp_path / "stdin").write_text(source, encoding="utf-8")
+
+
+def _wait_for_pid_file(path: Path, *, timeout_seconds: float = 1.0) -> int:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            return int(path.read_text(encoding="ascii"))
+        time.sleep(0.01)
+    raise AssertionError(f"helper did not write PID file: {path.name}")
+
+
+def _process_is_running(pid: int) -> bool:
+    if os.name == "nt":
+        process_query_limited_information = 0x1000
+        still_active = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    proc_stat = Path(f"/proc/{pid}/stat")
+    if proc_stat.exists():
+        fields = proc_stat.read_text(encoding="ascii").split()
+        return len(fields) < 3 or fields[2] != "Z"
+    return True
+
+
+def _assert_process_stops(pid: int, *, timeout_seconds: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline and _process_is_running(pid):
+        time.sleep(0.01)
+    assert not _process_is_running(pid)
+
+
+def test_tesseract_rejects_input_before_starting_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_popen(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("Popen must not run for oversized input")
+
+    monkeypatch.setattr("tutor_api.knowledge.ocr.subprocess.Popen", forbidden_popen)
+    adapter = TesseractOCRAdapter(max_input_bytes=4)
+
+    with pytest.raises(OCRError) as raised:
+        adapter.extract_text(b"12345", languages=("eng",))
+
+    assert raised.value.code is OCRErrorCode.LIMIT_EXCEEDED
+
+
+def test_tesseract_streams_bounded_stdout_and_terminates_early(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid_file = tmp_path / "writer.pid"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_HELPER_PID", str(pid_file))
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+import sys
+import time
+from pathlib import Path
+
+Path(os.environ["OCR_HELPER_PID"]).write_text(str(os.getpid()), encoding="ascii")
+sys.stdin.buffer.read()
+chunk = b"x" * 4096
+while True:
+    sys.stdout.buffer.write(chunk)
+    sys.stdout.buffer.flush()
+    time.sleep(0.01)
+""",
+    )
+    adapter = TesseractOCRAdapter(
+        executable=sys.executable,
+        timeout_seconds=5.0,
+        max_input_bytes=1024,
+        max_output_bytes=1024,
+    )
+    started = time.monotonic()
+
+    with pytest.raises(OCRError) as raised:
+        adapter.extract_text(b"image", languages=("eng",))
+
+    elapsed = time.monotonic() - started
+    pid = _wait_for_pid_file(pid_file)
+    assert raised.value.code is OCRErrorCode.LIMIT_EXCEEDED
+    assert elapsed < 1.0
+    _assert_process_stops(pid)
+
+
+def test_tesseract_timeout_kills_descendant_holding_pipes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_pid_file = tmp_path / "parent.pid"
+    child_pid_file = tmp_path / "child.pid"
+    survivor_file = tmp_path / "survived.txt"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_PARENT_PID", str(parent_pid_file))
+    monkeypatch.setenv("OCR_CHILD_PID", str(child_pid_file))
+    monkeypatch.setenv("OCR_SURVIVOR_FILE", str(survivor_file))
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+Path(os.environ["OCR_PARENT_PID"]).write_text(str(os.getpid()), encoding="ascii")
+child_code = (
+    "import os\\n"
+    "import time\\n"
+    "from pathlib import Path\\n"
+    "Path(os.environ['OCR_CHILD_PID']).write_text(str(os.getpid()), encoding='ascii')\\n"
+    "time.sleep(0.6)\\n"
+    "Path(os.environ['OCR_SURVIVOR_FILE']).write_text('alive', encoding='ascii')\\n"
+    "time.sleep(5)\\n"
+)
+subprocess.Popen([sys.executable, "-c", child_code])
+time.sleep(5)
+""",
+    )
+    adapter = TesseractOCRAdapter(
+        executable=sys.executable,
+        timeout_seconds=0.2,
+        max_input_bytes=16 * 1024 * 1024,
+        max_output_bytes=1024,
+    )
+    started = time.monotonic()
+
+    with pytest.raises(OCRError) as raised:
+        adapter.extract_text(b"x" * (8 * 1024 * 1024), languages=("eng",))
+
+    elapsed = time.monotonic() - started
+    parent_pid = _wait_for_pid_file(parent_pid_file)
+    child_pid = _wait_for_pid_file(child_pid_file)
+    assert raised.value.code is OCRErrorCode.TIMEOUT
+    assert elapsed < 1.0
+    _assert_process_stops(parent_pid)
+    _assert_process_stops(child_pid)
+    time.sleep(0.7)
+    assert not survivor_file.exists()
+
+
+@dataclass
+class BudgetRenderer:
+    calls: list[tuple[int, float]]
+    images: dict[int, bytes]
+    delays: dict[int, float] | None = None
+
+    def render_page(
+        self,
+        pdf: bytes,
+        *,
+        page_number: int,
+        max_pixels: int,
+        timeout_seconds: float,
+    ) -> RenderedPage:
+        del pdf, max_pixels
+        self.calls.append((page_number, timeout_seconds))
+        if self.delays and page_number in self.delays:
+            time.sleep(self.delays[page_number])
+        return RenderedPage(
+            image=self.images[page_number],
+            media_type="image/x-portable-graymap",
+            width=1,
+            height=1,
+        )
+
+
+@dataclass
+class BudgetOCR:
+    calls: list[bytes]
+    texts: dict[bytes, str]
+
+    backend = "fake"
+
+    def extract_text(self, image: bytes, *, languages: tuple[str, ...]) -> str:
+        assert languages == ("eng",)
+        self.calls.append(image)
+        return self.texts[image]
+
+
+def _selected_pdf_document(page_count: int) -> ParsedDocument:
+    pages = tuple(
+        ParsedPage(page_number=page_number, blocks=(), needs_ocr=True)
+        for page_number in range(1, page_count + 1)
+    )
+    return ParsedDocument(
+        source_name="budget.pdf",
+        media_type="application/pdf",
+        blocks=(),
+        pages=pages,
+    )
+
+
+def test_selective_ocr_enforces_cumulative_page_budget_before_render() -> None:
+    renderer = BudgetRenderer(calls=[], images={1: b"a", 2: b"b", 3: b"c"})
+    adapter = BudgetOCR(calls=[], texts={b"a": "a", b"b": "b", b"c": "c"})
+
+    result = apply_selective_ocr(
+        _selected_pdf_document(3),
+        b"pdf-source",
+        adapter=adapter,
+        renderer=renderer,
+        languages=("eng",),
+        max_pixels=10,
+        timeout_seconds=1.0,
+        max_evidence_bytes=10,
+        max_text_chars=10,
+        max_ocr_pages=2,
+        max_total_evidence_bytes=100,
+        max_total_text_chars=100,
+        max_total_seconds=10.0,
+    )
+
+    assert [call[0] for call in renderer.calls] == [1, 2]
+    assert adapter.calls == [b"a", b"b"]
+    assert [checkpoint.error_code for checkpoint in result.checkpoints] == [
+        None,
+        None,
+        OCRErrorCode.LIMIT_EXCEEDED,
+    ]
+
+
+def test_selective_ocr_enforces_cumulative_evidence_budget_before_ocr() -> None:
+    renderer = BudgetRenderer(calls=[], images={1: b"aaaa", 2: b"bbbb", 3: b"c"})
+    adapter = BudgetOCR(calls=[], texts={b"aaaa": "a", b"bbbb": "b", b"c": "c"})
+
+    result = apply_selective_ocr(
+        _selected_pdf_document(3),
+        b"pdf-source",
+        adapter=adapter,
+        renderer=renderer,
+        languages=("eng",),
+        max_pixels=10,
+        timeout_seconds=1.0,
+        max_evidence_bytes=10,
+        max_text_chars=10,
+        max_ocr_pages=3,
+        max_total_evidence_bytes=6,
+        max_total_text_chars=100,
+        max_total_seconds=10.0,
+    )
+
+    assert [call[0] for call in renderer.calls] == [1, 2]
+    assert adapter.calls == [b"aaaa"]
+    assert result.checkpoints[1].error_code is OCRErrorCode.LIMIT_EXCEEDED
+    assert result.checkpoints[1].evidence is None
+    assert result.checkpoints[2].error_code is OCRErrorCode.LIMIT_EXCEEDED
+
+
+def test_selective_ocr_enforces_cumulative_text_budget_after_ocr() -> None:
+    renderer = BudgetRenderer(calls=[], images={1: b"a", 2: b"b", 3: b"c"})
+    adapter = BudgetOCR(calls=[], texts={b"a": "1234", b"b": "5678", b"c": "9"})
+
+    result = apply_selective_ocr(
+        _selected_pdf_document(3),
+        b"pdf-source",
+        adapter=adapter,
+        renderer=renderer,
+        languages=("eng",),
+        max_pixels=10,
+        timeout_seconds=1.0,
+        max_evidence_bytes=10,
+        max_text_chars=10,
+        max_ocr_pages=3,
+        max_total_evidence_bytes=100,
+        max_total_text_chars=6,
+        max_total_seconds=10.0,
+    )
+
+    assert [call[0] for call in renderer.calls] == [1, 2]
+    assert adapter.calls == [b"a", b"b"]
+    assert result.checkpoints[0].text == "1234"
+    assert result.checkpoints[1].error_code is OCRErrorCode.LIMIT_EXCEEDED
+    assert result.checkpoints[1].text is None
+    assert result.checkpoints[2].error_code is OCRErrorCode.LIMIT_EXCEEDED
+
+
+def test_selective_ocr_enforces_document_deadline_and_passes_remaining_time() -> None:
+    renderer = BudgetRenderer(
+        calls=[],
+        images={1: b"a", 2: b"b"},
+        delays={1: 0.08},
+    )
+    adapter = BudgetOCR(calls=[], texts={b"a": "a", b"b": "b"})
+
+    result = apply_selective_ocr(
+        _selected_pdf_document(2),
+        b"pdf-source",
+        adapter=adapter,
+        renderer=renderer,
+        languages=("eng",),
+        max_pixels=10,
+        timeout_seconds=1.0,
+        max_evidence_bytes=10,
+        max_text_chars=10,
+        max_ocr_pages=2,
+        max_total_evidence_bytes=100,
+        max_total_text_chars=100,
+        max_total_seconds=0.05,
+    )
+
+    assert [call[0] for call in renderer.calls] == [1]
+    assert 0 < renderer.calls[0][1] <= 0.05
+    assert adapter.calls == []
+    assert [checkpoint.error_code for checkpoint in result.checkpoints] == [
+        OCRErrorCode.LIMIT_EXCEEDED,
+        OCRErrorCode.LIMIT_EXCEEDED,
+    ]
+
+
+def test_selective_ocr_passes_document_remaining_time_to_tesseract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[float] = []
+
+    def fake_extract(
+        self: TesseractOCRAdapter,
+        image: bytes,
+        *,
+        languages: tuple[str, ...],
+        timeout_seconds: float,
+    ) -> str:
+        del self, image, languages
+        captured.append(timeout_seconds)
+        return "text"
+
+    monkeypatch.setattr(TesseractOCRAdapter, "_extract_text_with_timeout", fake_extract)
+    renderer = BudgetRenderer(calls=[], images={1: b"a"}, delays={1: 0.03})
+
+    result = apply_selective_ocr(
+        _selected_pdf_document(1),
+        b"pdf-source",
+        adapter=TesseractOCRAdapter(timeout_seconds=5.0),
+        renderer=renderer,
+        languages=("eng",),
+        max_pixels=10,
+        timeout_seconds=1.0,
+        max_evidence_bytes=10,
+        max_text_chars=10,
+        max_ocr_pages=1,
+        max_total_evidence_bytes=100,
+        max_total_text_chars=100,
+        max_total_seconds=0.2,
+    )
+
+    assert result.checkpoints[0].status is OCRPageStatus.SUCCEEDED
+    assert len(captured) == 1
+    assert 0 < captured[0] < 0.2
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"max_input_bytes": 0},
+        {"max_input_bytes": True},
+        {"max_output_bytes": 0},
+        {"timeout_seconds": float("nan")},
+    ],
+)
+def test_tesseract_rejects_invalid_resource_limits(override: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="OCR limits"):
+        TesseractOCRAdapter(**override)

@@ -5,7 +5,12 @@ from __future__ import annotations
 import hashlib
 import math
 import multiprocessing
+import os
+import queue
+import signal
 import subprocess
+import threading
+import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -26,7 +31,13 @@ _DEFAULT_MAX_PIXELS = 20_000_000
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _DEFAULT_MAX_EVIDENCE_BYTES = 32 * 1024 * 1024
 _DEFAULT_MAX_TEXT_CHARS = 2_000_000
+_DEFAULT_MAX_OCR_PAGES = 100
+_DEFAULT_MAX_TOTAL_EVIDENCE_BYTES = 128 * 1024 * 1024
+_DEFAULT_MAX_TOTAL_TEXT_CHARS = 5_000_000
+_DEFAULT_MAX_TOTAL_SECONDS = 120.0
 _DEFAULT_RENDER_SCALE = 2.0
+_TESSERACT_IO_CHUNK_BYTES = 64 * 1024
+_PROCESS_CLEANUP_SECONDS = 0.25
 
 
 class OCRErrorCode(StrEnum):
@@ -197,62 +208,513 @@ def _sanitize_ocr_text(text: object, *, max_chars: int) -> str:
     return compact
 
 
+class _ProcessBoundary:
+    """Own a subprocess and its descendants across supported platforms."""
+
+    def __init__(self, process: subprocess.Popen[bytes]) -> None:
+        self.process = process
+        self._windows_job = _create_windows_job(process) if os.name == "nt" else None
+
+    def terminate(self) -> None:
+        if os.name == "nt":
+            if self._windows_job is not None:
+                _terminate_windows_job(self._windows_job)
+            else:
+                _terminate_windows_process_tree(self.process.pid)
+        else:
+            _signal_posix_process_group(self.process.pid, signal.SIGTERM)
+
+        if not _wait_for_process(self.process, _PROCESS_CLEANUP_SECONDS):
+            if os.name == "nt":
+                if self._windows_job is not None:
+                    _terminate_windows_job(self._windows_job)
+                else:
+                    _terminate_windows_process_tree(self.process.pid)
+            else:
+                _signal_posix_process_group(self.process.pid, signal.SIGKILL)
+            _wait_for_process(self.process, _PROCESS_CLEANUP_SECONDS)
+
+    def close(self) -> None:
+        if os.name == "nt":
+            if self._windows_job is not None:
+                _close_windows_handle(self._windows_job)
+                self._windows_job = None
+            else:
+                _terminate_windows_process_tree(self.process.pid)
+        else:
+            _signal_posix_process_group(self.process.pid, signal.SIGTERM)
+            time.sleep(0.01)
+            _signal_posix_process_group(self.process.pid, signal.SIGKILL)
+
+
+def _wait_for_process(process: subprocess.Popen[bytes], timeout_seconds: float) -> bool:
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:
+        return process.poll() is not None
+    return True
+
+
+def _signal_posix_process_group(process_group_id: int, sig: int) -> None:
+    try:
+        os.killpg(process_group_id, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _create_windows_job(process: subprocess.Popen[bytes]) -> int | None:
+    if os.name != "nt":
+        return None
+    job_handle = 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class JobObjectBasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class JobObjectExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", JobObjectBasicLimitInformation),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        ]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+
+        job = kernel32.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        job_handle = int(job)
+        information = JobObjectExtendedLimitInformation()
+        information.BasicLimitInformation.LimitFlags = 0x00002000
+        configured = kernel32.SetInformationJobObject(
+            job,
+            9,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        )
+        assigned = configured and kernel32.AssignProcessToJobObject(job, process._handle)
+        if not assigned:
+            _close_windows_handle(job_handle)
+            return None
+        return job_handle
+    except Exception:
+        if job_handle:
+            _close_windows_handle(job_handle)
+        return None
+
+
+def _terminate_windows_job(job_handle: int) -> None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject(job_handle, 1)
+    except Exception:
+        pass
+
+
+def _close_windows_handle(handle: int) -> None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+
+
+
+def _resume_windows_process(process_id: int) -> bool:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ThreadEntry32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ThreadID", wintypes.DWORD),
+                ("th32OwnerProcessID", wintypes.DWORD),
+                ("tpBasePri", ctypes.c_long),
+                ("tpDeltaPri", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry32)]
+        kernel32.Thread32First.restype = wintypes.BOOL
+        kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry32)]
+        kernel32.Thread32Next.restype = wintypes.BOOL
+        kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenThread.restype = wintypes.HANDLE
+        kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+        kernel32.ResumeThread.restype = wintypes.DWORD
+
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000004, 0)
+        if snapshot == wintypes.HANDLE(-1).value:
+            return False
+        resumed = False
+        try:
+            entry = ThreadEntry32()
+            entry.dwSize = ctypes.sizeof(entry)
+            present = kernel32.Thread32First(snapshot, ctypes.byref(entry))
+            while present:
+                if int(entry.th32OwnerProcessID) == process_id:
+                    thread_handle = kernel32.OpenThread(0x0002, False, entry.th32ThreadID)
+                    if thread_handle:
+                        try:
+                            resumed = kernel32.ResumeThread(thread_handle) != 0xFFFFFFFF or resumed
+                        finally:
+                            _close_windows_handle(int(thread_handle))
+                present = kernel32.Thread32Next(snapshot, ctypes.byref(entry))
+        finally:
+            _close_windows_handle(int(snapshot))
+        return resumed
+    except Exception:
+        return False
+
+def _terminate_windows_process_tree(root_pid: int) -> None:
+    """Fallback tree cleanup if a Job Object cannot be assigned."""
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessEntry32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32)]
+        kernel32.Process32FirstW.restype = wintypes.BOOL
+        kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry32)]
+        kernel32.Process32NextW.restype = wintypes.BOOL
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.TerminateProcess.restype = wintypes.BOOL
+
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+        if snapshot == wintypes.HANDLE(-1).value:
+            return
+        parents: dict[int, list[int]] = {}
+        try:
+            entry = ProcessEntry32()
+            entry.dwSize = ctypes.sizeof(entry)
+            present = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while present:
+                parents.setdefault(int(entry.th32ParentProcessID), []).append(
+                    int(entry.th32ProcessID)
+                )
+                present = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            _close_windows_handle(int(snapshot))
+
+        descendants: list[int] = []
+        pending = [root_pid]
+        while pending:
+            parent = pending.pop()
+            children = parents.get(parent, [])
+            descendants.extend(children)
+            pending.extend(children)
+
+        for pid in [root_pid, *reversed(descendants)]:
+            handle = kernel32.OpenProcess(0x0001, False, pid)
+            if handle:
+                try:
+                    kernel32.TerminateProcess(handle, 1)
+                finally:
+                    _close_windows_handle(int(handle))
+    except Exception:
+        try:
+            import _winapi
+
+            process_handle = _winapi.OpenProcess(1, False, root_pid)
+            _winapi.TerminateProcess(process_handle, 1)
+            _winapi.CloseHandle(process_handle)
+        except Exception:
+            pass
+
+
+def _put_process_message(
+    messages: queue.Queue[tuple[str, bytes | None]],
+    stop: threading.Event,
+    message: tuple[str, bytes | None],
+) -> None:
+    while not stop.is_set():
+        try:
+            messages.put(message, timeout=0.02)
+            return
+        except queue.Full:
+            continue
+
+
+def _read_process_stdout(
+    stream: object,
+    messages: queue.Queue[tuple[str, bytes | None]],
+    stop: threading.Event,
+) -> None:
+    try:
+        file_descriptor = stream.fileno()
+        while not stop.is_set():
+            chunk = os.read(file_descriptor, _TESSERACT_IO_CHUNK_BYTES)
+            if not chunk:
+                _put_process_message(messages, stop, ("eof", None))
+                return
+            _put_process_message(messages, stop, ("data", chunk))
+    except Exception:
+        _put_process_message(messages, stop, ("error", None))
+
+
+def _write_process_stdin(
+    stream: object,
+    raw: bytes,
+    done: threading.Event,
+    failed: threading.Event,
+) -> None:
+    try:
+        file_descriptor = stream.fileno()
+        view = memoryview(raw)
+        offset = 0
+        while offset < len(view):
+            offset += os.write(file_descriptor, view[offset : offset + _TESSERACT_IO_CHUNK_BYTES])
+    except Exception:
+        failed.set()
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+        done.set()
+
+
+def _run_tesseract_process(
+    command: list[str],
+    raw: bytes,
+    *,
+    timeout_seconds: float,
+    max_output_bytes: int,
+) -> bytes:
+    deadline = time.monotonic() + timeout_seconds
+    creation_kwargs: dict[str, object] = {}
+    if os.name == "nt":
+        creation_kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | 0x00000004
+        )
+    else:
+        creation_kwargs["start_new_session"] = True
+
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            **creation_kwargs,
+        )
+    except Exception:
+        raise OCRError(OCRErrorCode.PROCESSING_FAILED) from None
+
+    boundary = _ProcessBoundary(process)
+    if os.name == "nt" and not _resume_windows_process(process.pid):
+        boundary.terminate()
+        for stream in (process.stdin, process.stdout):
+            if stream is not None:
+                stream.close()
+        boundary.close()
+        raise OCRError(OCRErrorCode.PROCESSING_FAILED) from None
+
+    messages: queue.Queue[tuple[str, bytes | None]] = queue.Queue(maxsize=2)
+    stop = threading.Event()
+    writer_done = threading.Event()
+    writer_failed = threading.Event()
+    stdout = bytearray()
+    failure_code: OCRErrorCode | None = None
+    reader = threading.Thread(
+        target=_read_process_stdout,
+        args=(process.stdout, messages, stop),
+        daemon=True,
+    )
+    writer = threading.Thread(
+        target=_write_process_stdin,
+        args=(process.stdin, raw, writer_done, writer_failed),
+        daemon=True,
+    )
+    reader.start()
+    writer.start()
+    stdout_eof = False
+
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure_code = OCRErrorCode.TIMEOUT
+                break
+            try:
+                kind, payload = messages.get(timeout=min(remaining, 0.05))
+            except queue.Empty:
+                if process.poll() is not None and stdout_eof:
+                    break
+                continue
+            if kind == "data" and payload is not None:
+                if len(stdout) + len(payload) > max_output_bytes:
+                    failure_code = OCRErrorCode.LIMIT_EXCEEDED
+                    break
+                stdout.extend(payload)
+            elif kind == "eof":
+                stdout_eof = True
+                if process.poll() is not None:
+                    break
+            else:
+                failure_code = OCRErrorCode.PROCESSING_FAILED
+                break
+
+        if failure_code is None and process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not _wait_for_process(process, remaining):
+                failure_code = OCRErrorCode.TIMEOUT
+        if failure_code is None and not writer_done.is_set():
+            remaining = max(0.0, deadline - time.monotonic())
+            writer_done.wait(timeout=remaining)
+        if failure_code is None and (not writer_done.is_set() or writer_failed.is_set()):
+            failure_code = OCRErrorCode.PROCESSING_FAILED
+        if failure_code is None and process.returncode != 0:
+            failure_code = OCRErrorCode.PROCESSING_FAILED
+    finally:
+        if failure_code is not None or process.poll() is None:
+            boundary.terminate()
+        stop.set()
+        for stream in (process.stdin, process.stdout):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+        reader.join(timeout=_PROCESS_CLEANUP_SECONDS)
+        writer.join(timeout=_PROCESS_CLEANUP_SECONDS)
+        if process.poll() is None:
+            boundary.terminate()
+        boundary.close()
+
+    if failure_code is not None:
+        raise OCRError(failure_code) from None
+    return bytes(stdout)
+
+
 @dataclass(frozen=True, slots=True)
 class TesseractOCRAdapter:
-    """Tesseract subprocess adapter with a fixed argument shape and hard timeout."""
+    """Tesseract subprocess adapter with bounded input, output, and lifetime."""
 
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS
     max_output_bytes: int = _DEFAULT_MAX_TEXT_CHARS * 4
     executable: str = "tesseract"
+    max_input_bytes: int = _DEFAULT_MAX_EVIDENCE_BYTES
     backend: str = field(default="tesseract", init=False)
 
     def __post_init__(self) -> None:
         if not _validate_positive_finite_number(self.timeout_seconds):
             raise ValueError("OCR limits must be positive finite values")
-        if not _validate_positive_int(self.max_output_bytes):
+        if not _validate_positive_int(self.max_input_bytes) or not _validate_positive_int(
+            self.max_output_bytes
+        ):
             raise ValueError("OCR limits must be positive finite values")
         if not isinstance(self.executable, str) or not self.executable or "\x00" in self.executable:
             raise ValueError("Tesseract executable is invalid")
 
     def extract_text(self, image: bytes, *, languages: tuple[str, ...]) -> str:
+        return self._extract_text_with_timeout(
+            image,
+            languages=languages,
+            timeout_seconds=float(self.timeout_seconds),
+        )
+
+    def _extract_text_with_timeout(
+        self,
+        image: bytes,
+        *,
+        languages: tuple[str, ...],
+        timeout_seconds: float,
+    ) -> str:
+        if not _validate_positive_finite_number(timeout_seconds):
+            raise OCRError(OCRErrorCode.TIMEOUT) from None
         normalized_languages = normalize_ocr_languages(languages)
         raw = bytes(image)
-        failure_code: OCRErrorCode | None = None
-        try:
-            completed = subprocess.run(
-                [
-                    self.executable,
-                    "stdin",
-                    "stdout",
-                    "-l",
-                    "+".join(normalized_languages),
-                ],
-                input=raw,
-                capture_output=True,
-                timeout=self.timeout_seconds,
-                check=False,
-                shell=False,
-            )
-        except subprocess.TimeoutExpired:
-            failure_code = OCRErrorCode.TIMEOUT
-        except Exception:
-            failure_code = OCRErrorCode.PROCESSING_FAILED
-        if failure_code is not None:
-            raise OCRError(failure_code) from None
-
-        return_code = completed.returncode
-        stdout = completed.stdout
-        del completed
-        if return_code != 0:
-            raise OCRError(OCRErrorCode.PROCESSING_FAILED) from None
-        if not isinstance(stdout, bytes) or len(stdout) > self.max_output_bytes:
+        if len(raw) > self.max_input_bytes:
             raise OCRError(OCRErrorCode.LIMIT_EXCEEDED) from None
-        decoded: str | None = None
+        stdout = _run_tesseract_process(
+            [
+                self.executable,
+                "stdin",
+                "stdout",
+                "-l",
+                "+".join(normalized_languages),
+            ],
+            raw,
+            timeout_seconds=min(float(timeout_seconds), float(self.timeout_seconds)),
+            max_output_bytes=self.max_output_bytes,
+        )
         try:
             decoded = stdout.decode("utf-8")
         except UnicodeDecodeError:
-            pass
-        if decoded is None:
             raise OCRError(OCRErrorCode.PROCESSING_FAILED) from None
         return _sanitize_ocr_text(decoded, max_chars=self.max_output_bytes)
 
@@ -526,6 +988,40 @@ def _failed_checkpoint(
     )
 
 
+class _OCRDocumentLimitExceeded(Exception):
+    pass
+
+
+def _remaining_document_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _OCRDocumentLimitExceeded
+    return remaining
+
+
+def _extract_text_with_document_deadline(
+    adapter: OCRAdapter,
+    image: bytes,
+    *,
+    languages: tuple[str, ...],
+    remaining_seconds: float,
+) -> str:
+    if isinstance(adapter, TesseractOCRAdapter):
+        public_code = OCRErrorCode.PROCESSING_FAILED
+        try:
+            return adapter._extract_text_with_timeout(
+                image,
+                languages=languages,
+                timeout_seconds=min(remaining_seconds, float(adapter.timeout_seconds)),
+            )
+        except OCRError as error:
+            public_code = _safe_public_code(error)
+        except Exception:
+            pass
+        raise OCRError(public_code) from None
+    return extract_text_safely(adapter, image, languages=languages)
+
+
 def apply_selective_ocr(
     document: ParsedDocument,
     source_data: bytes,
@@ -537,54 +1033,106 @@ def apply_selective_ocr(
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     max_evidence_bytes: int = _DEFAULT_MAX_EVIDENCE_BYTES,
     max_text_chars: int = _DEFAULT_MAX_TEXT_CHARS,
+    max_ocr_pages: int = _DEFAULT_MAX_OCR_PAGES,
+    max_total_evidence_bytes: int = _DEFAULT_MAX_TOTAL_EVIDENCE_BYTES,
+    max_total_text_chars: int = _DEFAULT_MAX_TOTAL_TEXT_CHARS,
+    max_total_seconds: float = _DEFAULT_MAX_TOTAL_SECONDS,
 ) -> OCRDocumentResult:
-    """OCR only selected pages and checkpoint every success or redacted failure."""
+    """OCR selected pages under per-page and document-wide hard resource budgets."""
 
     if (
         not _validate_positive_int(max_pixels)
         or not _validate_positive_finite_number(timeout_seconds)
         or not _validate_positive_int(max_evidence_bytes)
         or not _validate_positive_int(max_text_chars)
+        or not _validate_positive_int(max_ocr_pages)
+        or not _validate_positive_int(max_total_evidence_bytes)
+        or not _validate_positive_int(max_total_text_chars)
+        or not _validate_positive_finite_number(max_total_seconds)
     ):
         raise ValueError("OCR limits must be positive finite values")
     normalized_languages = normalize_ocr_languages(languages)
     raw_source = bytes(source_data)
+    deadline = time.monotonic() + float(max_total_seconds)
 
     pages: list[ParsedPage] = []
     checkpoints: list[OCRPageCheckpoint] = []
+    selected_pages = 0
+    total_evidence_bytes = 0
+    total_text_chars = 0
+    document_limit_reached = False
+
     for page in document.pages:
         if not page.needs_ocr:
             pages.append(page)
             continue
 
+        selected_pages += 1
+        if document_limit_reached or selected_pages > max_ocr_pages:
+            document_limit_reached = True
+            checkpoints.append(
+                _failed_checkpoint(page.page_number, OCRErrorCode.LIMIT_EXCEEDED)
+            )
+            pages.append(page)
+            continue
+
         evidence: PageEvidence | None = None
         try:
+            remaining = _remaining_document_seconds(deadline)
             rendered = _render_selected_page(
                 document,
                 page,
                 raw_source,
                 renderer=renderer,
                 max_pixels=max_pixels,
-                timeout_seconds=float(timeout_seconds),
+                timeout_seconds=min(float(timeout_seconds), remaining),
             )
-            evidence = _make_evidence(
+            _remaining_document_seconds(deadline)
+            candidate_evidence = _make_evidence(
                 document,
                 page,
                 rendered,
                 max_pixels=max_pixels,
                 max_evidence_bytes=max_evidence_bytes,
             )
-            extracted = extract_text_safely(
+            candidate_size = len(candidate_evidence.image)
+            if total_evidence_bytes + candidate_size > max_total_evidence_bytes:
+                raise _OCRDocumentLimitExceeded
+            evidence = candidate_evidence
+            total_evidence_bytes += candidate_size
+
+            remaining = _remaining_document_seconds(deadline)
+            extracted = _extract_text_with_document_deadline(
                 adapter,
                 evidence.image,
                 languages=normalized_languages,
+                remaining_seconds=remaining,
             )
+            _remaining_document_seconds(deadline)
             text = _sanitize_ocr_text(extracted, max_chars=max_text_chars)
-        except OCRError as error:
+            if total_text_chars + len(text) > max_total_text_chars:
+                raise _OCRDocumentLimitExceeded
+            total_text_chars += len(text)
+        except _OCRDocumentLimitExceeded:
+            document_limit_reached = True
             checkpoints.append(
                 _failed_checkpoint(
                     page.page_number,
-                    _safe_public_code(error),
+                    OCRErrorCode.LIMIT_EXCEEDED,
+                    evidence=evidence,
+                )
+            )
+            pages.append(page)
+            continue
+        except OCRError as error:
+            code = _safe_public_code(error)
+            if code is OCRErrorCode.TIMEOUT and time.monotonic() >= deadline:
+                code = OCRErrorCode.LIMIT_EXCEEDED
+                document_limit_reached = True
+            checkpoints.append(
+                _failed_checkpoint(
+                    page.page_number,
+                    code,
                     evidence=evidence,
                 )
             )
