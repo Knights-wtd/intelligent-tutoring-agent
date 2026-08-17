@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from collections.abc import Callable, Mapping
@@ -10,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.knowledge.indexing import (
@@ -19,13 +20,36 @@ from tutor_api.knowledge.indexing import (
     IndexBuildRequest,
     IndexingError,
     build_index,
+    make_pipeline_signature,
 )
 from tutor_api.knowledge.models import (
+    Chunk,
+    Document,
+    DocumentVersion,
+    DocumentVersionState,
     IndexVersion,
+    IndexVersionState,
     IngestionJob,
     IngestionJobKind,
     IngestionJobState,
 )
+from tutor_api.knowledge.ocr import (
+    DisabledOCRAdapter,
+    OCRAdapter,
+    PDFiumPageRenderer,
+    PDFPageRenderer,
+    apply_selective_ocr,
+)
+from tutor_api.knowledge.parsers import (
+    ParsedDocument,
+    parse_docx,
+    parse_markdown,
+    parse_obsidian_vault_zip,
+    parse_pdf,
+    parse_png,
+)
+from tutor_api.knowledge.service import persist_parsed_document_and_enqueue_build
+from tutor_api.knowledge.storage import ObjectStorage
 
 JobHandler = Callable[[Session, IngestionJob], None]
 _SAFE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
@@ -53,7 +77,9 @@ class WorkerConfig:
             raise ValueError("idle_sleep_seconds must not be negative")
 
 
-def claim_job_statement(now: datetime):
+def claim_job_statement(
+    now: datetime, kinds: tuple[IngestionJobKind, ...] | None = None
+):
     runnable = and_(
         IngestionJob.state.in_((IngestionJobState.QUEUED, IngestionJobState.RETRY_WAIT)),
         IngestionJob.available_at <= now,
@@ -62,35 +88,68 @@ def claim_job_statement(now: datetime):
         IngestionJob.state == IngestionJobState.RUNNING,
         IngestionJob.lease_expires_at <= now,
     )
+    filters = [
+        or_(runnable, stale),
+        IngestionJob.attempt_count < IngestionJob.max_attempts,
+    ]
+    if kinds is not None:
+        filters.append(IngestionJob.kind.in_(kinds))
     return (
         select(IngestionJob)
-        .where(
-            or_(runnable, stale),
-            IngestionJob.attempt_count < IngestionJob.max_attempts,
-        )
+        .where(*filters)
         .order_by(IngestionJob.available_at, IngestionJob.created_at, IngestionJob.id)
         .limit(1)
         .with_for_update(skip_locked=True)
     )
 
 
-def _fail_exhausted_stale_jobs(session: Session, now: datetime) -> None:
-    session.execute(
-        update(IngestionJob)
-        .where(
-            IngestionJob.state == IngestionJobState.RUNNING,
-            IngestionJob.lease_expires_at <= now,
-            IngestionJob.attempt_count >= IngestionJob.max_attempts,
-        )
-        .values(
-            state=IngestionJobState.FAILED,
-            lease_owner=None,
-            lease_expires_at=None,
-            completed_at=now,
-            last_error_code="worker_lease_exhausted",
-            last_error_detail=None,
-        )
+def _terminally_fail_build_target(
+    session: Session, job: IngestionJob, now: datetime
+) -> None:
+    if job.kind is not IngestionJobKind.BUILD_INDEX or job.index_version_id is None:
+        return
+    index = session.scalar(
+        select(IndexVersion)
+        .where(IndexVersion.id == job.index_version_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
+    if index is None or index.state not in (
+        IndexVersionState.BUILDING,
+        IndexVersionState.READY,
+        IndexVersionState.FAILED,
+    ):
+        return
+    session.execute(delete(Chunk).where(Chunk.index_version_id == index.id))
+    index.state = IndexVersionState.FAILED
+    index.completed_at = now
+    index.activated_at = None
+
+
+def _fail_exhausted_stale_jobs(
+    session: Session,
+    now: datetime,
+    kinds: tuple[IngestionJobKind, ...] | None = None,
+) -> None:
+    filters = [
+        IngestionJob.state == IngestionJobState.RUNNING,
+        IngestionJob.lease_expires_at <= now,
+        IngestionJob.attempt_count >= IngestionJob.max_attempts,
+    ]
+    if kinds is not None:
+        filters.append(IngestionJob.kind.in_(kinds))
+    jobs = session.scalars(
+        select(IngestionJob).where(*filters).with_for_update(skip_locked=True)
+    ).all()
+    for job in jobs:
+        _terminally_fail_build_target(session, job, now)
+        job.state = IngestionJobState.FAILED
+        job.lease_owner = None
+        job.lease_expires_at = None
+        job.completed_at = now
+        job.last_error_code = "worker_lease_exhausted"
+        job.last_error_detail = None
+    session.flush()
 
 
 def claim_next_job(
@@ -99,6 +158,7 @@ def claim_next_job(
     worker_id: str,
     now: datetime | None = None,
     lease_duration: timedelta = timedelta(minutes=5),
+    kinds: tuple[IngestionJobKind, ...] | None = None,
 ) -> IngestionJob | None:
     """Atomically lease one runnable job; SQLite is a single-worker test fallback only."""
 
@@ -107,8 +167,8 @@ def claim_next_job(
     if lease_duration <= timedelta(0):
         raise ValueError("lease_duration must be positive")
     timestamp = now or datetime.now(UTC)
-    _fail_exhausted_stale_jobs(session, timestamp)
-    job = session.scalar(claim_job_statement(timestamp))
+    _fail_exhausted_stale_jobs(session, timestamp, kinds)
+    job = session.scalar(claim_job_statement(timestamp, kinds))
     if job is None:
         return None
     job.state = IngestionJobState.RUNNING
@@ -188,8 +248,112 @@ def fail_job(
     else:
         job.state = IngestionJobState.FAILED
         job.completed_at = timestamp
+        _terminally_fail_build_target(session, job, timestamp)
     session.flush()
     return job
+
+
+def _parse_uploaded_document(
+    data: bytes,
+    *,
+    content_type: str,
+    source_name: str,
+    max_vault_files: int,
+    max_vault_uncompressed_bytes: int,
+) -> ParsedDocument:
+    if content_type == "application/pdf":
+        return parse_pdf(data, source_name=source_name)
+    if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return parse_docx(data, source_name=source_name)
+    if content_type == "text/markdown":
+        return parse_markdown(data, source_name=source_name)
+    if content_type == "image/png":
+        return parse_png(data, source_name=source_name)
+    if content_type == "application/zip":
+        vault = parse_obsidian_vault_zip(
+            data,
+            max_files=max_vault_files,
+            max_uncompressed_bytes=max_vault_uncompressed_bytes,
+        )
+        return ParsedDocument(
+            source_name=source_name,
+            media_type=content_type,
+            blocks=tuple(block for note in vault.notes for block in note.document.blocks),
+            wikilinks=vault.wikilinks,
+        )
+    raise RuntimeError("parse_content_type_unsupported")
+
+
+def make_parse_document_handler(
+    object_storage: ObjectStorage,
+    embedding_adapter: EmbeddingAdapter,
+    *,
+    ocr_adapter: OCRAdapter | None = None,
+    renderer: PDFPageRenderer | None = None,
+    ocr_languages: tuple[str, ...] = ("eng", "chi_sim"),
+    chunking: ChunkingConfig | None = None,
+    max_vault_files: int = 5_000,
+    max_vault_uncompressed_bytes: int = 500 * 1024 * 1024,
+) -> JobHandler:
+    """Create the production PARSE_DOCUMENT handler over shared runtime boundaries."""
+
+    active_ocr = ocr_adapter or DisabledOCRAdapter()
+    active_renderer = renderer if renderer is not None else PDFiumPageRenderer()
+    active_chunking = chunking or ChunkingConfig()
+    parser_signature = make_pipeline_signature(
+        "parser",
+        "native-upload",
+        "1",
+        max_vault_files,
+        max_vault_uncompressed_bytes,
+    )
+    ocr_signature = make_pipeline_signature(
+        "ocr", active_ocr.backend, "1", *ocr_languages
+    )
+
+    def handle(session: Session, job: IngestionJob) -> None:
+        if job.kind is not IngestionJobKind.PARSE_DOCUMENT or job.document_version_id is None:
+            raise RuntimeError("parse_job_target_invalid")
+        version = session.get(DocumentVersion, job.document_version_id)
+        if version is None or version.document_id != job.document_id:
+            raise RuntimeError("parse_job_target_invalid")
+        document = session.get(Document, version.document_id)
+        if document is None:
+            raise RuntimeError("parse_job_target_invalid")
+        stored = object_storage.get_object(version.object_key)
+        if (
+            stored.content_type != version.content_type
+            or hashlib.sha256(stored.data).hexdigest() != version.content_sha256
+        ):
+            raise RuntimeError("parse_object_contract_invalid")
+        version.state = DocumentVersionState.PARSING
+        parsed = _parse_uploaded_document(
+            stored.data,
+            content_type=version.content_type,
+            source_name=document.source_key,
+            max_vault_files=max_vault_files,
+            max_vault_uncompressed_bytes=max_vault_uncompressed_bytes,
+        )
+        if parsed.needs_ocr:
+            parsed = apply_selective_ocr(
+                parsed,
+                stored.data,
+                adapter=active_ocr,
+                renderer=active_renderer,
+                languages=ocr_languages,
+            ).document
+        build_job = persist_parsed_document_and_enqueue_build(
+            session,
+            document_version_id=version.id,
+            parsed_document=parsed,
+            parser_signature=parser_signature,
+            ocr_signature=ocr_signature,
+            chunking=active_chunking,
+            embedding_adapter=embedding_adapter,
+        )
+        job.checkpoint["build_job_id"] = str(build_job.id)
+
+    return handle
 
 
 def make_build_index_handler(adapter: EmbeddingAdapter) -> JobHandler:
@@ -249,6 +413,7 @@ def run_worker_once(
             worker_id=config.worker_id,
             now=timestamp,
             lease_duration=config.lease_duration,
+            kinds=tuple(handlers),
         )
         if claimed is None:
             return False

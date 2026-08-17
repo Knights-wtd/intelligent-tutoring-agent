@@ -1,5 +1,7 @@
+import hashlib
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from uuid import uuid4
 
 import pytest
@@ -9,19 +11,38 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
+from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
+from tutor_api.knowledge.indexing import ChunkingConfig
 from tutor_api.knowledge.models import (
+    Block,
+    Chunk,
+    Document,
+    DocumentState,
+    DocumentVersion,
+    DocumentVersionState,
     IndexVersion,
+    IndexVersionState,
     IngestionJob,
     IngestionJobKind,
     IngestionJobState,
     KnowledgeBase,
+    Page,
 )
+from tutor_api.knowledge.parsers import parse_markdown
+from tutor_api.knowledge.service import (
+    PreparedUpload,
+    persist_parsed_document_and_enqueue_build,
+    upload_prepared_knowledge_document,
+)
+from tutor_api.knowledge.storage import MemoryObjectStorage
 from tutor_api.knowledge.worker import (
     WorkerConfig,
     claim_job_statement,
     claim_next_job,
     complete_job,
     fail_job,
+    make_build_index_handler,
+    make_parse_document_handler,
     run_worker_once,
 )
 from tutor_api.spaces.models import Space, SpaceKind
@@ -60,6 +81,7 @@ def target(session: Session, suffix: str = "worker") -> tuple[User, KnowledgeBas
         embedding_backend="hash",
         embedding_model="feature-hash-v1",
         embedding_dimension=8,
+        embedding_contract_signature="tutor:embedding:v1:" + "e" * 64,
         index_signature="tutor:index:v1:" + "d" * 64,
         created_by_user_id=user.id,
     )
@@ -103,6 +125,76 @@ def add_job(
     return job
 
 
+def real_build_target(
+    session: Session, *, suffix: str, now: datetime
+) -> tuple[HashEmbeddingAdapter, IndexVersion, IndexVersion, IngestionJob, DocumentVersion]:
+    user, kb, old_active = target(session, suffix)
+    old_active.state = IndexVersionState.ACTIVE
+    old_active.completed_at = now
+    old_active.activated_at = now
+    document = Document(
+        space_id=kb.space_id,
+        knowledge_base_id=kb.id,
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+        title=f"{suffix}.md",
+        source_kind="upload",
+        source_key=f"{suffix}.md",
+        state=DocumentState.ACTIVE,
+    )
+    session.add(document)
+    session.flush()
+    raw = f"# {suffix}\n\nWorker build body.\n".encode()
+    version = DocumentVersion(
+        space_id=kb.space_id,
+        knowledge_base_id=kb.id,
+        document_id=document.id,
+        version_number=1,
+        content_sha256=hashlib.sha256(raw).hexdigest(),
+        object_key=f"objects/{suffix}",
+        content_type="text/markdown",
+        state=DocumentVersionState.PARSING,
+        created_by_user_id=user.id,
+    )
+    session.add(version)
+    session.flush()
+    adapter = HashEmbeddingAdapter(dimension=8)
+    job = persist_parsed_document_and_enqueue_build(
+        session,
+        document_version_id=version.id,
+        parsed_document=parse_markdown(raw, source_name=f"{suffix}.md"),
+        parser_signature="tutor:parser:v1:" + "f" * 64,
+        ocr_signature="tutor:ocr:v1:" + "0" * 64,
+        chunking=ChunkingConfig(),
+        embedding_adapter=adapter,
+    )
+    build_target = session.get(IndexVersion, job.index_version_id)
+    page = session.scalar(select(Page).where(Page.document_version_id == version.id))
+    block = session.scalar(select(Block).where(Block.page_id == page.id)) if page else None
+    assert build_target and page and block
+    partial_content = "partial build artifact"
+    session.add(
+        Chunk(
+            space_id=kb.space_id,
+            knowledge_base_id=kb.id,
+            index_version_id=build_target.id,
+            document_version_id=version.id,
+            page_id=page.id,
+            block_id=block.id,
+            ordinal=0,
+            source_pointer=f"{suffix}:partial:0",
+            content_sha256=hashlib.sha256(partial_content.encode()).hexdigest(),
+            content=partial_content,
+            lexical_terms=["artifact", "build", "partial"],
+            embedding_dimension=build_target.embedding_dimension,
+            index_signature=build_target.index_signature,
+            embedding=[0.0] * build_target.embedding_dimension,
+        )
+    )
+    session.flush()
+    return adapter, old_active, build_target, job, version
+
+
 def test_postgresql_claim_contract_uses_for_update_skip_locked() -> None:
     sql = str(
         claim_job_statement(datetime(2026, 8, 17, tzinfo=UTC)).compile(
@@ -111,6 +203,168 @@ def test_postgresql_claim_contract_uses_for_update_skip_locked() -> None:
     ).upper()
     assert "FOR UPDATE SKIP LOCKED" in sql
     assert all(state in sql for state in ("QUEUED", "RETRY_WAIT", "RUNNING"))
+
+
+def test_worker_claims_only_registered_handler_kinds(factory: sessionmaker[Session]) -> None:
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    with factory.begin() as session:
+        user, kb, index = target(session, "registered-kinds")
+        build = add_job(session, user, kb, index, now=now)
+        document = Document(
+            space_id=kb.space_id,
+            knowledge_base_id=kb.id,
+            owner_user_id=user.id,
+            created_by_user_id=user.id,
+            title="parse",
+            source_kind="upload",
+            source_key="parse.md",
+            state=DocumentState.ACTIVE,
+        )
+        session.add(document)
+        session.flush()
+        version = DocumentVersion(
+            space_id=kb.space_id,
+            knowledge_base_id=kb.id,
+            document_id=document.id,
+            version_number=1,
+            content_sha256="a" * 64,
+            object_key="objects/parse",
+            content_type="text/markdown",
+            state=DocumentVersionState.UPLOADED,
+            created_by_user_id=user.id,
+        )
+        session.add(version)
+        session.flush()
+        parse = IngestionJob(
+            space_id=kb.space_id,
+            knowledge_base_id=kb.id,
+            document_id=document.id,
+            document_version_id=version.id,
+            kind=IngestionJobKind.PARSE_DOCUMENT,
+            state=IngestionJobState.QUEUED,
+            idempotency_key=f"parse:{uuid4()}",
+            available_at=now - timedelta(seconds=1),
+            checkpoint={},
+            created_by_user_id=user.id,
+        )
+        session.add(parse)
+        session.flush()
+
+    with factory.begin() as session:
+        claimed = claim_next_job(
+            session,
+            worker_id="build-only",
+            now=now,
+            lease_duration=timedelta(seconds=30),
+            kinds=(IngestionJobKind.BUILD_INDEX,),
+        )
+        assert claimed and claimed.id == build.id
+        untouched = session.get(IngestionJob, parse.id)
+        assert untouched and untouched.state is IngestionJobState.QUEUED
+
+
+def test_uploaded_parse_job_runs_full_worker_pipeline_idempotently(
+    factory: sessionmaker[Session],
+) -> None:
+    import hashlib
+
+    from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
+
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    storage = MemoryObjectStorage()
+    adapter = HashEmbeddingAdapter(dimension=8)
+    with factory.begin() as session:
+        user = User(email="pipeline@example.com", username="pipeline", password_hash="h")
+        session.add(user)
+        session.flush()
+        space = Space(owner_id=user.id, kind=SpaceKind.PERSONAL, name="Pipeline")
+        session.add(space)
+        session.flush()
+        kb = KnowledgeBase(
+            space_id=space.id,
+            owner_user_id=user.id,
+            created_by_user_id=user.id,
+            name="Pipeline",
+        )
+        session.add(kb)
+        session.flush()
+        raw = b"# Reliable indexing\n\nWorker parsed body.\n"
+        uploaded = upload_prepared_knowledge_document(
+            session,
+            user,
+            kb.id,
+            PreparedUpload(
+                source_name="pipeline.md",
+                content_type="text/markdown",
+                content_sha256=hashlib.sha256(raw).hexdigest(),
+                temporary_file=BytesIO(raw),
+            ),
+            "pipeline-request",
+            storage,
+        )
+        parse_job_id = uploaded.job.id
+        version_id = uploaded.version.id
+
+    parse_handler = make_parse_document_handler(storage, adapter)
+    config = WorkerConfig(worker_id="pipeline-worker", retry_delay=timedelta(0))
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.PARSE_DOCUMENT: parse_handler},
+        config=config,
+        now=now,
+    )
+
+    with factory() as session:
+        parse_job = session.get(IngestionJob, parse_job_id)
+        version = session.get(DocumentVersion, version_id)
+        build_job = session.scalar(
+            select(IngestionJob).where(IngestionJob.kind == IngestionJobKind.BUILD_INDEX)
+        )
+        assert parse_job and parse_job.state is IngestionJobState.COMPLETED
+        assert version and version.state is DocumentVersionState.READY
+        assert session.scalar(select(func.count()).select_from(Page)) == 1
+        assert session.scalar(select(func.count()).select_from(Block)) == 2
+        assert build_job and build_job.state is IngestionJobState.QUEUED
+        build_job_id = build_job.id
+        target_index_id = build_job.index_version_id
+
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.BUILD_INDEX: make_build_index_handler(adapter)},
+        config=config,
+        now=now + timedelta(seconds=1),
+    )
+
+    with factory() as session:
+        chunk_count = session.scalar(select(func.count()).select_from(Chunk))
+        assert chunk_count and chunk_count > 0
+
+    with factory.begin() as session:
+        parse_job = session.get(IngestionJob, parse_job_id)
+        build_job = session.get(IngestionJob, build_job_id)
+        assert parse_job and build_job
+        parse_handler(session, parse_job)
+        make_build_index_handler(adapter)(session, build_job)
+
+    with factory() as session:
+        active = session.get(IndexVersion, target_index_id)
+        assert active and active.state is IndexVersionState.ACTIVE
+        assert session.scalar(select(func.count()).select_from(Page)) == 1
+        assert session.scalar(select(func.count()).select_from(Block)) == 2
+        assert session.scalar(select(func.count()).select_from(IngestionJob)) == 2
+        assert session.scalar(select(func.count()).select_from(IndexVersion)) == 1
+        assert session.scalar(select(func.count()).select_from(Chunk)) == chunk_count
+
+
+def test_worker_main_registers_parse_and_build_handlers() -> None:
+    from tutor_api.core.config import Settings
+    from tutor_api.worker_main import create_handlers
+
+    handlers = create_handlers(Settings(app_env="test", embedding_dimension=8))
+    assert set(handlers) == {
+        IngestionJobKind.PARSE_DOCUMENT,
+        IngestionJobKind.BUILD_INDEX,
+    }
 
 
 def test_claim_leases_job_and_does_not_reclaim_live_lease(factory: sessionmaker[Session]) -> None:
@@ -223,6 +477,120 @@ def test_retry_is_bounded_and_error_detail_is_redacted(factory: sessionmaker[Ses
         assert claimed.state is IngestionJobState.FAILED
         assert claimed.completed_at == now + timedelta(seconds=6)
         assert claimed.attempt_count == claimed.max_attempts and claimed.last_error_detail is None
+
+
+def test_terminal_build_failure_fails_target_and_cleans_partial_chunks(
+    factory: sessionmaker[Session],
+) -> None:
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    with factory.begin() as session:
+        adapter, old_active, build_target, job, _ = real_build_target(
+            session, suffix="terminal-build", now=now
+        )
+        job.max_attempts = 1
+        old_active_id = old_active.id
+        target_id = build_target.id
+        job_id = job.id
+
+    class FailingEmbedding:
+        backend = adapter.backend
+        model = adapter.model
+        dimension = adapter.dimension
+        signature = adapter.signature
+
+        def embed(self, text: str) -> list[float]:
+            raise RuntimeError("private provider failure")
+
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.BUILD_INDEX: make_build_index_handler(FailingEmbedding())},
+        config=WorkerConfig(worker_id="terminal-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        failed_job = session.get(IngestionJob, job_id)
+        failed_target = session.get(IndexVersion, target_id)
+        active = session.get(IndexVersion, old_active_id)
+        assert failed_job and failed_job.state is IngestionJobState.FAILED
+        assert failed_target and failed_target.state is IndexVersionState.FAILED
+        assert active and active.state is IndexVersionState.ACTIVE
+        assert session.scalar(
+            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
+        ) == 0
+
+
+def test_stale_exhausted_build_fails_only_its_target(
+    factory: sessionmaker[Session],
+) -> None:
+    now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+    with factory.begin() as session:
+        _, _, build_target, build_job, version = real_build_target(
+            session, suffix="stale-terminal", now=now
+        )
+        build_job.state = IngestionJobState.RUNNING
+        build_job.attempt_count = build_job.max_attempts
+        build_job.lease_owner = "dead-build-worker"
+        build_job.lease_expires_at = now - timedelta(seconds=1)
+        build_job.started_at = now - timedelta(minutes=1)
+        unrelated = IndexVersion(
+            space_id=build_target.space_id,
+            knowledge_base_id=build_target.knowledge_base_id,
+            version_number=build_target.version_number + 1,
+            state=IndexVersionState.BUILDING,
+            parser_signature="tutor:parser:v1:" + "1" * 64,
+            ocr_signature="tutor:ocr:v1:" + "2" * 64,
+            chunking_signature="tutor:chunking:v1:" + "3" * 64,
+            embedding_backend="hash",
+            embedding_model="feature-hash-v1",
+            embedding_dimension=8,
+            embedding_contract_signature="tutor:embedding:v1:" + "4" * 64,
+            index_signature="tutor:index:v1:" + "5" * 64,
+            created_by_user_id=build_target.created_by_user_id,
+        )
+        session.add(unrelated)
+        session.flush()
+        parse_job = IngestionJob(
+            space_id=version.space_id,
+            knowledge_base_id=version.knowledge_base_id,
+            document_id=version.document_id,
+            document_version_id=version.id,
+            kind=IngestionJobKind.PARSE_DOCUMENT,
+            state=IngestionJobState.RUNNING,
+            idempotency_key=f"parse-stale:{version.id}",
+            attempt_count=1,
+            max_attempts=1,
+            available_at=now - timedelta(minutes=1),
+            lease_owner="dead-parse-worker",
+            lease_expires_at=now - timedelta(seconds=1),
+            checkpoint={},
+            created_by_user_id=version.created_by_user_id,
+            started_at=now - timedelta(minutes=1),
+        )
+        session.add(parse_job)
+        session.flush()
+        target_id = build_target.id
+        unrelated_id = unrelated.id
+        parse_job_id = parse_job.id
+
+    with factory.begin() as session:
+        assert claim_next_job(
+            session,
+            worker_id="replacement",
+            now=now,
+            kinds=(IngestionJobKind.BUILD_INDEX, IngestionJobKind.PARSE_DOCUMENT),
+        ) is None
+
+    with factory() as session:
+        failed_target = session.get(IndexVersion, target_id)
+        untouched = session.get(IndexVersion, unrelated_id)
+        stale_parse = session.get(IngestionJob, parse_job_id)
+        assert failed_target and failed_target.state is IndexVersionState.FAILED
+        assert untouched and untouched.state is IndexVersionState.BUILDING
+        assert stale_parse and stale_parse.state is IngestionJobState.FAILED
+        assert session.scalar(
+            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
+        ) == 0
 
 
 def test_restart_after_commit_does_not_duplicate_side_effect(

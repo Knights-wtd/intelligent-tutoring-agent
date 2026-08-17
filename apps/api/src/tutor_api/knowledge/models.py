@@ -435,6 +435,7 @@ class IndexVersion(Base):
     embedding_backend: Mapped[str] = mapped_column(String(100), nullable=False)
     embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
     embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_contract_signature: Mapped[str] = mapped_column(String(512), nullable=False)
     index_signature: Mapped[str] = mapped_column(String(512), nullable=False)
     created_by_user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id"), nullable=False, index=True

@@ -15,10 +15,13 @@ from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.models import IngestionJobKind
+from tutor_api.knowledge.ocr import DisabledOCRAdapter, PDFiumPageRenderer
+from tutor_api.knowledge.storage import create_object_storage
 from tutor_api.knowledge.worker import (
     JobHandler,
     WorkerConfig,
     make_build_index_handler,
+    make_parse_document_handler,
     run_worker_forever,
 )
 
@@ -38,7 +41,19 @@ def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]
         model=settings.embedding_model,
         dimension=settings.embedding_dimension,
     )
-    return {IngestionJobKind.BUILD_INDEX: make_build_index_handler(adapter)}
+    object_storage = create_object_storage(settings)
+    return {
+        IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
+            object_storage,
+            adapter,
+            ocr_adapter=DisabledOCRAdapter(),
+            renderer=PDFiumPageRenderer(),
+            ocr_languages=settings.ocr_languages,
+            max_vault_files=settings.max_vault_files,
+            max_vault_uncompressed_bytes=settings.max_vault_uncompressed_bytes,
+        ),
+        IngestionJobKind.BUILD_INDEX: make_build_index_handler(adapter),
+    }
 
 
 def default_worker_id() -> str:

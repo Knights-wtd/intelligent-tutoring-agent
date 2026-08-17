@@ -471,7 +471,7 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0007_chunk_lexical_terms"
+        assert version == "0008_embedding_contract"
     finally:
         engine.dispose()
 
@@ -499,7 +499,7 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0007_chunk_lexical_terms"
+        assert version == "0008_embedding_contract"
     finally:
         engine.dispose()
 
@@ -744,7 +744,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
                 MigrationContext.configure(connection), Base.metadata
             ) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0007_chunk_lexical_terms"
+                "0008_embedding_contract"
             )
     finally:
         engine.dispose()
@@ -1134,6 +1134,7 @@ def test_migrated_sqlite_rejects_cross_knowledge_base_chunks(tmp_path) -> None:
                 "embedding_backend": "hash",
                 "embedding_model": "hash-v1",
                 "embedding_dimension": 8,
+                "embedding_contract_signature": "embedding:v1",
                 "index_signature": "index:v1",
                 "created_by_user_id": user_id,
             },

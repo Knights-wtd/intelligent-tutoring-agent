@@ -19,7 +19,9 @@ from tutor_api.knowledge.ocr import (
 from tutor_api.knowledge.storage import (
     MemoryObjectStorage,
     ObjectAlreadyExistsError,
+    S3ObjectStorage,
     build_document_object_key,
+    create_object_storage,
 )
 
 SPACE_ID = UUID("11111111-1111-1111-1111-111111111111")
@@ -64,6 +66,22 @@ def test_document_object_key_uses_fixed_scope_and_normalizes_unicode() -> None:
 def test_document_object_key_rejects_unsafe_names(unsafe_name: str) -> None:
     with pytest.raises(ValueError, match="safe relative path"):
         build_document_object_key(SPACE_ID, DOCUMENT_ID, VERSION_ID, unsafe_name)
+
+
+def test_settings_construct_real_shared_s3_object_storage() -> None:
+    settings = Settings(
+        app_env="development",
+        object_storage_endpoint="http://minio:9000",
+        object_storage_access_key="app-access",
+        object_storage_secret_key="app-secret-value",
+        object_storage_bucket="knowledge-assets",
+    )
+
+    storage = create_object_storage(settings)
+
+    assert isinstance(storage, S3ObjectStorage)
+    assert storage.endpoint == "http://minio:9000"
+    assert storage.bucket == "knowledge-assets"
 
 
 def test_memory_object_storage_round_trips_bytes_and_normalized_content_type() -> None:

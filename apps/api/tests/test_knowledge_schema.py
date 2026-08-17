@@ -153,6 +153,7 @@ def create_index(
         embedding_backend="hash",
         embedding_model="feature-hash-v1",
         embedding_dimension=dimension,
+        embedding_contract_signature=f"embedding:{suffix}",
         index_signature=f"index:{suffix}",
         created_by_user_id=user.id,
     )
@@ -279,6 +280,7 @@ def test_each_knowledge_base_has_at_most_one_active_index(session: Session) -> N
             embedding_backend="hash",
             embedding_model="feature-hash-v1",
             embedding_dimension=8,
+            embedding_contract_signature="embedding:v2",
             index_signature="index:v2",
             created_by_user_id=user.id,
         )

@@ -357,6 +357,7 @@ def _find_reusable_embedding(
             IndexVersion.embedding_backend == adapter.backend,
             IndexVersion.embedding_model == adapter.model,
             IndexVersion.embedding_dimension == adapter.dimension,
+            IndexVersion.embedding_contract_signature == _embedding_contract_signature(adapter),
             IndexVersion.state.in_((IndexVersionState.ACTIVE, IndexVersionState.RETIRED)),
         )
         .limit(1)
@@ -476,13 +477,14 @@ def prepare_index_build(
     """Create or return the unique immutable target for one complete build contract."""
 
     versions = _load_versions(session, request)
+    embedding_contract_signature = _embedding_contract_signature(adapter)
     signature = make_index_signature(
         knowledge_base_id=request.knowledge_base_id,
         document_sources=((version.id, version.content_sha256) for version in versions),
         parser_signature=request.parser_signature,
         ocr_signature=request.ocr_signature,
         chunking_signature=request.chunking.signature,
-        embedding_signature=_embedding_contract_signature(adapter),
+        embedding_signature=embedding_contract_signature,
     )
     existing = session.scalar(
         select(IndexVersion).where(
@@ -511,6 +513,7 @@ def prepare_index_build(
         embedding_backend=adapter.backend,
         embedding_model=adapter.model,
         embedding_dimension=adapter.dimension,
+        embedding_contract_signature=embedding_contract_signature,
         index_signature=signature,
         created_by_user_id=request.created_by_user_id,
     )

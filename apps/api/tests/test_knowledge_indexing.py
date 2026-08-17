@@ -263,6 +263,51 @@ def test_hash_reuse_respects_embedding_contract(session: Session) -> None:
     assert all(len(c.embedding) == 16 for c in chunks)
 
 
+def test_signature_only_embedding_change_does_not_reuse_old_vectors(session: Session) -> None:
+    class ContractEmbedding:
+        backend = "hash"
+        model = "feature-hash-v1"
+        dimension = 8
+
+        def __init__(self, signature: str, marker: float) -> None:
+            self.signature = signature
+            self.marker = marker
+            self.calls: list[str] = []
+
+        def embed(self, text: str) -> list[float]:
+            self.calls.append(text)
+            return [self.marker] + [0.0] * 7
+
+    user, space, kb = graph(session, "signature-only")
+    version = add_version(
+        session,
+        user,
+        space,
+        kb,
+        "signature-only",
+        ((BlockKind.PARAGRAPH, "signature contract body"),),
+    )
+    build_request = request(user, space, kb, (version.id,))
+    first_adapter = ContractEmbedding("contract-v1", 1.0)
+    first = build_index(session, build_request, first_adapter)
+    session.commit()
+
+    second_adapter = ContractEmbedding("contract-v2", 2.0)
+    second = build_index(session, build_request, second_adapter)
+    session.commit()
+
+    first_index = session.get(IndexVersion, first.index_version_id)
+    second_index = session.get(IndexVersion, second.index_version_id)
+    second_chunk = session.scalar(
+        select(Chunk).where(Chunk.index_version_id == second.index_version_id)
+    )
+    assert second.index_version_id != first.index_version_id
+    assert second_adapter.calls == ["signature contract body"]
+    assert first_index and second_index
+    assert first_index.embedding_contract_signature != second_index.embedding_contract_signature
+    assert second_chunk and second_chunk.embedding == [2.0] + [0.0] * 7
+
+
 def test_index_signature_includes_full_embedding_contract(session: Session) -> None:
     class CollidingModelEmbedding(CountingEmbedding):
         model = "different-model"
