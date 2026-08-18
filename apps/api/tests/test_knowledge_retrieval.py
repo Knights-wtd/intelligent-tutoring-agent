@@ -11,7 +11,11 @@ import tutor_api.knowledge.models  # noqa: F401
 import tutor_api.spaces.models  # noqa: F401
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
-from tutor_api.knowledge.indexing import content_sha256, normalize_lexical_terms
+from tutor_api.knowledge.indexing import (
+    _embedding_contract_signature,
+    content_sha256,
+    normalize_lexical_terms,
+)
 from tutor_api.knowledge.models import (
     Chunk,
     Document,
@@ -27,16 +31,23 @@ from tutor_api.main import create_app
 
 
 class FixedEmbeddingAdapter:
-    backend = "fixed"
-    model = "fixed-test"
-    signature = "fixed-test:8"
-    dimension = 8
-
-    def __init__(self, vectors: dict[str, list[float]] | None = None) -> None:
+    def __init__(
+        self,
+        vectors: dict[str, list[float]] | None = None,
+        *,
+        backend: str = "hash",
+        model: str = "feature-hash-v1",
+        dimension: int = 8,
+        signature: str = "hash:feature-hash-v1:8",
+    ) -> None:
         self.vectors = vectors or {}
+        self.backend = backend
+        self.model = model
+        self.dimension = dimension
+        self.signature = signature
 
     def embed(self, text: str) -> list[float]:
-        return self.vectors.get(text, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        return self.vectors.get(text, [1.0] + [0.0] * (self.dimension - 1))
 
 
 def make_client(
@@ -135,7 +146,7 @@ def seed_chunk(
             embedding_backend="hash",
             embedding_model="feature-hash-v1",
             embedding_dimension=8,
-            embedding_contract_signature="hash:feature-hash-v1:8",
+            embedding_contract_signature=_embedding_contract_signature(FixedEmbeddingAdapter()),
             index_signature=f"index:{index_version}",
             created_by_user_id=user_id,
             completed_at=datetime.now(UTC),
@@ -374,6 +385,128 @@ def test_search_rejects_unbounded_query_and_result_count_and_bounds_excerpt() ->
 
         assert too_long.status_code == too_many.status_code == 422
         assert len(bounded.json()["results"][0]["excerpt"]) <= MAX_EXCERPT_CHARACTERS
+    finally:
+        client.close()
+        engine.dispose()
+
+def test_search_degrades_to_lexical_only_when_active_embedding_contract_differs() -> None:
+    adapter = FixedEmbeddingAdapter(
+        {"contract": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+        model="feature-hash-v2",
+        signature="hash:feature-hash-v2:8",
+    )
+    client, engine = make_client(adapter)
+    try:
+        registration = register(client, "retrieval-contract-mismatch")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            common = {
+                "user_id": UUID(registration["user"]["id"]),
+                "space_id": UUID(registration["personal_space"]["id"]),
+                "knowledge_base_id": UUID(knowledge_base["id"]),
+            }
+            seed_chunk(
+                session,
+                **common,
+                source_name="lexical.md",
+                content="contract exact lexical answer",
+                vector=[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            )
+            seed_chunk(
+                session,
+                **common,
+                source_name="stale-vector.md",
+                content="semantic-only stale embedding",
+                vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                existing_index=session.scalar(
+                    select(IndexVersion).where(
+                        IndexVersion.knowledge_base_id == common["knowledge_base_id"],
+                        IndexVersion.state == IndexVersionState.ACTIVE,
+                    )
+                ),
+                ordinal=1,
+            )
+            session.commit()
+
+        response = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "contract"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert [item["citation"]["source_name"] for item in response.json()["results"]] == [
+            "lexical.md"
+        ]
+    finally:
+        client.close()
+        engine.dispose()
+
+
+def test_search_finds_lexical_hit_beyond_first_thousand_active_chunks() -> None:
+    client, engine = make_client(FixedEmbeddingAdapter(signature="hash:feature-hash-v2:8"))
+    try:
+        registration = register(client, "retrieval-full-index")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            first_chunk_id = seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="large.md",
+                content="ordinary filler zero",
+                vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            )
+            first_chunk = session.get(Chunk, first_chunk_id)
+            assert first_chunk is not None
+            for ordinal in range(1, 1_000):
+                content = f"ordinary filler {ordinal}"
+                session.add(
+                    Chunk(
+                        space_id=first_chunk.space_id,
+                        knowledge_base_id=first_chunk.knowledge_base_id,
+                        index_version_id=first_chunk.index_version_id,
+                        document_version_id=first_chunk.document_version_id,
+                        page_id=first_chunk.page_id,
+                        block_id=None,
+                        ordinal=ordinal,
+                        source_pointer=f"large.md#page=7#chunk={ordinal}",
+                        content_sha256=content_sha256(content),
+                        content=content,
+                        lexical_terms=normalize_lexical_terms(content),
+                        embedding_dimension=8,
+                        index_signature=first_chunk.index_signature,
+                        embedding=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    )
+                )
+            target_content = "needle-beyond-bound exact lexical answer"
+            session.add(
+                Chunk(
+                    space_id=first_chunk.space_id,
+                    knowledge_base_id=first_chunk.knowledge_base_id,
+                    index_version_id=first_chunk.index_version_id,
+                    document_version_id=first_chunk.document_version_id,
+                    page_id=first_chunk.page_id,
+                    block_id=None,
+                    ordinal=1_000,
+                    source_pointer="large.md#page=7#chunk=1000",
+                    content_sha256=content_sha256(target_content),
+                    content=target_content,
+                    lexical_terms=normalize_lexical_terms(target_content),
+                    embedding_dimension=8,
+                    index_signature=first_chunk.index_signature,
+                    embedding=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                )
+            )
+            session.commit()
+
+        response = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "needle-beyond-bound", "limit": 1},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["results"][0]["excerpt"] == target_content
     finally:
         client.close()
         engine.dispose()

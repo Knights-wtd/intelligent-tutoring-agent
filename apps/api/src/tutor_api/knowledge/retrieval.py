@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import heapq
 import hmac
 import math
 import re
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session
 from tutor_api.identity.models import User
 from tutor_api.knowledge.access import get_readable_knowledge_base
 from tutor_api.knowledge.embeddings import EmbeddingAdapter
-from tutor_api.knowledge.indexing import normalize_lexical_terms
+from tutor_api.knowledge.indexing import _embedding_contract_signature, normalize_lexical_terms
 from tutor_api.knowledge.models import (
     Chunk,
     Document,
@@ -76,6 +77,19 @@ class _Candidate:
     chunk: Chunk
     source_name: str
     page_number: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundedCandidate:
+    """Reverse rank ordering so a heap keeps its worst candidate at the root."""
+
+    rank_key: tuple[float, int, str]
+    candidate: _Candidate
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, _BoundedCandidate):
+            return NotImplemented
+        return self.rank_key > other.rank_key
 
 
 def normalize_search_query(value: str) -> str:
@@ -224,31 +238,66 @@ def _active_knowledge_base(
     return knowledge_base
 
 
-def _candidate_rows(session: Session, knowledge_base: KnowledgeBase) -> list[_Candidate]:
-    rows = session.execute(
+def _active_index(session: Session, knowledge_base: KnowledgeBase) -> IndexVersion | None:
+    return session.scalar(
+        select(IndexVersion).where(
+            IndexVersion.knowledge_base_id == knowledge_base.id,
+            IndexVersion.space_id == knowledge_base.space_id,
+            IndexVersion.state == IndexVersionState.ACTIVE,
+        )
+    )
+
+
+def _active_candidate_rows(
+    session: Session, knowledge_base: KnowledgeBase, active_index: IndexVersion
+) -> Iterable[_Candidate]:
+    statement = (
         select(Chunk, Document.source_key, Page.page_number)
-        .join(IndexVersion, IndexVersion.id == Chunk.index_version_id)
         .join(DocumentVersion, DocumentVersion.id == Chunk.document_version_id)
         .join(Document, Document.id == DocumentVersion.document_id)
         .outerjoin(Page, Page.id == Chunk.page_id)
         .where(
             Chunk.knowledge_base_id == knowledge_base.id,
             Chunk.space_id == knowledge_base.space_id,
-            IndexVersion.knowledge_base_id == knowledge_base.id,
-            IndexVersion.space_id == knowledge_base.space_id,
-            IndexVersion.state == IndexVersionState.ACTIVE,
+            Chunk.index_version_id == active_index.id,
             DocumentVersion.space_id == knowledge_base.space_id,
             DocumentVersion.state == DocumentVersionState.READY,
             Document.state == DocumentState.ACTIVE,
         )
-        .order_by(Chunk.ordinal, Chunk.id)
-        .limit(MAX_RETRIEVAL_CANDIDATES)
-    ).all()
-    return [
-        _Candidate(chunk=chunk, source_name=source_name, page_number=page_number)
-        for chunk, source_name, page_number in rows
-    ]
+        .execution_options(stream_results=True)
+    )
+    rows = session.execute(statement).yield_per(MAX_RETRIEVAL_CANDIDATES)
+    try:
+        for chunk, source_name, page_number in rows:
+            yield _Candidate(chunk=chunk, source_name=source_name, page_number=page_number)
+    finally:
+        rows.close()
 
+
+def _embedding_contract_matches(index: IndexVersion, adapter: EmbeddingAdapter) -> bool:
+    try:
+        return (
+            index.embedding_backend == adapter.backend
+            and index.embedding_model == adapter.model
+            and index.embedding_dimension == adapter.dimension
+            and index.embedding_contract_signature == _embedding_contract_signature(adapter)
+        )
+    except Exception:
+        return False
+
+
+def _add_bounded_candidate(
+    heap: list[_BoundedCandidate], candidate: _Candidate, rank_key: tuple[float, int, str]
+) -> None:
+    ranked = _BoundedCandidate(rank_key=rank_key, candidate=candidate)
+    if len(heap) < MAX_RETRIEVAL_CANDIDATES:
+        heapq.heappush(heap, ranked)
+    elif rank_key < heap[0].rank_key:
+        heapq.heapreplace(heap, ranked)
+
+
+def _ordered_candidates(heap: list[_BoundedCandidate]) -> list[_Candidate]:
+    return [ranked.candidate for ranked in sorted(heap, key=lambda ranked: ranked.rank_key)]
 
 def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
     if len(left) != len(right) or not left:
@@ -292,38 +341,43 @@ def search_knowledge(
         raise ValueError("result limit is out of bounds")
     normalized_query = normalize_search_query(query)
     knowledge_base = _active_knowledge_base(session, user, knowledge_base_id)
-    candidates = _candidate_rows(session, knowledge_base)
-    if not candidates:
+    active_index = _active_index(session, knowledge_base)
+    if active_index is None:
         return []
 
     query_terms = normalize_lexical_terms(normalized_query)
     term_set = set(query_terms)
-    lexical = sorted(
-        (
-            candidate
-            for candidate in candidates
-            if len(term_set.intersection(candidate.chunk.lexical_terms)) > 0
-        ),
-        key=lambda candidate: (
-            -len(term_set.intersection(candidate.chunk.lexical_terms)),
-            candidate.chunk.ordinal,
-            str(candidate.chunk.id),
-        ),
+    query_embedding = (
+        _embedded_query(embedding_adapter, normalized_query)
+        if _embedding_contract_matches(active_index, embedding_adapter)
+        else None
     )
-    query_embedding = _embedded_query(embedding_adapter, normalized_query)
-    vector = sorted(
-        (
-            candidate
-            for candidate in candidates
-            if candidate.chunk.embedding_dimension == len(query_embedding)
-        ),
-        key=lambda candidate: (
-            -_cosine_similarity(query_embedding, candidate.chunk.embedding),
-            candidate.chunk.ordinal,
-            str(candidate.chunk.id),
-        ),
-    )
-    candidates_by_id = {candidate.chunk.id: candidate for candidate in candidates}
+    lexical_heap: list[_BoundedCandidate] = []
+    vector_heap: list[_BoundedCandidate] = []
+    for candidate in _active_candidate_rows(session, knowledge_base, active_index):
+        lexical_score = len(term_set.intersection(candidate.chunk.lexical_terms))
+        if lexical_score:
+            _add_bounded_candidate(
+                lexical_heap,
+                candidate,
+                (-float(lexical_score), candidate.chunk.ordinal, str(candidate.chunk.id)),
+            )
+        if (
+            query_embedding is not None
+            and candidate.chunk.embedding_dimension == len(query_embedding)
+        ):
+            similarity = _cosine_similarity(query_embedding, candidate.chunk.embedding)
+            _add_bounded_candidate(
+                vector_heap,
+                candidate,
+                (-similarity, candidate.chunk.ordinal, str(candidate.chunk.id)),
+            )
+
+    lexical = _ordered_candidates(lexical_heap)
+    vector = _ordered_candidates(vector_heap)
+    candidates_by_id = {
+        candidate.chunk.id: candidate for candidate in (*lexical, *vector)
+    }
     ordered_ids = reciprocal_rank_fusion(
         (
             [candidate.chunk.id for candidate in lexical],
