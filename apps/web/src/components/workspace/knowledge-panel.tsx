@@ -421,10 +421,9 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
 
           <div aria-label="知识库内容层级" className={styles.knowledgeHierarchy}>
             <strong>知识库</strong>
-            <span className={styles.hierarchyBranch}>
-              {selectedKnowledgeBase?.name ?? "请选择知识库"}
-            </span>
+            <span>当前知识库：{selectedKnowledgeBase?.name ?? "请选择知识库"}</span>
             <strong className={styles.hierarchyBranch}>教材/练习</strong>
+            <strong className={styles.hierarchyBranch}>文件</strong>
             <div className={styles.hierarchyFiles}>
               {uploads.length === 0 ? <span>尚未上传文件</span> : null}
               {uploads.map((entry) => (
@@ -554,7 +553,7 @@ function learnerUploadState(response?: KnowledgeUpload): string {
     state.toUpperCase(),
   );
   if (states.some((state) => state === "FAILED")) return "处理失败";
-  if (states.slice(0, 2).some((state) => state === "READY" || state === "ACTIVE")) {
+  if (response.version_state.toUpperCase() === "READY" && response.job_state.toUpperCase() === "COMPLETED") {
     return "可搜索";
   }
   return "处理中";

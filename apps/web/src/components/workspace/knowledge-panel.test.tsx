@@ -56,8 +56,10 @@ describe("KnowledgePanel", () => {
     expect(mockKnowledgeApi.list).toHaveBeenCalledWith("space-math", expect.any(AbortSignal));
 
     const hierarchy = screen.getByLabelText("知识库内容层级");
-    expect(hierarchy).toHaveTextContent("知识库");
-    expect(hierarchy).toHaveTextContent("教材/练习");
+    expect(within(hierarchy).getByText("知识库")).toBeInTheDocument();
+    expect(within(hierarchy).getByText("教材/练习")).toBeInTheDocument();
+    expect(within(hierarchy).getByText("文件")).toBeInTheDocument();
+    expect(hierarchy).toHaveTextContent("当前知识库：七年级数学");
     expect(hierarchy).toHaveTextContent("尚未上传文件");
     expect(hierarchy).not.toHaveTextContent(/OCR|embedding|worker|job/i);
   });
@@ -109,6 +111,25 @@ describe("KnowledgePanel", () => {
     const hierarchy = screen.getByLabelText("知识库内容层级");
     expect(hierarchy).toHaveTextContent("chapter.md");
     expect(hierarchy).toHaveTextContent("可搜索");
+  });
+
+  it("keeps a newly accepted active document in processing until its version completes", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(
+      uploadResponse({ document_state: "ACTIVE", version_state: "UPLOADED", job_state: "QUEUED" }),
+    );
+    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
+    await screen.findByRole("button", { name: "七年级数学" });
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["content"], "queued.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+
+    const hierarchy = screen.getByLabelText("知识库内容层级");
+    expect(await within(hierarchy).findByText("处理中")).toBeInTheDocument();
+    expect(hierarchy).not.toHaveTextContent("可搜索");
   });
 
   it("shows failed upload state without internal details and retries the same file", async () => {
