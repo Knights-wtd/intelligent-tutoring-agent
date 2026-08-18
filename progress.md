@@ -420,3 +420,13 @@
 - bounded S3 PUT 最多缓冲到配置的最大对象大小；有界但仍可能产生较高单请求内存峰值。
 - 当前验证不替代真实 PostgreSQL/pgvector、对象存储、队列、容器和 OCR corpus 集成验收。
 - 下一步为 Task 8「hybrid retrieval and secure source preview」；Task 8 尚未开始。不得将 Task 7 final PASS 误记为 Milestone 3 / Phase 5 完成，也不在本记录中创建最终 handoff。
+
+## Session: 2026-08-18 · Phase 5 / Task 8
+
+- **Status:** Task 8「hybrid retrieval and secure source preview」最终 PASS；Milestone 3 / Phase 5 仍为 `in_progress`。
+- **代码提交：**`e219bdf feat: add cited knowledge retrieval`、`11f1aa4 fix: persist cited page previews`、`13c9d15 fix: preserve reliable retrieval recall`。
+- **复审：**初始规格 FAIL（真实 ingestion 未生成 preview object）后修复；复审规格 PASS。初始质量 FAIL（embedding contract 混用、首 1000 行截断漏召回）后修复；最终独立规格 PASS、质量/安全 PASS。
+- **验证：**页面预览修复聚焦组合 45 passed；最终检索可靠性修复后 retrieval/source/indexing 组合 31 passed；targeted Ruff PASS；`git diff --check` PASS。
+- **交付：**ACTIVE-only hybrid RRF、embedding 合同安全降级、完整索引有界候选 heap、opaque citation、真实解析预览持久化、授权先于对象读取、bounded Range 与 provider error redaction。
+- **保留风险：**完整 ACTIVE index 流式扫描的内存有界，但 CPU/数据库行读取线性增长；尚未运行 production-scale benchmark、真实 PostgreSQL/pgvector top-k、Docker vertical slice。
+- **下一步：**Task 9「C3 knowledge panel」。不得将 Task 8 完成误记为 Phase 5 完成。

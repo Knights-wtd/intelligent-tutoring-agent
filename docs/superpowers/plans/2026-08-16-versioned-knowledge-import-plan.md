@@ -93,11 +93,12 @@ Final main-thread verification after `363f3fb`: the combined Task 7-related set 
 
 **Files:** Create `knowledge/retrieval.py`; modify router/schemas/storage; test `test_knowledge_retrieval.py` and `test_knowledge_sources.py`.
 
-- [ ] Test exact-term and vector recall, reciprocal-rank fusion, active-index-only behavior, tenant isolation, and correct page citations on a fixed corpus.
-- [ ] Add `POST /api/v1/knowledge-bases/{id}/search` with bounded excerpts and citation identifiers.
-- [ ] Add authenticated source/page endpoints with range support or short-lived S3 presigning; never expose object keys, credentials, or provider errors.
-- [ ] Run tests; commit `feat: add cited knowledge retrieval`.
+- [x] Test exact-term and vector recall, reciprocal-rank fusion, active-index-only behavior, tenant isolation, and correct page citations on a fixed corpus.
+- [x] Add `POST /api/v1/knowledge-bases/{id}/search` with bounded excerpts and citation identifiers.
+- [x] Add authenticated source/page endpoints with range support or short-lived S3 presigning; never expose object keys, credentials, or provider errors.
+- [x] Run tests; commit `feat: add cited knowledge retrieval`.
 
+**Delivery record (2026-08-18):** Completed in commits `e219bdf`, `11f1aa4`, and `13c9d15`. Independent specification review PASS and final quality/security review PASS. Focused verification: 31 retrieval/source/indexing tests passed after the final reliability fix; targeted Ruff and `git diff --check` passed. Retrieval is bounded in memory and preserves full-index recall, but current CPU/database row work is linear in active-index size; production-scale benchmarking and database-native top-k remain non-blocking follow-up work.
 ### Task 9: C3 knowledge panel
 
 **Files:** Create `apps/web/src/lib/knowledge-api.ts`, `knowledge-panel.tsx`, and tests; modify workspace shell/CSS.
@@ -124,3 +125,4 @@ Final main-thread verification after `363f3fb`: the combined Task 7-related set 
 - Agent tutoring, questions, wrong answers, long-term memory, and class publishing remain Milestones 4-5 and are intentionally not hidden inside this plan.
 - No DeepTutor source code is scheduled for direct copying; only interface and lifecycle ideas are used.
 - No TODO/TBD placeholders are present; each task names exact files, tests, commands, expected behavior, and a commit boundary.
+

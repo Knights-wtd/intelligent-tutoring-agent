@@ -243,3 +243,14 @@ Phase 5：知识与 Agent 能力实现
 - 非阻塞残余：长 external handler 执行期间仍持有 transaction/job lock；bounded S3 PUT 会最多缓冲到配置的最大对象大小。历史 Windows OCR combined run 曾有两个 1 秒 PID-file timing failure，但精确两项与完整 OCR 文件分别通过，最终 362 项 combined focused run 通过，质量复审判定为非阻塞 timing observation。
 - 未运行 Task 7 变更后的完整 API suite、Docker、真实 PostgreSQL/pgvector、MinIO/S3、Redis、Tesseract/PDFium corpus、外部服务或 POSIX 实机 process group。
 - Task 7 final PASS 不代表 Milestone 3 / Phase 5 完成；状态继续为 `in_progress`，下一步是 Task 8，且本次未开始 Task 8。
+
+### Task 8 已确认检索与安全预览边界
+
+- Task 8 最终代码提交：`e219bdf feat: add cited knowledge retrieval`、`11f1aa4 fix: persist cited page previews`、`13c9d15 fix: preserve reliable retrieval recall`。
+- 搜索仅面向授权知识库的 ACTIVE immutable index；lexical/vector 候选经确定性 RRF 融合，query/result/excerpt/candidate 均有界。
+- embedding adapter 与 ACTIVE index 的 backend/model/dimension/contract signature 必须完全一致才启用 vector recall；不一致时确定性降级为 lexical-only，避免混用不兼容向量。
+- 候选选择遍历完整 ACTIVE index，同时以有界 top-1000 heap 保留 lexical/vector 候选，修复了先截断前 1000 行导致的确定性漏召回。
+- 正常上传→解析流程持久化不可变、有界的页面预览对象；opaque citation 校验、租户授权、ACTIVE-index membership 与文档状态检查均先于对象读取，Range 和 provider 错误保持有界、脱敏。
+- 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。最终修复后 retrieval/source/indexing 聚焦组合 31 passed，targeted Ruff 与 `git diff --check` PASS。
+- 非阻塞风险：完整索引扫描内存有界，但 CPU/数据库行工作随 ACTIVE index 线性增长；生产规模 benchmark 与数据库原生 top-k 留待后续优化。
+- Phase 5 / Milestone 3 仍为 `in_progress`；下一步为 Task 9「C3 knowledge panel」。

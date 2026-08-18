@@ -399,3 +399,10 @@
 - 历史 Windows OCR combined run 曾出现精确两个 1 秒 PID-file timing failures；精确两项测试与完整 OCR 文件分别通过，最终 362 项 combined focused run 也通过。质量 reviewer 将其记录为非阻塞 timing observation，而非 Task 7 correctness failure。
 - 未运行 Task 7 变更后的完整 API suite；未运行 Docker、真实 PostgreSQL/pgvector、MinIO/S3、Redis、真实 Tesseract/PDFium corpus、external services 或 live POSIX process group。
 - 下一步是 Task 8「hybrid retrieval and secure source preview」；本次不开始 Task 8，也不创建最终 handoff。
+
+## 2026-08-18 · Task 8 cited retrieval findings
+
+- 只限制候选 heap 大小不足以保证数据库工作有界于常数；当前实现选择完整 ACTIVE index 流式扫描以保证召回正确性，内存保持有界，但总行工作仍为 O(index size)。这是明确记录的性能权衡，不是安全或正确性缺陷。
+- runtime embedding 合同不可假定与 ACTIVE index 相同；重建完成前旧索引仍可 ACTIVE，因此 query adapter 必须与已存 backend/model/dimension/signature 精确匹配，否则只能 lexical-only。
+- cited page preview 必须由正常解析持久化路径生成；仅在测试中直接设置 `Page.text_object_key` 会制造无法用于真实上传的假闭环。
+- opaque citation 仍需在对象读取前重新验证知识库作用域、ACTIVE index、文档/版本状态和租户权限；不能把 token 完整性当作授权替代品。
