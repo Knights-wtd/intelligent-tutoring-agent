@@ -112,7 +112,7 @@ Final main-thread verification after `363f3fb`: the combined Task 7-related set 
 
 ### Task 10: End-to-end verification and records
 
-**Files:** Modify `.env.example`, `README.md`, `task_plan.md`, `findings.md`, and `progress.md`.
+**Files:** Modify `.env.example`, `README.md`, `task_plan.md`, `findings.md`, `progress.md`, `docs/superpowers/plans/2026-08-16-versioned-knowledge-import-plan.md`, and `docs/superpowers/handoffs/2026-08-18-task10-verification-blocked.md`.
 
 - [ ] Run API unit/coverage/Ruff and Web test/lint/build. (Executed 2026-08-18: Web checks pass; API full coverage gate does not.)
 - [ ] Run migration round-trip against isolated PostgreSQL/pgvector. (Blocked: no Docker or local PostgreSQL tooling.)
