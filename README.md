@@ -1,6 +1,6 @@
 # AI 教材家教平台
 
-这是当前平台基础里程碑的本地使用说明。当前版本已经具备 FastAPI 健康服务、Next.js 三栏可调整宽度的学习工作区、PostgreSQL/pgvector、带密码认证的 Redis、MinIO、Docker 服务拓扑，以及自动化测试和 CI。用户可注册、登录、退出，拥有独立个人空间；任意已登录用户可创建班级，并通过邀请码邀请学生加入。当前版本还提供启用模型目录、人民币钱包预留结算，以及管理员人工充值和冲正；知识入库与真实模型调用仍属于后续里程碑。
+这是当前平台基础里程碑的本地使用说明。当前版本已经具备 FastAPI 健康服务、Next.js 三栏可调整宽度的学习工作区、PostgreSQL/pgvector、带密码认证的 Redis、MinIO、Docker 服务拓扑，以及自动化测试和 CI。用户可注册、登录、退出，拥有独立个人空间；任意已登录用户可创建班级，并通过邀请码邀请学生加入。当前版本还提供启用模型目录、人民币钱包预留结算，以及空间隔离的知识库创建、上传、异步入库、带引用检索和原页预览界面；真实容器化端到端验收仍必须在可用 Docker/pgvector 运行时完成。
 
 ## 使用 Docker 启动
 
@@ -82,6 +82,17 @@ pnpm dev:web
 
 本地直接运行时，API 的默认配置适合健康服务开发；PostgreSQL、Redis 和 MinIO 的完整联调请使用上面的 Docker 拓扑。
 
+## 知识库导入与检索
+
+知识库属于当前空间：创建知识库后可上传 PDF、DOCX、UTF-8 Markdown、JPEG（`.jpg`/`.jpeg`）、PNG 或 Obsidian Vault ZIP。上传先显示“处理中”；只有版本为 `READY` 且任务为 `COMPLETED` 时才显示“可搜索”。搜索结果只显示文件名、页码和受限摘录；“打开原页”使用不透明引用令牌，页面不会向学习者展示对象键、OCR、嵌入、任务或存储服务内部信息。
+
+当前安全默认值如下：单个知识库上传最大 **100 MiB**（`KNOWLEDGE_UPLOAD_MAX_BYTES=104857600`）；Vault 最多 **5,000** 个文件、解压总量最多 **500 MiB**（`MAX_VAULT_UNCOMPRESSED_BYTES=524288000`）；默认嵌入为确定性的 `hash / feature-hash-v1 / 384`，维度允许范围为 8–4096。`OCR_BACKEND` 当前唯一允许值为 `disabled`，即本仓库没有已启用的外部 OCR 服务；`OCR_LANGUAGES` 默认值为 `eng,chi_sim`，运行时 OCR helper 仅支持这两个语言标识。同样，仓库没有已配置的远程嵌入服务或真实模型调用凭据。不要把这些本地/确定性适配器当作生产语义检索或 OCR 提供商。
+
+`compose.yaml` 中的 API 和 worker 目前依赖以上应用默认值；它不会将这些知识处理 override 映射到两个容器。因此，仅在 `.env` 新增知识处理变量不会覆盖容器设置；如要在部署中改变限制或适配器，必须在同一次经审核的配置变更中同时更新 API 和 worker 的 Compose 环境映射。DeepTutor 仅作为产品研究参考，不复制其源代码或把它声明为运行时依赖。
+
+确定性测试使用内存构造的有效 PDF、DOCX、Markdown、JPEG、PNG 和 Vault ZIP 输入；上传验证还逐一覆盖 `.jpg` 与 `.jpeg` 扩展名。仓库没有提交二进制教材样本。容器验收仍应使用可重复的 Markdown 和 PDF 样本完成“注册 → 创建知识库 → 上传 → 等待 READY → 搜索 → 打开引用页”流程；不要把仅通过单元测试视为 PostgreSQL/pgvector、Redis、MinIO、worker 和浏览器垂直切片已经通过。
+
+**2026-08-18 验证状态：** Web 全量测试（34 项）、lint 和生产构建已通过；API Ruff 在禁用不可写缓存后通过。完整 API 覆盖率命令本次得到 590 passed、3 skipped、2 failed，覆盖率 88.08%，未达到配置的 90% 门槛；两项失败均为 Windows 下 OCR 超时后辅助进程 PID 文件未在 1 秒内出现的测试。Docker、`psql`、`pg_isready` 和 `initdb` 均不可用，故真实 PostgreSQL/pgvector migration round-trip 与 Compose 垂直切片均未执行，也没有完成 Milestone 3 / Phase 5 的验收。
 ## 账号与班级的本地验证
 
 先应用数据库迁移，再启动 API：

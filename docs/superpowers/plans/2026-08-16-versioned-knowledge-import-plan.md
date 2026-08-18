@@ -114,12 +114,14 @@ Final main-thread verification after `363f3fb`: the combined Task 7-related set 
 
 **Files:** Modify `.env.example`, `README.md`, `task_plan.md`, `findings.md`, and `progress.md`.
 
-- [ ] Run API unit/coverage/Ruff and Web test/lint/build.
-- [ ] Run migration round-trip against isolated PostgreSQL/pgvector.
-- [ ] Start isolated Compose; register, create a KB, upload Markdown/PDF, wait for ready, search, and open a cited page.
-- [ ] Record exact results and remaining provider-dependent limits. Describe DeepTutor ideas as research only; do not copy source without a separate Apache-2.0 attribution review.
+- [ ] Run API unit/coverage/Ruff and Web test/lint/build. (Executed 2026-08-18: Web checks pass; API full coverage gate does not.)
+- [ ] Run migration round-trip against isolated PostgreSQL/pgvector. (Blocked: no Docker or local PostgreSQL tooling.)
+- [ ] Start isolated Compose; register, create a KB, upload Markdown/PDF, wait for ready, search, and open a cited page. (Blocked: no Docker CLI/Desktop.)
+- [x] Record exact results and remaining provider-dependent limits. DeepTutor is research only; no source is copied without a separate Apache-2.0 attribution review.
 - [ ] Mark Milestone 3 complete only when every supported format has a deterministic fixture and the Docker vertical slice passes.
 - [ ] Commit `docs: record versioned knowledge delivery`.
+
+**Verification record (2026-08-18):** Format coverage is deterministic but in-memory: parser tests construct valid PDF, DOCX, Markdown, JPEG, PNG and Obsidian ZIP inputs, while upload tests cover each accepted extension including both `.jpg` and `.jpeg`; no binary fixtures are committed. `pnpm test:web` passed (7 files / 34 tests), `pnpm lint:web` passed, and the elevated production Web build passed. API `ruff check --no-cache src tests` passed. The full API coverage command reached 590 passed / 3 skipped / 2 failed with 88.08% total coverage, below the 90% configured threshold; both failures were Windows OCR descendant-timeout PID-file assertions. Docker, `psql`, `pg_isready`, and `initdb` were absent, so no isolated PostgreSQL/pgvector migration round-trip or Compose vertical slice was run. Task 10, Milestone 3, and Phase 5 remain incomplete.
 
 ## Self-review
 

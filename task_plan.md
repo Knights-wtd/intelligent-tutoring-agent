@@ -263,3 +263,11 @@ Phase 5：知识与 Agent 能力实现
 - **Reliability:** stale create/upload/search/preview work is cancelled and sequence-guarded; uploads are single-active per panel, retry with their original idempotency key, and cannot clear a later selected file.
 - **Verification:** focused Web 7 files / 34 tests PASS; lint PASS; production build PASS; final independent specification PASS and quality/security PASS.
 - **Residual risks:** no document-status/list endpoint exists for client polling, so accepted ingestion state is the upload-response snapshot; add deeper stale-completion and object-URL cleanup regression tests later. Task 10 remains the real PostgreSQL/pgvector and Compose vertical-slice gate.
+## 2026-08-18 · Task 10 verification record
+
+- **Status:** Task 10 is incomplete and environment-blocked; Milestone 3 / Phase 5 remains `in_progress`.
+- **Feasible verification:** Web full test (7 files / 34 tests), lint, and production build passed. API Ruff passed with `--no-cache`; the full coverage run ended at 590 passed, 3 skipped, 2 failed, with 88.08% coverage against the 90% gate. The two failures were Windows OCR descendant-timeout PID-file assertions; no product source was changed during this documentation-only pass.
+- **Format evidence:** deterministic in-memory PDF, DOCX, Markdown, JPEG, PNG and Obsidian ZIP parser inputs exist, and upload tests cover each accepted suffix including `.jpg` and `.jpeg`; no binary fixtures are tracked.
+- **Blocked gates:** Docker CLI/Desktop and local PostgreSQL tools were absent, so no isolated PostgreSQL/pgvector migration round-trip or Compose register → KB → Markdown/PDF upload → READY → search → cited-page slice was run.
+- **Limits/provider posture:** 100 MiB knowledge upload, 5,000 Vault members, 500 MiB uncompressed Vault data, disabled-only OCR, and deterministic `hash / feature-hash-v1 / 384` embeddings. No remote OCR/embedding/model provider is configured; DeepTutor remains research-only.
+- **Next:** obtain a usable container/pgvector runtime and resolve the full API coverage/test gate before final Task 10 delivery. See `docs/superpowers/handoffs/2026-08-18-task10-verification-blocked.md`.
