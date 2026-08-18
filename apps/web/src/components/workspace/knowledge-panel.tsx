@@ -64,7 +64,15 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
   const searchSequenceRef = useRef(0);
   const previewSequenceRef = useRef(0);
   const previewUrlRef = useRef<string | null>(null);
+  const createControllerRef = useRef<AbortController | null>(null);
+  const searchControllerRef = useRef<AbortController | null>(null);
+  const previewControllerRef = useRef<AbortController | null>(null);
+  const activeUploadRef = useRef<
+    | { entry: UploadEntry; knowledgeBaseId: string; controller: AbortController }
+    | null
+  >(null);
   const mountedRef = useRef(true);
+  const [isUploading, setIsUploading] = useState(false);
 
   const disposePreviewUrl = useCallback(() => {
     if (previewUrlRef.current !== null) {
@@ -73,21 +81,42 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
     }
   }, []);
 
+  const abortSearchRequest = useCallback(() => {
+    const controller = searchControllerRef.current;
+    if (controller !== null) {
+      searchControllerRef.current = null;
+      controller.abort();
+    }
+  }, []);
+
+  const abortPreviewRequest = useCallback(() => {
+    const controller = previewControllerRef.current;
+    if (controller !== null) {
+      previewControllerRef.current = null;
+      controller.abort();
+    }
+  }, []);
+
   const clearPreview = useCallback(() => {
+    abortPreviewRequest();
     previewSequenceRef.current += 1;
     disposePreviewUrl();
     setPreview(null);
     setPreviewMessage("");
     setIsOpeningPreview(false);
-  }, [disposePreviewUrl]);
+  }, [abortPreviewRequest, disposePreviewUrl]);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      createControllerRef.current?.abort();
+      activeUploadRef.current?.controller.abort();
+      abortSearchRequest();
+      abortPreviewRequest();
       disposePreviewUrl();
     };
-  }, [disposePreviewUrl]);
+  }, [abortPreviewRequest, abortSearchRequest, disposePreviewUrl]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -120,8 +149,25 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
     ? (uploadsByKnowledgeBase[selectedKnowledgeBaseId] ?? [])
     : [];
 
+  function cancelActiveUpload(knowledgeBaseId: string) {
+    const activeUpload = activeUploadRef.current;
+    if (activeUpload === null || activeUpload.knowledgeBaseId !== knowledgeBaseId) return;
+
+    activeUploadRef.current = null;
+    activeUpload.controller.abort();
+    setIsUploading(false);
+    setUploadsByKnowledgeBase((current) => ({
+      ...current,
+      [knowledgeBaseId]: (current[knowledgeBaseId] ?? []).filter(
+        (entry) => entry.id !== activeUpload.entry.id,
+      ),
+    }));
+  }
+
   function selectKnowledgeBase(knowledgeBaseId: string) {
     if (knowledgeBaseId === selectedKnowledgeBaseId) return;
+    cancelActiveUpload(selectedKnowledgeBaseId);
+    abortSearchRequest();
     contextSequenceRef.current += 1;
     searchSequenceRef.current += 1;
     setSelectedKnowledgeBaseId(knowledgeBaseId);
@@ -153,22 +199,28 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
 
     const contextSequence = contextSequenceRef.current;
     const controller = new AbortController();
+    createControllerRef.current = controller;
     setIsCreating(true);
     setCreateMessage("");
     try {
       const created = await knowledgeApi.create(spaceId, normalizedName, controller.signal);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || controller.signal.aborted) return;
       setKnowledgeBases((current) => [...current, created]);
       if (contextSequence === contextSequenceRef.current) {
         selectKnowledgeBase(created.id);
         setNewKnowledgeBaseName("");
       }
     } catch {
-      if (mountedRef.current && contextSequence === contextSequenceRef.current) {
+      if (
+        !controller.signal.aborted &&
+        mountedRef.current &&
+        contextSequence === contextSequenceRef.current
+      ) {
         setCreateMessage("暂时无法创建知识库，请重试。");
       }
     } finally {
-      if (mountedRef.current) setIsCreating(false);
+      if (createControllerRef.current === controller) createControllerRef.current = null;
+      if (mountedRef.current && !controller.signal.aborted) setIsCreating(false);
     }
   }
 
@@ -189,7 +241,12 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
     knowledgeBaseId: string,
     contextSequence: number,
   ) {
+    if (activeUploadRef.current !== null) return;
 
+    const controller = new AbortController();
+    const activeUpload = { entry, knowledgeBaseId, controller };
+    activeUploadRef.current = activeUpload;
+    setIsUploading(true);
     setUploadMessage("");
     setUploadsByKnowledgeBase((current) => ({
       ...current,
@@ -199,7 +256,6 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
       }),
     }));
 
-    const controller = new AbortController();
     try {
       const response = await knowledgeApi.upload(
         knowledgeBaseId,
@@ -207,7 +263,13 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
         entry.idempotencyKey,
         controller.signal,
       );
-      if (!mountedRef.current) return;
+      if (
+        !mountedRef.current ||
+        controller.signal.aborted ||
+        contextSequence !== contextSequenceRef.current
+      ) {
+        return;
+      }
       setUploadsByKnowledgeBase((current) => ({
         ...current,
         [knowledgeBaseId]: replaceUpload(current[knowledgeBaseId] ?? [], {
@@ -216,9 +278,15 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
           response,
         }),
       }));
-      if (contextSequence === contextSequenceRef.current) setSelectedFile(null);
+      setSelectedFile((current) => (current === entry.file ? null : current));
     } catch {
-      if (!mountedRef.current) return;
+      if (
+        controller.signal.aborted ||
+        !mountedRef.current ||
+        contextSequence !== contextSequenceRef.current
+      ) {
+        return;
+      }
       setUploadsByKnowledgeBase((current) => ({
         ...current,
         [knowledgeBaseId]: replaceUpload(current[knowledgeBaseId] ?? [], {
@@ -226,11 +294,17 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
           status: "failed",
         }),
       }));
+    } finally {
+      if (activeUploadRef.current === activeUpload) {
+        activeUploadRef.current = null;
+        if (mountedRef.current && !controller.signal.aborted) setIsUploading(false);
+      }
     }
   }
 
   function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (activeUploadRef.current !== null) return;
     if (!selectedKnowledgeBase || !selectedFile) {
       setUploadMessage("请先选择知识库和文件。");
       return;
@@ -265,10 +339,12 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
       return;
     }
 
+    abortSearchRequest();
     const sequence = ++searchSequenceRef.current;
     const knowledgeBaseId = selectedKnowledgeBase.id;
     const contextSequence = contextSequenceRef.current;
     const controller = new AbortController();
+    searchControllerRef.current = controller;
     setIsSearching(true);
     setSearchMessage("");
     setSearchResults([]);
@@ -293,6 +369,7 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
       }
     } catch {
       if (
+        !controller.signal.aborted &&
         mountedRef.current &&
         sequence === searchSequenceRef.current &&
         contextSequence === contextSequenceRef.current
@@ -300,7 +377,9 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
         setSearchMessage("搜索暂时不可用，请重试。");
       }
     } finally {
+      if (searchControllerRef.current === controller) searchControllerRef.current = null;
       if (
+        !controller.signal.aborted &&
         mountedRef.current &&
         sequence === searchSequenceRef.current &&
         contextSequence === contextSequenceRef.current
@@ -312,11 +391,13 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
 
   async function openPreview(result: KnowledgeSearchResult) {
     if (!selectedKnowledgeBase) return;
+    abortPreviewRequest();
     const sequence = ++previewSequenceRef.current;
     const knowledgeBaseId = selectedKnowledgeBase.id;
     const contextSequence = contextSequenceRef.current;
     const label = citationLabel(result);
     const controller = new AbortController();
+    previewControllerRef.current = controller;
     disposePreviewUrl();
     setPreview(null);
     setPreviewMessage("");
@@ -329,6 +410,7 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
       );
       if (
         !mountedRef.current ||
+        controller.signal.aborted ||
         sequence !== previewSequenceRef.current ||
         contextSequence !== contextSequenceRef.current
       ) {
@@ -338,6 +420,7 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
         const text = await response.blob.text();
         if (
           !mountedRef.current ||
+          controller.signal.aborted ||
           sequence !== previewSequenceRef.current ||
           contextSequence !== contextSequenceRef.current
         ) {
@@ -346,6 +429,15 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
         setPreview({ kind: "text", label, text });
       } else if (response.contentType.toLowerCase().startsWith("image/")) {
         const url = URL.createObjectURL(response.blob);
+        if (
+          !mountedRef.current ||
+          controller.signal.aborted ||
+          sequence !== previewSequenceRef.current ||
+          contextSequence !== contextSequenceRef.current
+        ) {
+          URL.revokeObjectURL(url);
+          return;
+        }
         previewUrlRef.current = url;
         setPreview({ kind: "image", label, url });
       } else {
@@ -353,6 +445,7 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
       }
     } catch {
       if (
+        !controller.signal.aborted &&
         mountedRef.current &&
         sequence === previewSequenceRef.current &&
         contextSequence === contextSequenceRef.current
@@ -360,7 +453,9 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
         setPreviewMessage("原页暂时无法打开，请重试。");
       }
     } finally {
+      if (previewControllerRef.current === controller) previewControllerRef.current = null;
       if (
+        !controller.signal.aborted &&
         mountedRef.current &&
         sequence === previewSequenceRef.current &&
         contextSequence === contextSequenceRef.current
@@ -436,6 +531,7 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
                     <>
                       <span>上传失败，请重试。</span>
                       <button
+                        disabled={isUploading}
                         type="button"
                         onClick={() =>
                           void upload(entry, selectedKnowledgeBaseId, contextSequenceRef.current)
@@ -466,7 +562,7 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
                 type="file"
               />
             </label>
-            <button disabled={!selectedKnowledgeBase} type="submit">
+            <button disabled={!selectedKnowledgeBase || isUploading} type="submit">
               上传文件
             </button>
           </form>

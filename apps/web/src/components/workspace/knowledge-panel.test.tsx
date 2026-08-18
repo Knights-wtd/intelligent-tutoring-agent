@@ -151,7 +151,56 @@ describe("KnowledgePanel", () => {
     await user.click(screen.getByRole("button", { name: "重试上传" }));
 
     expect(mockKnowledgeApi.upload).toHaveBeenCalledTimes(2);
+    expect(mockKnowledgeApi.upload.mock.calls[1]?.[2]).toBe(mockKnowledgeApi.upload.mock.calls[0]?.[2]);
     expect(await screen.findByText("处理中")).toBeInTheDocument();
+  });
+
+  it("allows only one active logical upload", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockReturnValue(new Promise(() => undefined));
+    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
+    await screen.findByRole("button", { name: "七年级数学" });
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["content"], "single.md", { type: "text/markdown" }),
+    );
+    const submit = screen.getByRole("button", { name: "上传文件" });
+    await user.click(submit);
+    expect(submit).toBeDisabled();
+    await user.click(submit);
+
+    expect(mockKnowledgeApi.upload).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a newer file selection when an older upload completes", async () => {
+    const user = userEvent.setup();
+    let resolveUpload: (value: ReturnType<typeof uploadResponse>) => void = () => undefined;
+    mockKnowledgeApi.upload.mockReturnValue(
+      new Promise((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
+    await screen.findByRole("button", { name: "七年级数学" });
+
+    const firstFile = new File(["first"], "first.md", { type: "text/markdown" });
+    const secondFile = new File(["second"], "second.md", { type: "text/markdown" });
+    const fileInput = screen.getByLabelText("选择学习资料") as HTMLInputElement;
+    await user.upload(fileInput, firstFile);
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    await user.upload(fileInput, secondFile);
+
+    await act(async () => {
+      resolveUpload(uploadResponse());
+    });
+
+    expect(fileInput.files?.[0]).toBe(secondFile);
+    const submit = screen.getByRole("button", { name: "上传文件" });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    expect(mockKnowledgeApi.upload).toHaveBeenCalledTimes(2);
+    expect(mockKnowledgeApi.upload.mock.calls[1]?.[1]).toBe(secondFile);
   });
 
   it("searches the selected knowledge base and opens the opaque cited page", async () => {
@@ -211,6 +260,101 @@ describe("KnowledgePanel", () => {
 
     expect(await screen.findByRole("button", { name: "七年级数学" })).toBeInTheDocument();
     expect(mockKnowledgeApi.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts an in-flight create request when the panel unmounts", async () => {
+    const user = userEvent.setup();
+    let createSignal: AbortSignal | undefined;
+    mockKnowledgeApi.create.mockImplementation(
+      (_spaceId: string, _name: string, signal: AbortSignal) => {
+        createSignal = signal;
+        return new Promise(() => undefined);
+      },
+    );
+    const { unmount } = render(
+      <KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />,
+    );
+    await screen.findByRole("button", { name: "七年级数学" });
+
+    await user.type(screen.getByLabelText("知识库名称"), "几何练习");
+    await user.click(screen.getByRole("button", { name: "创建知识库" }));
+    expect(createSignal).toBeDefined();
+
+    unmount();
+    expect(createSignal?.aborted).toBe(true);
+  });
+
+  it("aborts selected knowledge-base requests when switching knowledge bases", async () => {
+    const user = userEvent.setup();
+    const otherKnowledgeBase = {
+      ...knowledgeBase,
+      id: "kb-science",
+      name: "科学资料",
+    };
+    let uploadSignal: AbortSignal | undefined;
+    let previewSignal: AbortSignal | undefined;
+    let searchSignal: AbortSignal | undefined;
+    mockKnowledgeApi.list.mockResolvedValue([knowledgeBase, otherKnowledgeBase]);
+    mockKnowledgeApi.upload.mockImplementation(
+      (_knowledgeBaseId: string, _file: File, _idempotencyKey: string, signal: AbortSignal) => {
+        uploadSignal = signal;
+        return new Promise(() => undefined);
+      },
+    );
+    mockKnowledgeApi.search
+      .mockResolvedValueOnce({
+        results: [
+          {
+            excerpt: "直角三角形两直角边平方和等于斜边平方。",
+            citation: {
+              id: "cite_opaque-token",
+              source_name: "数学上册.pdf",
+              page_number: 42,
+            },
+          },
+        ],
+      })
+      .mockImplementationOnce(
+        (_knowledgeBaseId: string, _query: string, _limit: number, signal: AbortSignal) => {
+          searchSignal = signal;
+          return new Promise(() => undefined);
+        },
+      );
+    mockKnowledgeApi.pagePreview.mockImplementation(
+      (_knowledgeBaseId: string, _citationId: string, signal: AbortSignal) => {
+        previewSignal = signal;
+        return new Promise(() => undefined);
+      },
+    );
+    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
+    await screen.findByRole("button", { name: "七年级数学" });
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["content"], "switch.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    expect(uploadSignal).toBeDefined();
+
+    const searchInput = screen.getByLabelText("搜索知识库");
+    await user.type(searchInput, "勾股定理");
+    await user.click(screen.getByRole("button", { name: "搜索" }));
+    const result = await screen.findByText(/直角三角形/);
+    const resultItem = result.closest("li");
+    expect(resultItem).not.toBeNull();
+    await user.click(within(resultItem as HTMLElement).getByRole("button", { name: "打开原页" }));
+    expect(previewSignal).toBeDefined();
+
+    await user.clear(searchInput);
+    await user.type(searchInput, "平面几何");
+    await user.click(screen.getByRole("button", { name: "搜索" }));
+    expect(previewSignal?.aborted).toBe(true);
+    expect(searchSignal).toBeDefined();
+
+    await user.click(screen.getByRole("button", { name: "科学资料" }));
+    expect(uploadSignal?.aborted).toBe(true);
+    expect(searchSignal?.aborted).toBe(true);
+    expect(screen.queryByText("上传失败，请重试。")).not.toBeInTheDocument();
   });
 
   it("ignores a stale response after the active space changes", async () => {
