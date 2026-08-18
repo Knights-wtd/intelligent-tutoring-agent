@@ -148,8 +148,12 @@ Phase 5：知识与 Agent 能力实现
 - [x] Task 6 初始完整规格复审 PASS；最终独立增量规格复审 PASS（reviewer 11 focused passed）；最终独立质量/安全复审 PASS（reviewer 7 focused passed，并完成进程、线程与 Windows handle 探针）。
 - [x] Task 6 最终主线程限定验证：OCR 49 passed；adapter OCR 10 passed；parser 57 passed；targeted Ruff 与 `git diff --check d9f244d..5225691` PASS。
 - [x] Task 6 未运行完整 API suite、真实 Tesseract/container smoke、Docker、PostgreSQL、MinIO、外部服务、POSIX 实机 process-group 路径或复杂 PDFium corpus。
+- [x] Task 7「immutable indexing and reliable worker」最终 PASS；代码 HEAD `363f3fb`，六个交付提交为 `f298eb2`、`96a3ad6`、`53284ca`、`cfc6220`、`0d34b2a`、`363f3fb`。
+- [x] Task 7 独立规格复审最终 PASS（修复后 34 focused）；独立质量复审最终 PASS。初始质量 FAIL 的 production-HTTP 项已由既有 HTTPS production gate 证伪，blank OCR page 项有效并由 `363f3fb` 修复。
+- [x] Task 7 最终主线程验证：相关组合 362 passed、36 warnings；migration nodes 3 passed、4 warnings；targeted Ruff 与 `git diff --check aa71123..HEAD` PASS。
+- [x] Task 7 未运行变更后的完整 API suite、Docker、真实 PostgreSQL/pgvector、MinIO/S3、Redis、Tesseract/PDFium corpus、外部服务或 POSIX 实机 process group。
 - [ ] 整个 Milestone 3 / Phase 5 尚未完成，状态保持 `in_progress`。
-- [ ] 下一步：Task 7「immutable indexing and reliable worker」。
+- [ ] 下一步：Task 8「hybrid retrieval and secure source preview」；尚未开始。
 
 ### Task 1 已确认边界
 
@@ -224,3 +228,18 @@ Phase 5：知识与 Agent 能力实现
 - 非阻塞残余风险：主动 `setsid`/改组的 POSIX descendant 可逃离；PDFium child 无 OS 级地址空间上限；每个 PDF OCR 页仍 spawn 并复制完整 PDF bytes，且输入整体以 `bytes` 进入；安全预算可能拒绝极端合法页面；executable 必须是可信配置。
 - deadline-aware adapter 是受信任 port 合同，声明支持却忽略 timeout 的 adapter 无法由当前调用方强制终止；Windows Job Assign 依赖 CPython `Popen._handle` 私有属性，需随 Python 版本复核。强制 SIGKILL 位于第一次 bounded join 后，理论上 daemon I/O thread 可能极短暂存活，但无持久或线性泄漏证据。
 - Task 6 final PASS 不代表整个导入阶段或里程碑完成；Phase 5 / Milestone 3 保持 `in_progress`，下一步为 Task 7：immutable indexing and reliable worker。
+
+### Task 7 已确认不可变索引与可靠 worker 边界
+
+- build target 不可变并绑定 embedding backend/model/dimension/signature 合同；heading-aware chunking 有严格大小/重叠边界，相同内容 hash 可精确复用。
+- building index 持久化 source page/block pointer、lexical terms、vector、model/dimension/signature 与 hashes；成功前旧 active index 保持不变，校验与激活原子完成。
+- ingestion job 使用 lease、PostgreSQL `FOR UPDATE SKIP LOCKED`、stale recovery、bounded retry 与 restart-safe idempotency；Compose worker 复用 API 镜像。
+- S3 路径限制 redirect 与对象大小，非本地 production storage 必须 HTTPS；parse terminal state 与 started/completed timestamps 完整落库。
+- OCR 保持 fail-closed；`363f3fb` 仅允许 completed OCR page 为空且整份文档仍保留内容的情况，避免空白页错误终止有效文档。
+- READY snapshot 采用 knowledge-base lock ordering 串行化；adapter contract drift 会 terminalize 旧的未激活 target，并幂等创建或复用绑定当前合同的 replacement job。
+- 交付提交顺序：`f298eb2 feat: build knowledge indexes reliably`、`96a3ad6 fix: close reliable indexing gaps`、`53284ca fix: harden reliable indexing delivery`、`cfc6220 fix: serialize ready index snapshots`、`0d34b2a fix: requeue changed embedding contracts`、`363f3fb fix(api): allow blank OCR pages`。
+- `0d34b2a` 时独立规格复审已 PASS。初始质量复审 FAIL 的两项中，production-HTTP 为只读误报，因 `config.py` 已要求 nonlocal production storage 使用 HTTPS；blank OCR page 为有效问题并在 `363f3fb` 修复。修复后独立规格复审 PASS（34 focused），独立质量复审 PASS。
+- 最终验证：Task 7 相关八个测试文件组合 362 passed、36 warnings；migration nodes 3 passed、4 warnings；targeted Ruff all checks passed；`git diff --check aa71123..HEAD` PASS。
+- 非阻塞残余：长 external handler 执行期间仍持有 transaction/job lock；bounded S3 PUT 会最多缓冲到配置的最大对象大小。历史 Windows OCR combined run 曾有两个 1 秒 PID-file timing failure，但精确两项与完整 OCR 文件分别通过，最终 362 项 combined focused run 通过，质量复审判定为非阻塞 timing observation。
+- 未运行 Task 7 变更后的完整 API suite、Docker、真实 PostgreSQL/pgvector、MinIO/S3、Redis、Tesseract/PDFium corpus、外部服务或 POSIX 实机 process group。
+- Task 7 final PASS 不代表 Milestone 3 / Phase 5 完成；状态继续为 `in_progress`，下一步是 Task 8，且本次未开始 Task 8。

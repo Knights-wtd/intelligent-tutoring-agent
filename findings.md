@@ -365,3 +365,37 @@
 - Windows Job Assign 使用 CPython `Popen._handle` 私有属性，需要随 Python 版本复核。
 - POSIX 轻微风险：强制 SIGKILL 位于第一次 bounded join 后，理论上 daemon I/O thread 可能极短暂存活；现有重复探针没有发现持久或线性泄漏。
 - Task 6 final PASS 不代表整个导入阶段或 Milestone 3 完成；下一步为 Task 7「immutable indexing and reliable worker」。
+
+## 2026-08-18 Phase 5 · Task 7 关键结论
+
+### 最终状态、提交与审查
+
+- Task 7「immutable indexing and reliable worker」在代码 HEAD `363f3fb` final PASS；Phase 5 / Milestone 3 继续保持 `in_progress`。
+- 交付提交依次为：`f298eb2 feat: build knowledge indexes reliably`、`96a3ad6 fix: close reliable indexing gaps`、`53284ca fix: harden reliable indexing delivery`、`cfc6220 fix: serialize ready index snapshots`、`0d34b2a fix: requeue changed embedding contracts`、`363f3fb fix(api): allow blank OCR pages`。
+- `0d34b2a` 时的独立规格复审 PASS。初始独立质量复审 FAIL 报告两项：production-HTTP 项经只读核查证伪，因为 `config.py` 的 production gate 已要求 nonlocal storage 使用 HTTPS；blank OCR page 项有效，并由 `363f3fb` 修复。
+- 修复后独立规格复审 PASS，reviewer 运行 34 focused passed；修复后独立质量复审 PASS。
+
+### 已确认的索引、激活与合同边界
+
+- 每个 build target 不可变，并绑定实际 embedding backend/model/dimension/signature 合同，防止构建过程中配置漂移静默混入同一 index version。
+- chunking 感知 heading，同时严格限制 chunk 大小与 overlap；内容与合同完全一致时按 hash 精确复用，避免近似或跨合同误复用。
+- building index 下持久化 source page/block pointers、lexical terms、embedding vectors、backend/model/dimension/signature 与内容 hashes，为后续混合检索和可追溯引用保留完整元数据。
+- 校验与 activation 在同一事务内完成；replacement 未成功前旧 active index 保持可用，失败构建不能提前 supersede 当前 active。
+- READY snapshot 使用 knowledge-base lock ordering 串行化，避免并发 READY 文档集合产生不可重复快照或锁顺序反转。
+- adapter contract drift 会把旧的未激活 target terminalize，并幂等创建或复用绑定当前合同的 replacement job；重复恢复不会制造无限 replacement 或错误激活旧合同。
+
+### 已确认的 worker、存储、解析与 OCR 边界
+
+- job claim 使用 database lease 与 PostgreSQL `FOR UPDATE SKIP LOCKED`；覆盖 stale recovery、bounded retry、restart-safe processing 与重复启动不产生重复成果。worker 由 Compose 使用与 API 相同的镜像运行。
+- S3 adapter 对对象大小和 redirect 次数设界，并拒绝不安全跳转；production 的 nonlocal storage 由配置 gate 强制 HTTPS。bounded PUT 当前最多会缓冲到配置的最大对象大小。
+- parse lifecycle 持久化 terminal state、started/completed timestamps 和稳定错误状态，避免 job 已终止但 document/version 仍表现为处理中。
+- OCR 路径继续 fail-closed。`363f3fb` 只放宽一种有效情况：completed OCR page 可为空，但仅当整份 document 仍保留内容；整份文档为空或 OCR 未完成时仍失败关闭。
+- 非阻塞并发成本：当前 transaction/job lock 会在长时间 external handler 执行期间保持，可能扩大锁占用时间，但独立质量复审未将其列为 Task 7 阻塞项。
+
+### 验证与未覆盖范围
+
+- 最终主线程组合验证在 `363f3fb` 后运行 `test_knowledge_indexing.py test_knowledge_worker.py test_knowledge_adapters.py test_knowledge_uploads.py test_knowledge_parsers.py test_knowledge_ocr.py test_config.py test_compose_security.py`：362 passed、36 warnings。
+- migration nodes：3 passed、4 warnings。targeted Ruff：all checks passed。`git diff --check aa71123..HEAD`：pass。
+- 历史 Windows OCR combined run 曾出现精确两个 1 秒 PID-file timing failures；精确两项测试与完整 OCR 文件分别通过，最终 362 项 combined focused run 也通过。质量 reviewer 将其记录为非阻塞 timing observation，而非 Task 7 correctness failure。
+- 未运行 Task 7 变更后的完整 API suite；未运行 Docker、真实 PostgreSQL/pgvector、MinIO/S3、Redis、真实 Tesseract/PDFium corpus、external services 或 live POSIX process group。
+- 下一步是 Task 8「hybrid retrieval and secure source preview」；本次不开始 Task 8，也不创建最终 handoff。

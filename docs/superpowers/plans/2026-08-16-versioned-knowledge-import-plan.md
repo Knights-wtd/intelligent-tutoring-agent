@@ -77,11 +77,17 @@
 
 **Files:** Create `knowledge/indexing.py`, `knowledge/worker.py`, `worker_main.py`; modify service and `compose.yaml`; test `test_knowledge_indexing.py` and `test_knowledge_worker.py`.
 
-- [ ] Test heading-aware chunks, overlap bounds, hash reuse, signatures, failed rebuild preserving the active index, atomic activation, leased claims, stale recovery, retry bounds, and restart without duplicates.
-- [ ] Persist source page/block pointers, lexical terms, embeddings, model/dimension, and hashes under a building index version.
-- [ ] Validate and activate in one transaction; supersede the previous active version only after success.
-- [ ] Claim jobs with database leases and PostgreSQL `FOR UPDATE SKIP LOCKED`; run the worker from the same Compose image.
-- [ ] Run tests; commit `feat: build knowledge indexes reliably`.
+- [x] Test heading-aware chunks, overlap bounds, hash reuse, signatures, failed rebuild preserving the active index, atomic activation, leased claims, stale recovery, retry bounds, and restart without duplicates.
+- [x] Persist source page/block pointers, lexical terms, embeddings, model/dimension, and hashes under a building index version.
+- [x] Validate and activate in one transaction; supersede the previous active version only after success.
+- [x] Claim jobs with database leases and PostgreSQL `FOR UPDATE SKIP LOCKED`; run the worker from the same Compose image.
+- [x] Run tests; commit `feat: build knowledge indexes reliably`.
+
+**Delivery record (2026-08-18):** Task 7 final PASS at code HEAD `363f3fb`. Delivery commits, in order: `f298eb2 feat: build knowledge indexes reliably`, `96a3ad6 fix: close reliable indexing gaps`, `53284ca fix: harden reliable indexing delivery`, `cfc6220 fix: serialize ready index snapshots`, `0d34b2a fix: requeue changed embedding contracts`, and `363f3fb fix(api): allow blank OCR pages`. Delivered immutable build targets bound to the embedding contract; heading-aware bounded chunks with exact hash reuse; persisted source page/block pointers, lexical terms, vectors, model/dimension/signature metadata, and hashes; atomic activation that preserves the old active index until the replacement succeeds; leased PostgreSQL `FOR UPDATE SKIP LOCKED` claims with stale recovery, bounded retry, and restart-safe idempotency; and a worker service using the same Compose image. Delivery also bounds S3 objects and redirects, requires HTTPS for nonlocal production storage, records terminal parse state/timestamps, keeps OCR fail-closed while accepting a blank completed OCR page only when the document retains content, serializes READY snapshots with knowledge-base lock ordering, and replaces stale unactivated targets when the adapter contract drifts by terminalizing the old target and idempotently creating or reusing a current-contract job.
+
+The prior independent specification review at `0d34b2a` passed. The initial quality review failed on two reported items: the production-HTTP concern was disproved by the existing `config.py` production gate requiring HTTPS for nonlocal storage, while the blank OCR page issue was valid and fixed in `363f3fb`. After that fix, an independent specification review passed with 34 focused tests and an independent quality review passed. Non-blocking residuals: a transaction/job lock remains held while a long external handler runs, and bounded S3 PUT currently buffers up to the configured maximum object size. Two historical Windows OCR combined-run one-second PID-file timing failures were non-blocking because the exact two tests and the full OCR file passed independently; the final combined focused run passed all 362 tests.
+
+Final main-thread verification after `363f3fb`: the combined Task 7-related set (`test_knowledge_indexing.py`, `test_knowledge_worker.py`, `test_knowledge_adapters.py`, `test_knowledge_uploads.py`, `test_knowledge_parsers.py`, `test_knowledge_ocr.py`, `test_config.py`, and `test_compose_security.py`) passed 362 tests with 36 warnings; migration-node tests passed 3 tests with 4 warnings; targeted Ruff reported all checks passed; and `git diff --check aa71123..HEAD` passed. Not run: the full API suite after Task 7 changes, Docker, real PostgreSQL/pgvector, MinIO/S3, Redis, a Tesseract/PDFium corpus, external services, or a live POSIX process group. Milestone 3 / Phase 5 remains `in_progress`; next work is Task 8, which has not begun.
 
 ### Task 8: Hybrid retrieval and secure source preview
 

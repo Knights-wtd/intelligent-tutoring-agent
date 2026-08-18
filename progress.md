@@ -382,3 +382,41 @@
 - Windows Job Assign 依赖 CPython `Popen._handle` 私有属性，需要随 Python 版本复核。
 - POSIX 强制 SIGKILL 位于第一次 bounded join 后，daemon I/O thread 理论上可能极短暂存活，但未观察到持久或线性泄漏。
 - 下一步：Task 7「immutable indexing and reliable worker」。不得将 Task 6 完成误记为整个导入阶段或 Milestone 3 / Phase 5 完成。
+
+## Session: 2026-08-18 · Phase 5 / Task 7
+
+- **Status:** Task 7 final PASS at code HEAD `363f3fb`; Milestone 3 / Phase 5 remains `in_progress`.
+- Delivery commits: `f298eb2 feat: build knowledge indexes reliably`, `96a3ad6 fix: close reliable indexing gaps`, `53284ca fix: harden reliable indexing delivery`, `cfc6220 fix: serialize ready index snapshots`, `0d34b2a fix: requeue changed embedding contracts`, `363f3fb fix(api): allow blank OCR pages`.
+- Prior independent specification review at `0d34b2a` PASS. Initial quality review FAIL had one disproved production-HTTP concern and one valid blank OCR page issue; `363f3fb` repaired the valid issue. Post-fix independent specification PASS (34 focused) and independent quality PASS.
+
+### 已交付
+
+- immutable contract-bound build targets；heading-aware bounded chunks 与 exact hash reuse。
+- building index 持久化 source page/block pointers、lexical terms、vectors、embedding model/dimension/signature 与 hashes。
+- atomic validation/activation；replacement 成功前保留 old active index，失败构建不会中断现有 active。
+- database leases、PostgreSQL `FOR UPDATE SKIP LOCKED`、stale recovery、bounded retry、restart-safe idempotency，以及复用 API image 的 Compose worker。
+- S3 redirect/object bounds 与 nonlocal production HTTPS gate；parse terminal state 和 started/completed timestamps。
+- OCR fail-closed；允许 blank completed OCR page 的唯一例外是 document 仍保留内容。
+- READY snapshot knowledge-base lock ordering；adapter contract drift terminalize stale unactivated target，并幂等创建或复用 current-contract replacement job。
+
+### 验证记录
+
+| 检查点 | 结果 |
+|---|---|
+| Task 7 相关八文件 combined focused set | 362 passed, 36 warnings |
+| migration nodes | 3 passed, 4 warnings |
+| targeted Ruff | All checks passed |
+| `git diff --check aa71123..HEAD` | PASS |
+| 独立规格复审 | `0d34b2a` PASS；`363f3fb` 后 PASS，34 focused passed |
+| 独立质量复审 | 初始 FAIL；production-HTTP 项证伪，blank OCR page 项修复后最终 PASS |
+| Windows OCR timing observation | 历史 combined run 两个 1 秒 PID-file timing failure；精确两项和完整 OCR 分别 PASS；最终 362 combined PASS，非阻塞 |
+| 完整 API suite after Task 7 | 未运行 |
+| Docker / real PostgreSQL-pgvector / MinIO-S3 / Redis | 未运行 |
+| Tesseract-PDFium corpus / external services / live POSIX process group | 未运行 |
+
+### 保留风险与下一步
+
+- transaction/job lock 在 long external handler 运行期间保持；这是非阻塞质量残余，后续可缩短事务或拆分 handler 生命周期。
+- bounded S3 PUT 最多缓冲到配置的最大对象大小；有界但仍可能产生较高单请求内存峰值。
+- 当前验证不替代真实 PostgreSQL/pgvector、对象存储、队列、容器和 OCR corpus 集成验收。
+- 下一步为 Task 8「hybrid retrieval and secure source preview」；Task 8 尚未开始。不得将 Task 7 final PASS 误记为 Milestone 3 / Phase 5 完成，也不在本记录中创建最终 handoff。
