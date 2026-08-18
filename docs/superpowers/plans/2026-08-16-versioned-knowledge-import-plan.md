@@ -103,10 +103,12 @@ Final main-thread verification after `363f3fb`: the combined Task 7-related set 
 
 **Files:** Create `apps/web/src/lib/knowledge-api.ts`, `knowledge-panel.tsx`, and tests; modify workspace shell/CSS.
 
-- [ ] Test space-scoped loading, create KB, upload progress, simple ready/failed states, search, and citation preview.
-- [ ] Implement hierarchy `知识库 → 教材/练习 → 文件`; keep OCR, embedding, and worker internals hidden from learners.
-- [ ] Keep tutor/model/balance/knowledge failures independent and retryable.
-- [ ] Run Web tests, lint, and build; commit `feat: connect knowledge workspace`.
+- [x] Test space-scoped loading, create KB, upload progress, simple ready/failed states, search, and citation preview.
+- [x] Implement hierarchy `知识库 → 教材/练习 → 文件`; keep OCR, embedding, and worker internals hidden from learners.
+- [x] Keep tutor/model/balance/knowledge failures independent and retryable.
+- [x] Run Web tests, lint, and build; commit `feat: connect knowledge workspace`.
+
+**Delivery record (2026-08-18):** Completed in `7a03e5c`, `27fa8f5`, and `3f81af4`. Final independent specification review PASS and quality/security review PASS. Focused Web verification: 7 files / 34 tests passed; Web lint and production build passed; diff checks passed. The panel uses the existing cookie-auth KB endpoints only, keeps learner states and failures truthful and generic, and cancels stale UI work. Non-blocking follow-up: add deeper deferred stale-completion and object-URL cleanup tests; the available API has no document-status polling endpoint, so accepted ingestion state is not auto-refreshed.
 
 ### Task 10: End-to-end verification and records
 

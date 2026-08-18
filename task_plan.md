@@ -254,3 +254,12 @@ Phase 5：知识与 Agent 能力实现
 - 最终独立规格复审 PASS；最终独立质量/安全复审 PASS。最终修复后 retrieval/source/indexing 聚焦组合 31 passed，targeted Ruff 与 `git diff --check` PASS。
 - 非阻塞风险：完整索引扫描内存有界，但 CPU/数据库行工作随 ACTIVE index 线性增长；生产规模 benchmark 与数据库原生 top-k 留待后续优化。
 - Phase 5 / Milestone 3 仍为 `in_progress`；下一步为 Task 9「C3 knowledge panel」。
+
+## 2026-08-18 · Task 9 C3 knowledge workspace
+
+- **Status:** Task 9 final SPEC PASS and QUALITY PASS; Phase 5 / Milestone 3 remains `in_progress`.
+- **Code commits:** `7a03e5c feat: connect knowledge workspace`, `27fa8f5 fix: correct knowledge workspace states`, `3f81af4 fix: cancel stale knowledge workspace requests`.
+- **Delivered:** space-scoped KB panel and switching; bounded KB creation and uploads; learner-facing processing/failed/searchable states; explicit `知识库 → 教材/练习 → 文件` hierarchy; search and opaque cited-page preview; generic error messages and independent model/balance/knowledge retries.
+- **Reliability:** stale create/upload/search/preview work is cancelled and sequence-guarded; uploads are single-active per panel, retry with their original idempotency key, and cannot clear a later selected file.
+- **Verification:** focused Web 7 files / 34 tests PASS; lint PASS; production build PASS; final independent specification PASS and quality/security PASS.
+- **Residual risks:** no document-status/list endpoint exists for client polling, so accepted ingestion state is the upload-response snapshot; add deeper stale-completion and object-URL cleanup regression tests later. Task 10 remains the real PostgreSQL/pgvector and Compose vertical-slice gate.

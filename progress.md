@@ -430,3 +430,11 @@
 - **交付：**ACTIVE-only hybrid RRF、embedding 合同安全降级、完整索引有界候选 heap、opaque citation、真实解析预览持久化、授权先于对象读取、bounded Range 与 provider error redaction。
 - **保留风险：**完整 ACTIVE index 流式扫描的内存有界，但 CPU/数据库行读取线性增长；尚未运行 production-scale benchmark、真实 PostgreSQL/pgvector top-k、Docker vertical slice。
 - **下一步：**Task 9「C3 knowledge panel」。不得将 Task 8 完成误记为 Phase 5 完成。
+
+## Session: 2026-08-18 · Phase 5 / Task 9
+
+- **Status:** Task 9「C3 knowledge panel」final PASS; Phase 5 / Milestone 3 remains `in_progress`.
+- **Commits:** `7a03e5c`, `27fa8f5`, `3f81af4`.
+- **Review loop:** initial independent spec review found premature searchable state and missing explicit `文件` hierarchy; both repaired. Initial quality/security review found nonfunctional cancellation and duplicate-upload/file-selection races; repaired. Final independent SPEC PASS and QUALITY PASS.
+- **Verification:** focused Web test command passed 7 files / 34 tests; `pnpm lint:web` PASS; `pnpm build:web` production compile, TypeScript, and static generation PASS; diff checks PASS.
+- **Next:** Task 10 end-to-end verification and delivery records. Do not mark Phase 5 complete until deterministic fixture coverage and isolated Docker vertical slice both pass.

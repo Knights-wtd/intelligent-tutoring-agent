@@ -406,3 +406,11 @@
 - runtime embedding 合同不可假定与 ACTIVE index 相同；重建完成前旧索引仍可 ACTIVE，因此 query adapter 必须与已存 backend/model/dimension/signature 精确匹配，否则只能 lexical-only。
 - cited page preview 必须由正常解析持久化路径生成；仅在测试中直接设置 `Page.text_object_key` 会制造无法用于真实上传的假闭环。
 - opaque citation 仍需在对象读取前重新验证知识库作用域、ACTIVE index、文档/版本状态和租户权限；不能把 token 完整性当作授权替代品。
+
+## 2026-08-18 · Task 9 C3 knowledge workspace findings
+
+- A document `ACTIVE` state alone does not mean learner search readiness: an accepted upload can be `ACTIVE / UPLOADED / QUEUED`; only a `READY` version with `COMPLETED` job is shown as `可搜索`, failures as `处理失败`, and all other accepted states as `处理中`.
+- Client-side request sequencing alone avoids stale state writes but does not stop costly work. Create/upload/search/preview controllers are retained, aborted on unmount or KB context switch, removed after settlement, and intentional aborts stay silent.
+- Upload retry must preserve its original idempotency key; while an upload is active, duplicate submission is disabled and older completion clears the chooser only if the same `File` remains selected.
+- The knowledge panel consumes only existing cookie-auth KB routes and opaque citation tokens. It neither invents document listing/status polling nor exposes OCR, embedding, worker, provider, storage, object-key, or citation-token internals.
+- There is no tutor/Agent Loop API in this milestone; the static tutor surface is not a failed request path. Model, balance, and knowledge requests retain independent error/retry paths.
