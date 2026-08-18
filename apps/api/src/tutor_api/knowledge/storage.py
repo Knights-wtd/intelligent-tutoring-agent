@@ -185,6 +185,24 @@ def build_document_object_key(
     )
 
 
+def build_page_text_preview_object_key(
+    space_id: UUID,
+    version_id: UUID,
+    page_number: int,
+    content_sha256: str,
+) -> str:
+    """Build an immutable, server-derived key for one bounded textual page preview."""
+
+    if isinstance(page_number, bool) or not isinstance(page_number, int) or page_number <= 0:
+        raise ValueError("page_number must be a positive integer")
+    if not re.fullmatch(r"[0-9a-f]{64}", content_sha256):
+        raise ValueError("content_sha256 must be a lowercase SHA-256 digest")
+    return (
+        f"spaces/{space_id}/document-versions/{version_id}/page-previews/"
+        f"{page_number}-{content_sha256}.txt"
+    )
+
+
 class S3ObjectStorage:
     """Minimal path-style S3/MinIO adapter using AWS Signature Version 4."""
 

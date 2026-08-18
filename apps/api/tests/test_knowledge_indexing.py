@@ -33,6 +33,7 @@ from tutor_api.knowledge.models import (
     KnowledgeBase,
     Page,
 )
+from tutor_api.knowledge.storage import MemoryObjectStorage
 from tutor_api.spaces.models import Space, SpaceKind
 
 
@@ -570,6 +571,7 @@ def test_persisted_parse_freezes_ready_set_and_enqueues_job_under_kb_lock(
         parser_signature=make_pipeline_signature("parser", "native", "1"),
         ocr_signature=make_pipeline_signature("ocr", "disabled", "1"),
         chunking=ChunkingConfig(max_chars=80, overlap_chars=16),
+        object_storage=MemoryObjectStorage(),
         embedding_adapter=CountingEmbedding(),
     )
 
@@ -633,6 +635,7 @@ def test_parsed_document_persistence_enqueues_one_idempotent_build(session: Sess
         parser_signature=make_pipeline_signature("parser", "native", "1"),
         ocr_signature=make_pipeline_signature("ocr", "disabled", "1"),
         chunking=ChunkingConfig(max_chars=80, overlap_chars=16),
+        object_storage=MemoryObjectStorage(),
         embedding_adapter=embedding,
     )
     second = persist_parsed_document_and_enqueue_build(
@@ -642,6 +645,7 @@ def test_parsed_document_persistence_enqueues_one_idempotent_build(session: Sess
         parser_signature=make_pipeline_signature("parser", "native", "1"),
         ocr_signature=make_pipeline_signature("ocr", "disabled", "1"),
         chunking=ChunkingConfig(max_chars=80, overlap_chars=16),
+        object_storage=MemoryObjectStorage(),
         embedding_adapter=embedding,
     )
     conflicting = ParsedDocument(
@@ -657,6 +661,7 @@ def test_parsed_document_persistence_enqueues_one_idempotent_build(session: Sess
             parser_signature=make_pipeline_signature("parser", "native", "1"),
             ocr_signature=make_pipeline_signature("ocr", "disabled", "1"),
             chunking=ChunkingConfig(max_chars=80, overlap_chars=16),
+            object_storage=MemoryObjectStorage(),
             embedding_adapter=embedding,
         )
     session.commit()
@@ -726,6 +731,7 @@ def test_build_job_handler_activates_prepared_target(session: Session) -> None:
         parser_signature=make_pipeline_signature("parser", "native", "1"),
         ocr_signature=make_pipeline_signature("ocr", "disabled", "1"),
         chunking=ChunkingConfig(max_chars=80, overlap_chars=16),
+        object_storage=MemoryObjectStorage(),
         embedding_adapter=embedding,
     )
     session.commit()

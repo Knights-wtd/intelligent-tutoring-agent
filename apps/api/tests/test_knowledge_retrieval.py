@@ -27,6 +27,9 @@ from tutor_api.main import create_app
 
 
 class FixedEmbeddingAdapter:
+    backend = "fixed"
+    model = "fixed-test"
+    signature = "fixed-test:8"
     dimension = 8
 
     def __init__(self, vectors: dict[str, list[float]] | None = None) -> None:

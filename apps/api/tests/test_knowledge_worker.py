@@ -171,6 +171,7 @@ def real_build_target(
         parser_signature="tutor:parser:v1:" + "f" * 64,
         ocr_signature="tutor:ocr:v1:" + "0" * 64,
         chunking=ChunkingConfig(),
+        object_storage=MemoryObjectStorage(),
         embedding_adapter=adapter,
     )
     job.available_at = now

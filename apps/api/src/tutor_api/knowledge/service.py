@@ -47,9 +47,12 @@ from tutor_api.knowledge.storage import (
     ObjectAlreadyExistsError,
     ObjectStorage,
     build_document_object_key,
+    build_page_text_preview_object_key,
 )
 
 _KNOWLEDGE_BASE_NAME_CONSTRAINT = "uq_knowledge_base_name_in_space"
+_PAGE_PREVIEW_CONTENT_TYPE = "text/plain; charset=utf-8"
+_MAX_PAGE_PREVIEW_BYTES = 256 * 1024
 
 
 def _is_name_conflict(error: IntegrityError) -> bool:
@@ -550,10 +553,45 @@ def _validate_existing_parsed_graph(
                 raise RuntimeError("parsed_document_restart_conflict")
 
 
+def _bounded_page_preview_bytes(parsed_blocks: tuple[ParsedBlock, ...]) -> bytes:
+    raw = "\n".join(block.text for block in parsed_blocks).encode("utf-8")
+    if len(raw) <= _MAX_PAGE_PREVIEW_BYTES:
+        return raw
+    marker = b"\n[preview truncated]"
+    retained = raw[: _MAX_PAGE_PREVIEW_BYTES - len(marker)]
+    return retained.decode("utf-8", errors="ignore").encode("utf-8") + marker
+
+
+def _persist_page_preview(
+    object_storage: ObjectStorage,
+    *,
+    version: DocumentVersion,
+    page_number: int,
+    content_sha256: str,
+    data: bytes,
+) -> str:
+    key = build_page_text_preview_object_key(
+        version.space_id, version.id, page_number, content_sha256
+    )
+    try:
+        object_storage.put_if_absent(
+            key,
+            data,
+            content_type=_PAGE_PREVIEW_CONTENT_TYPE,
+        )
+    except ObjectAlreadyExistsError:
+        # The key includes the immutable version and full page digest, so a retry can reuse it.
+        pass
+    except Exception:
+        raise RuntimeError("page_preview_storage_unavailable") from None
+    return key
+
+
 def _persist_parsed_graph(
     session: Session,
     version: DocumentVersion,
     parsed_document: ParsedDocument,
+    object_storage: ObjectStorage,
 ) -> None:
     existing_page = session.scalar(
         select(Page.id).where(Page.document_version_id == version.id).limit(1)
@@ -562,12 +600,20 @@ def _persist_parsed_graph(
         _validate_existing_parsed_graph(session, version, parsed_document)
         return
     for page_number, parsed_blocks in _parsed_page_groups(parsed_document):
+        page_content_sha256 = content_sha256("\n".join(block.text for block in parsed_blocks))
         page = Page(
             space_id=version.space_id,
             document_version_id=version.id,
             page_number=page_number,
             source_pointer=f"{parsed_document.source_name}#page={page_number}",
-            content_sha256=content_sha256("\n".join(block.text for block in parsed_blocks)),
+            content_sha256=page_content_sha256,
+            text_object_key=_persist_page_preview(
+                object_storage,
+                version=version,
+                page_number=page_number,
+                content_sha256=page_content_sha256,
+                data=_bounded_page_preview_bytes(parsed_blocks),
+            ),
             source_metadata={},
         )
         session.add(page)
@@ -655,6 +701,7 @@ def persist_parsed_document_and_enqueue_build(
     ocr_signature: str,
     chunking: ChunkingConfig,
     embedding_adapter: EmbeddingAdapter,
+    object_storage: ObjectStorage,
 ) -> IngestionJob:
     """Persist immutable parser output and enqueue exactly one matching index build."""
 
@@ -663,7 +710,7 @@ def persist_parsed_document_and_enqueue_build(
         raise RuntimeError("document_version_not_found")
     if version.state not in (DocumentVersionState.PARSING, DocumentVersionState.READY):
         raise RuntimeError("document_version_not_parsing")
-    _persist_parsed_graph(session, version, parsed_document)
+    _persist_parsed_graph(session, version, parsed_document, object_storage)
     version.state = DocumentVersionState.READY
     session.flush()
     indexing._lock_knowledge_base(session, version.knowledge_base_id)

@@ -437,6 +437,7 @@ def make_parse_document_handler(
             ocr_signature=ocr_signature,
             chunking=active_chunking,
             embedding_adapter=embedding_adapter,
+            object_storage=object_storage,
         )
         job.checkpoint["build_job_id"] = str(build_job.id)
 

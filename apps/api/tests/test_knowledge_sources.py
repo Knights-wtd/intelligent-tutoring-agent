@@ -8,11 +8,16 @@ from test_knowledge_retrieval import (
     create_knowledge_base,
     make_client,
     register,
-    seed_chunk,
 )
 
-from tutor_api.knowledge.models import Document, DocumentVersion, Page
+from tutor_api.knowledge.models import IngestionJobKind, Page
 from tutor_api.knowledge.storage import MemoryObjectStorage
+from tutor_api.knowledge.worker import (
+    WorkerConfig,
+    make_build_index_handler,
+    make_parse_document_handler,
+    run_worker_once,
+)
 
 
 class TrackingStorage(MemoryObjectStorage):
@@ -31,54 +36,70 @@ class FailingStorage(TrackingStorage):
         raise RuntimeError(f"provider credentials leaked for {key}")
 
 
-def _seed_preview_target(
+def _ingest_preview_target(
     client: TestClient,
     engine: object,
     storage: MemoryObjectStorage,
     *,
     username: str,
-) -> tuple[dict, dict, str]:
+) -> tuple[dict, dict, str, bytes, bytes]:
     registration = register(client, username)
     knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
-    source_key = f"private/{username}/original.pdf"
-    page_key = f"private/{username}/page-7.txt"
-    storage.put_if_absent(source_key, b"source-preview-bytes", content_type="application/pdf")
-    storage.put_if_absent(page_key, b"page-preview-bytes", content_type="text/plain")
-    with sessionmaker(bind=engine)() as session:
-        seed_chunk(
-            session,
-            user_id=UUID(registration["user"]["id"]),
-            space_id=UUID(registration["personal_space"]["id"]),
-            knowledge_base_id=UUID(knowledge_base["id"]),
-            source_name="chapter-1.pdf",
-            content="previewable quadratic content",
-            vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            page_number=7,
+    source_bytes = b"# Quadratic\n\nquadratic source preview\n"
+    upload = client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents",
+        files={"file": ("chapter-1.md", source_bytes, "text/markdown")},
+        headers={"Idempotency-Key": f"preview-{username}"},
+    )
+    assert upload.status_code == 201, upload.text
+
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    adapter = client.app.state.embedding_adapter
+    config = WorkerConfig(worker_id=f"preview-{username}")
+    assert run_worker_once(
+        factory,
+        {
+            IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
+                storage, adapter
+            )
+        },
+        config=config,
+    )
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.BUILD_INDEX: make_build_index_handler(adapter)},
+        config=config,
+    )
+
+    with factory() as session:
+        page = session.scalar(
+            select(Page).where(
+                Page.document_version_id == UUID(upload.json()["document_version_id"])
+            )
         )
-        version = session.scalar(
-            select(DocumentVersion)
-            .join(Document, Document.id == DocumentVersion.document_id)
-            .where(Document.source_key == "chapter-1.pdf")
-        )
-        assert version is not None
-        version.object_key = source_key
-        page = session.scalar(select(Page).where(Page.document_version_id == version.id))
         assert page is not None
-        page.text_object_key = page_key
-        session.commit()
+        assert page.text_object_key is not None
+        page_preview = storage.get_object(page.text_object_key).data
+
     search = client.post(
         f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
         json={"query": "quadratic"},
     )
     assert search.status_code == 200, search.text
-    return registration, knowledge_base, search.json()["results"][0]["citation"]["id"]
+    return (
+        registration,
+        knowledge_base,
+        search.json()["results"][0]["citation"]["id"],
+        source_bytes,
+        page_preview,
+    )
 
 
-def test_cited_source_and_page_preview_map_to_correct_objects_with_bounded_range() -> None:
+def test_normal_ingestion_persists_cited_page_preview_and_serves_bounded_ranges() -> None:
     storage = TrackingStorage()
     client, engine = make_client(FixedEmbeddingAdapter(), storage)
     try:
-        _, knowledge_base, citation_id = _seed_preview_target(
+        _, knowledge_base, citation_id, source_bytes, page_preview = _ingest_preview_target(
             client, engine, storage, username="preview-owner"
         )
 
@@ -92,14 +113,14 @@ def test_cited_source_and_page_preview_map_to_correct_objects_with_bounded_range
         )
 
         assert source.status_code == page.status_code == 206
-        assert source.content == b"urce"
-        assert source.headers["content-range"] == "bytes 2-5/20"
+        assert source.content == source_bytes[2:6]
+        assert source.headers["content-range"] == f"bytes 2-5/{len(source_bytes)}"
         assert source.headers["accept-ranges"] == "bytes"
         assert source.headers["x-content-type-options"] == "nosniff"
-        assert page.content == b"page"
-        assert page.headers["content-range"] == "bytes 0-3/18"
+        assert page.content == page_preview[:4]
+        assert page.headers["content-range"] == f"bytes 0-3/{len(page_preview)}"
         serialized = source.text + str(source.headers) + page.text + str(page.headers)
-        assert "private/preview-owner" not in serialized
+        assert "spaces/" not in serialized
         assert "credentials" not in serialized
         assert storage.read_calls == 2
     finally:
@@ -112,7 +133,7 @@ def test_preview_authorizes_before_any_object_read_and_hides_other_tenant() -> N
     owner, engine = make_client(FixedEmbeddingAdapter(), storage)
     outsider = TestClient(owner.app)
     try:
-        _, knowledge_base, citation_id = _seed_preview_target(
+        _, knowledge_base, citation_id, _, _ = _ingest_preview_target(
             owner, engine, storage, username="source-owner"
         )
         register(outsider, "source-outsider")
@@ -135,7 +156,7 @@ def test_preview_rejects_malicious_and_out_of_range_headers_without_leaking_erro
     storage = TrackingStorage()
     client, engine = make_client(FixedEmbeddingAdapter(), storage)
     try:
-        _, knowledge_base, citation_id = _seed_preview_target(
+        _, knowledge_base, citation_id, _, _ = _ingest_preview_target(
             client, engine, storage, username="range-owner"
         )
         endpoint = (
@@ -160,7 +181,7 @@ def test_preview_redacts_storage_exception_and_accepts_only_opaque_citation() ->
     storage = FailingStorage()
     client, engine = make_client(FixedEmbeddingAdapter(), storage)
     try:
-        _, knowledge_base, citation_id = _seed_preview_target(
+        _, knowledge_base, citation_id, _, _ = _ingest_preview_target(
             client, engine, storage, username="redacted-owner"
         )
         endpoint = f"/api/v1/knowledge-bases/{knowledge_base['id']}/citations/{citation_id}/source"
@@ -173,7 +194,7 @@ def test_preview_redacts_storage_exception_and_accepts_only_opaque_citation() ->
         assert failure.status_code == 503
         assert failure.json() == {"detail": "检索服务暂不可用"}
         assert "credentials" not in failure.text
-        assert "private/" not in failure.text
+        assert "spaces/" not in failure.text
         assert forged.status_code == 404
         assert storage.read_calls == 1
     finally:
