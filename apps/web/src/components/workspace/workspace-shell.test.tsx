@@ -9,13 +9,27 @@ const mockApi = vi.hoisted(() => ({
   billingMe: vi.fn(),
 }));
 
+const mockKnowledgeApi = vi.hoisted(() => ({
+  list: vi.fn(),
+  create: vi.fn(),
+  upload: vi.fn(),
+  search: vi.fn(),
+  pagePreview: vi.fn(),
+}));
+
 vi.mock("@/lib/api", () => ({ api: mockApi }));
+vi.mock("@/lib/knowledge-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/knowledge-api")>();
+  return { ...actual, knowledgeApi: mockKnowledgeApi };
+});
 
 beforeEach(() => {
   mockApi.models.mockReset();
   mockApi.billingMe.mockReset();
   mockApi.models.mockResolvedValue([]);
   mockApi.billingMe.mockResolvedValue({ balance: "0", currency: "CNY", entries: [] });
+  for (const mock of Object.values(mockKnowledgeApi)) mock.mockReset();
+  mockKnowledgeApi.list.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -188,5 +202,47 @@ describe("WorkspaceShell", () => {
     await user.keyboard("{ArrowRight}");
 
     expect(Number(firstSeparator.getAttribute("aria-valuenow"))).toBeGreaterThan(initialValue);
+  });
+
+  it("keeps model and balance data available when knowledge loading fails", async () => {
+    const user = userEvent.setup();
+    mockApi.models.mockResolvedValue([
+      {
+        id: "study-model",
+        display_name: "学习模型",
+        provider: "example",
+        price_summary: "按量计费",
+      },
+    ]);
+    mockApi.billingMe.mockResolvedValue({ balance: "8.00", currency: "CNY", entries: [] });
+    mockKnowledgeApi.list.mockRejectedValue(new Error("provider detail"));
+
+    render(<WorkspaceShell />);
+    await user.click(screen.getByRole("button", { name: "知识库" }));
+
+    expect(await screen.findByText("知识库暂时无法加载。")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "学习模型" })).toBeInTheDocument();
+    expect(screen.getByText("余额 ¥8.00")).toBeInTheDocument();
+    expect(screen.getByLabelText("AI 家教")).toBeInTheDocument();
+  });
+
+  it("reloads the knowledge panel for the newly selected space", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.list.mockResolvedValue([]);
+    render(
+      <WorkspaceShell
+        spaces={[
+          { id: "personal", kind: "personal", name: "我的空间" },
+          { id: "math", kind: "classroom", name: "七年级数学" },
+        ]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "知识库" }));
+    expect(await screen.findByText("当前空间还没有知识库。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "七年级数学" }));
+
+    expect(mockKnowledgeApi.list).toHaveBeenLastCalledWith("math", expect.any(AbortSignal));
+    expect(screen.getByLabelText("知识库面板")).toHaveTextContent("七年级数学");
   });
 });

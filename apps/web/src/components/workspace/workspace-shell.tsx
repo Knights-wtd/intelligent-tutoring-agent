@@ -5,19 +5,25 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { api, type EnabledModel, type SpaceSummary } from "@/lib/api";
 
+import { KnowledgePanel } from "./knowledge-panel";
+
 import styles from "./workspace-shell.module.css";
 
 const treeItems = [
+  { label: "知识库", kind: "active" },
   { label: "教材与练习", kind: "section" },
-  { label: "数学上册.pdf", kind: "book" },
-  { label: "同步练习.pdf", kind: "book" },
-  { label: "知识图谱", kind: "active" },
-  { label: "AI 笔记", kind: "note", count: "12" },
-  { label: "错题集", kind: "collection", count: "8" },
-  { label: "题库", kind: "collection", count: "45" },
+  { label: "知识图谱", kind: "note" },
+  { label: "AI 笔记", kind: "note" },
+  { label: "错题集", kind: "collection" },
+  { label: "题库", kind: "collection" },
 ] as const;
 
 const workspaceViews = [
+  {
+    id: "knowledge",
+    label: "知识库",
+    message: "管理教材与练习，并从已就绪资料中检索来源。",
+  },
   {
     id: "graph",
     label: "知识图谱",
@@ -138,10 +144,9 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
                   key={item.label}
                 >
                   <span className={styles.itemIcon} aria-hidden="true">
-                    {item.kind === "section" ? "⌄" : item.kind === "book" ? "▣" : "◇"}
+                    {item.kind === "section" ? "⌄" : "◇"}
                   </span>
                   <span>{item.label}</span>
-                  {"count" in item ? <span className={styles.count}>{item.count}</span> : null}
                 </li>
               ))}
             </ul>
@@ -169,10 +174,14 @@ export function WorkspaceShell({ spaces = exampleSpaces }: WorkspaceShellProps) 
                 );
               })}
             </div>
-            <div className={styles.emptyState}>
-              <h2>{selectedView.label}</h2>
-              <span>{selectedView.message}</span>
-            </div>
+            {selectedViewId === "knowledge" && selectedSpace ? (
+              <KnowledgePanel spaceId={selectedSpace.id} spaceName={selectedSpace.name} />
+            ) : (
+              <div className={styles.emptyState}>
+                <h2>{selectedView.label}</h2>
+                <span>{selectedView.message}</span>
+              </div>
+            )}
           </section>
         </Panel>
 
