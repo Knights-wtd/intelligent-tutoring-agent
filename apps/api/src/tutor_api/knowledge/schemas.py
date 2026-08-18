@@ -1,7 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from tutor_api.knowledge.retrieval import MAX_RESULTS, normalize_search_query
 
 
 class CreateKnowledgeBaseRequest(BaseModel):
@@ -43,3 +45,30 @@ class KnowledgeUploadResponse(BaseModel):
     version_state: str
     job_state: str
     created_at: datetime
+
+
+class KnowledgeSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    limit: int = Field(default=10, ge=1, le=MAX_RESULTS)
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        return normalize_search_query(value)
+
+
+class KnowledgeCitationResponse(BaseModel):
+    id: str
+    source_name: str
+    page_number: int | None
+
+
+class KnowledgeSearchResultResponse(BaseModel):
+    excerpt: str
+    citation: KnowledgeCitationResponse
+
+
+class KnowledgeSearchResponse(BaseModel):
+    results: list[KnowledgeSearchResultResponse]

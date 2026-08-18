@@ -47,6 +47,14 @@ class ObjectSizeLimitError(RuntimeError):
         super().__init__(self.code)
 
 
+class ObjectRangeNotSatisfiableError(RuntimeError):
+    """Raised when a bounded object range cannot be served."""
+
+    def __init__(self) -> None:
+        self.code = "object_range_not_satisfiable"
+        super().__init__(self.code)
+
+
 class _RejectRedirects(HTTPRedirectHandler):
     def redirect_request(self, request, fp, code, msg, headers, newurl):
         del request, fp, code, msg, headers, newurl
@@ -75,6 +83,16 @@ class StoredObject:
     content_type: str
 
 
+@dataclass(frozen=True, slots=True)
+class StoredObjectRange:
+    """A bounded segment of a stored object."""
+
+    data: bytes
+    content_type: str
+    start: int
+    total_size: int
+
+
 class ObjectStorage(Protocol):
     """Immutable-create storage boundary used by ingestion services."""
 
@@ -95,6 +113,8 @@ class ObjectStorage(Protocol):
     ) -> None: ...
 
     def get_object(self, key: str) -> StoredObject: ...
+
+    def get_object_range(self, key: str, *, start: int, length: int) -> StoredObjectRange: ...
 
 
 def _contains_control_or_format(value: str) -> bool:
@@ -223,6 +243,7 @@ class S3ObjectStorage:
         data: bytes | None = None,
         content_type: str | None = None,
         immutable_create: bool = False,
+        range_header: str | None = None,
     ):
         if not key or key.startswith("/"):
             raise ValueError("object key must be a non-empty relative path")
@@ -243,6 +264,8 @@ class S3ObjectStorage:
             headers["content-type"] = _normalize_content_type(content_type)
         if immutable_create:
             headers["if-none-match"] = "*"
+        if range_header is not None:
+            headers["range"] = range_header
         signed_headers = ";".join(sorted(headers))
         canonical_headers = "".join(
             f"{name}:{' '.join(headers[name].split())}\n" for name in sorted(headers)
@@ -281,6 +304,8 @@ class S3ObjectStorage:
             error.close()
             if code == 404:
                 raise ObjectNotFoundError from None
+            if code == 416:
+                raise ObjectRangeNotSatisfiableError from None
             if immutable_create and code in {409, 412}:
                 raise ObjectAlreadyExistsError from None
             raise RuntimeError("object_storage_request_failed") from None
@@ -330,6 +355,57 @@ class S3ObjectStorage:
             return StoredObject(
                 data=_read_bounded(response, self.max_object_bytes),
                 content_type=_normalize_content_type(content_type),
+            )
+
+
+    def get_object_range(self, key: str, *, start: int, length: int) -> StoredObjectRange:
+        if (
+            isinstance(start, bool)
+            or isinstance(length, bool)
+            or not isinstance(start, int)
+            or not isinstance(length, int)
+            or start < 0
+            or not 1 <= length <= self.max_object_bytes
+        ):
+            raise ObjectRangeNotSatisfiableError
+        end = start + length - 1
+        with self._request("GET", key, range_header=f"bytes={start}-{end}") as response:
+            raw_content_range = response.headers.get("Content-Range")
+            content_type = _normalize_content_type(
+                response.headers.get("Content-Type", "application/octet-stream")
+            )
+            if raw_content_range is None:
+                if start != 0:
+                    raise ObjectRangeNotSatisfiableError
+                raw_length = response.headers.get("Content-Length")
+                try:
+                    total_size = int(raw_length) if raw_length is not None else None
+                except (TypeError, ValueError):
+                    total_size = None
+                if total_size is None or total_size > length:
+                    raise ObjectRangeNotSatisfiableError
+                return StoredObjectRange(
+                    data=_read_bounded(response, length),
+                    content_type=content_type,
+                    start=0,
+                    total_size=total_size,
+                )
+            match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", raw_content_range.strip())
+            if match is None:
+                raise ObjectRangeNotSatisfiableError
+            actual_start, actual_end, total_size = (int(value) for value in match.groups())
+            if (
+                actual_start != start
+                or actual_end < actual_start
+                or actual_end - actual_start + 1 > length
+                or total_size <= actual_end
+            ):
+                raise ObjectRangeNotSatisfiableError
+            return StoredObjectRange(
+                data=_read_bounded(response, length),
+                content_type=content_type,
+                start=actual_start,
+                total_size=total_size,
             )
 
 
@@ -396,3 +472,27 @@ class MemoryObjectStorage:
                 return self._objects[key]
             except KeyError:
                 raise ObjectNotFoundError from None
+
+    def get_object_range(self, key: str, *, start: int, length: int) -> StoredObjectRange:
+        if (
+            isinstance(start, bool)
+            or isinstance(length, bool)
+            or not isinstance(start, int)
+            or not isinstance(length, int)
+            or start < 0
+            or not 1 <= length <= self.max_object_bytes
+        ):
+            raise ObjectRangeNotSatisfiableError
+        with self._lock:
+            try:
+                stored = self._objects[key]
+            except KeyError:
+                raise ObjectNotFoundError from None
+        if start >= len(stored.data):
+            raise ObjectRangeNotSatisfiableError
+        return StoredObjectRange(
+            data=stored.data[start : start + length],
+            content_type=stored.content_type,
+            start=start,
+            total_size=len(stored.data),
+        )

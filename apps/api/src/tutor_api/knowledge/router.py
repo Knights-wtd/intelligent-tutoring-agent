@@ -2,7 +2,7 @@ from threading import Lock
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Header, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 
@@ -10,9 +10,20 @@ from tutor_api.core.database import session_scope
 from tutor_api.identity.models import User
 from tutor_api.identity.router import CurrentUser, _session_factory
 from tutor_api.knowledge.access import get_writable_knowledge_base
+from tutor_api.knowledge.retrieval import (
+    SourcePreview,
+    parse_preview_range,
+    read_cited_page_preview,
+    read_cited_source_preview,
+    search_knowledge,
+)
 from tutor_api.knowledge.schemas import (
     CreateKnowledgeBaseRequest,
     KnowledgeBaseResponse,
+    KnowledgeCitationResponse,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResponse,
+    KnowledgeSearchResultResponse,
     KnowledgeUploadResponse,
 )
 from tutor_api.knowledge.service import (
@@ -62,6 +73,35 @@ def _load_upload_user(session: Session, user_id: UUID) -> User:
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证失败")
     return user
+
+
+def _citation_secret(request: Request) -> str:
+    return request.app.state.settings.object_storage_secret_key.get_secret_value()
+
+
+def _preview_response(preview: SourcePreview) -> Response:
+    end = preview.start + len(preview.data) - 1
+    return Response(
+        content=preview.data,
+        status_code=status.HTTP_206_PARTIAL_CONTENT,
+        media_type=preview.content_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Range": f"bytes {preview.start}-{end}/{preview.total_size}",
+            "Content-Length": str(len(preview.data)),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def _preview_storage(request: Request) -> ObjectStorage:
+    storage = request.app.state.object_storage
+    if storage is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="来源预览暂不可用",
+        )
+    return storage
 
 
 def _require_upload_access(
@@ -158,6 +198,105 @@ def get_knowledge_base_detail(
         return KnowledgeBaseResponse.model_validate(
             get_knowledge_base(session, current_user, knowledge_base_id)
         )
+
+
+@router.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/search",
+    response_model=KnowledgeSearchResponse,
+)
+def post_knowledge_search(
+    knowledge_base_id: UUID,
+    payload: KnowledgeSearchRequest,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeSearchResponse:
+    embedding_adapter = request.app.state.embedding_adapter
+    if embedding_adapter is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="检索服务暂不可用",
+        )
+    with session_scope(_session_factory(request)) as session:
+        hits = search_knowledge(
+            session,
+            current_user,
+            knowledge_base_id,
+            query=payload.query,
+            limit=payload.limit,
+            embedding_adapter=embedding_adapter,
+            citation_secret=_citation_secret(request),
+        )
+    return KnowledgeSearchResponse(
+        results=[
+            KnowledgeSearchResultResponse(
+                excerpt=hit.excerpt,
+                citation=KnowledgeCitationResponse(
+                    id=hit.citation.id,
+                    source_name=hit.citation.source_name,
+                    page_number=hit.citation.page_number,
+                ),
+            )
+            for hit in hits
+        ]
+    )
+
+
+@router.get("/api/v1/knowledge-bases/{knowledge_base_id}/citations/{citation_id}/source")
+def get_cited_source_preview(
+    knowledge_base_id: UUID,
+    citation_id: str,
+    request: Request,
+    current_user: CurrentUser,
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+) -> Response:
+    try:
+        offset, length = parse_preview_range(range_header)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            detail="请求范围无效",
+        ) from None
+    with session_scope(_session_factory(request)) as session:
+        preview = read_cited_source_preview(
+            session,
+            current_user,
+            knowledge_base_id,
+            citation_id,
+            offset=offset,
+            length=length,
+            storage=_preview_storage(request),
+            citation_secret=_citation_secret(request),
+        )
+    return _preview_response(preview)
+
+
+@router.get("/api/v1/knowledge-bases/{knowledge_base_id}/citations/{citation_id}/page")
+def get_cited_page_preview(
+    knowledge_base_id: UUID,
+    citation_id: str,
+    request: Request,
+    current_user: CurrentUser,
+    range_header: Annotated[str | None, Header(alias="Range")] = None,
+) -> Response:
+    try:
+        offset, length = parse_preview_range(range_header)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+            detail="请求范围无效",
+        ) from None
+    with session_scope(_session_factory(request)) as session:
+        preview = read_cited_page_preview(
+            session,
+            current_user,
+            knowledge_base_id,
+            citation_id,
+            offset=offset,
+            length=length,
+            storage=_preview_storage(request),
+            citation_secret=_citation_secret(request),
+        )
+    return _preview_response(preview)
 
 
 @router.post(
