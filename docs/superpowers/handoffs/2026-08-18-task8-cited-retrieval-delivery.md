@@ -1,8 +1,8 @@
 # Task 8 Handoff — Hybrid retrieval and secure source preview
 
-**Date:** 2026-08-18  
-**Worktree:** `E:\项目\知识库课本\.worktrees\platform-foundation`  
-**Branch:** `feature/platform-foundation`  
+**Date:** 2026-08-18
+**Worktree:** `E:\项目\知识库课本\.worktrees\platform-foundation`
+**Branch:** `feature/platform-foundation`
 **Status:** Task 8 final SPEC PASS and QUALITY PASS; Phase 5 remains in progress.
 
 ## Delivered commits

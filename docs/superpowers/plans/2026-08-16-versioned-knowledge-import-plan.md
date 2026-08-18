@@ -125,4 +125,3 @@ Final main-thread verification after `363f3fb`: the combined Task 7-related set 
 - Agent tutoring, questions, wrong answers, long-term memory, and class publishing remain Milestones 4-5 and are intentionally not hidden inside this plan.
 - No DeepTutor source code is scheduled for direct copying; only interface and lifecycle ideas are used.
 - No TODO/TBD placeholders are present; each task names exact files, tests, commands, expected behavior, and a commit boundary.
-
