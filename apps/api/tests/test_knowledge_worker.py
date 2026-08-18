@@ -12,6 +12,7 @@ from sqlalchemy import event, func, select, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session, sessionmaker
 
+import tutor_api.knowledge.worker as worker_module
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
@@ -31,7 +32,8 @@ from tutor_api.knowledge.models import (
     KnowledgeBase,
     Page,
 )
-from tutor_api.knowledge.parsers import parse_markdown
+from tutor_api.knowledge.ocr import RenderedPage
+from tutor_api.knowledge.parsers import ParsedDocument, ParsedPage, parse_markdown
 from tutor_api.knowledge.service import (
     PreparedUpload,
     persist_parsed_document_and_enqueue_build,
@@ -414,6 +416,182 @@ def test_parse_worker_fails_closed_when_ocr_is_disabled(factory: sessionmaker[Se
         assert job.last_error_code == "ocr_disabled" and job.last_error_detail is None
         assert version and version.state is DocumentVersionState.FAILED
         assert session.scalar(select(func.count()).select_from(Page)) == 0
+
+
+def test_parse_worker_persists_content_when_a_completed_ocr_page_is_blank(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 18, 12, tzinfo=UTC)
+    raw = b"%PDF-mixed-ocr"
+    source_name = "mixed-ocr.pdf"
+    parsed = ParsedDocument(
+        source_name=source_name,
+        media_type="application/pdf",
+        pages=(
+            ParsedPage(page_number=1, blocks=(), needs_ocr=True),
+            ParsedPage(page_number=2, blocks=(), needs_ocr=True),
+        ),
+    )
+
+    class Renderer:
+        def render_page(
+            self,
+            pdf: bytes,
+            *,
+            page_number: int,
+            max_pixels: int,
+            timeout_seconds: float,
+        ) -> RenderedPage:
+            assert pdf == raw
+            return RenderedPage(
+                image=f"page-{page_number}".encode(),
+                media_type="image/png",
+                width=1,
+                height=1,
+            )
+
+    class OCR:
+        backend = "test"
+
+        def extract_text(
+            self,
+            image: bytes,
+            *,
+            languages: tuple[str, ...],
+            timeout_seconds: float | None = None,
+        ) -> str:
+            return "Indexed OCR text" if image == b"page-1" else "   "
+
+    monkeypatch.setattr(worker_module, "_parse_uploaded_document", lambda *_args, **_kwargs: parsed)
+    storage = MemoryObjectStorage()
+    adapter = HashEmbeddingAdapter(dimension=8)
+    with factory.begin() as session:
+        user, kb, _ = target(session, "mixed-ocr")
+        uploaded = upload_prepared_knowledge_document(
+            session,
+            user,
+            kb.id,
+            PreparedUpload(
+                source_name=source_name,
+                content_type="application/pdf",
+                content_sha256=hashlib.sha256(raw).hexdigest(),
+                temporary_file=BytesIO(raw),
+            ),
+            "mixed-ocr-request",
+            storage,
+        )
+        uploaded.job.max_attempts = 1
+        uploaded.job.available_at = now
+        job_id = uploaded.job.id
+        version_id = uploaded.version.id
+
+    assert run_worker_once(
+        factory,
+        {
+            IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
+                storage, adapter, ocr_adapter=OCR(), renderer=Renderer()
+            )
+        },
+        config=WorkerConfig(worker_id="mixed-ocr-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        job = session.get(IngestionJob, job_id)
+        version = session.get(DocumentVersion, version_id)
+        pages = list(session.scalars(select(Page).order_by(Page.page_number)))
+        blocks = list(session.scalars(select(Block).order_by(Block.ordinal)))
+        assert job and job.state is IngestionJobState.COMPLETED
+        assert version and version.state is DocumentVersionState.READY
+        assert [page.page_number for page in pages] == [1, 2]
+        assert [block.text for block in blocks] == ["Indexed OCR text"]
+        assert blocks[0].page_id == pages[0].id
+
+
+def test_parse_worker_fails_closed_for_completed_empty_ocr_result(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 18, 12, tzinfo=UTC)
+    raw = b"%PDF-empty-ocr"
+    source_name = "empty-ocr.pdf"
+    parsed = ParsedDocument(
+        source_name=source_name,
+        media_type="application/pdf",
+        pages=(ParsedPage(page_number=1, blocks=(), needs_ocr=True),),
+    )
+
+    class Renderer:
+        def render_page(
+            self,
+            pdf: bytes,
+            *,
+            page_number: int,
+            max_pixels: int,
+            timeout_seconds: float,
+        ) -> RenderedPage:
+            assert pdf == raw
+            return RenderedPage(
+                image=b"blank-page",
+                media_type="image/png",
+                width=1,
+                height=1,
+            )
+
+    class OCR:
+        backend = "test"
+
+        def extract_text(
+            self,
+            image: bytes,
+            *,
+            languages: tuple[str, ...],
+            timeout_seconds: float | None = None,
+        ) -> str:
+            return "   "
+
+    monkeypatch.setattr(worker_module, "_parse_uploaded_document", lambda *_args, **_kwargs: parsed)
+    storage = MemoryObjectStorage()
+    adapter = HashEmbeddingAdapter(dimension=8)
+    with factory.begin() as session:
+        user, kb, _ = target(session, "empty-ocr")
+        uploaded = upload_prepared_knowledge_document(
+            session,
+            user,
+            kb.id,
+            PreparedUpload(
+                source_name=source_name,
+                content_type="application/pdf",
+                content_sha256=hashlib.sha256(raw).hexdigest(),
+                temporary_file=BytesIO(raw),
+            ),
+            "empty-ocr-request",
+            storage,
+        )
+        uploaded.job.max_attempts = 1
+        uploaded.job.available_at = now
+        job_id = uploaded.job.id
+        version_id = uploaded.version.id
+
+    assert run_worker_once(
+        factory,
+        {
+            IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
+                storage, adapter, ocr_adapter=OCR(), renderer=Renderer()
+            )
+        },
+        config=WorkerConfig(worker_id="empty-ocr-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        job = session.get(IngestionJob, job_id)
+        version = session.get(DocumentVersion, version_id)
+        assert job and job.state is IngestionJobState.FAILED
+        assert job.last_error_code == "ocr_empty_result" and job.last_error_detail is None
+        assert version and version.state is DocumentVersionState.FAILED
+        assert session.scalar(select(func.count()).select_from(Page)) == 0
+
+
 def test_worker_main_registers_parse_and_build_handlers() -> None:
     from tutor_api.core.config import Settings
     from tutor_api.worker_main import create_handlers

@@ -427,7 +427,7 @@ def make_parse_document_handler(
             parsed = ocr_result.document
             if parsed.needs_ocr:
                 raise WorkerPublicError("ocr_unavailable")
-            if any(not page.blocks for page in parsed.pages):
+            if not parsed.blocks:
                 raise WorkerPublicError("ocr_empty_result")
         build_job = persist_parsed_document_and_enqueue_build(
             session,
