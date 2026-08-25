@@ -496,3 +496,28 @@
   margin: 14px auto 0;
   object-fit: contain;
 }
+.knowledgeGraphPanel { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 16px; overflow: auto; padding: 20px 22px 28px; color: var(--text); }
+.graphHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.graphHeader h2, .graphDetails h3 { margin: 3px 0 0; color: #302e3a; }
+.knowledgeGraphPanel button { min-height: 40px; padding: 8px 13px; border: 1px solid #d7d4df; border-radius: 8px; background: #fff; color: #494653; font: inherit; font-weight: 700; cursor: pointer; }
+.knowledgeGraphPanel button:hover { border-color: #bdb3e9; background: #f8f6ff; color: #4b419d; }
+.knowledgeGraphPanel button:focus-visible, .knowledgeGraphPanel input:focus-visible { outline: 3px solid #c8bdf5; outline-offset: 2px; }
+.graphMessage, .graphEmptyState { display: grid; justify-items: start; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.graphWorkspace { display: grid; min-height: 520px; grid-template-columns: minmax(0, 1fr) minmax(220px, 280px); gap: 16px; }
+.graphCanvas { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fbfaff; }
+.graphCanvas svg { display: block; width: 100%; height: 100%; min-height: 420px; }
+.graphCanvas line { stroke: #bbb5d6; stroke-width: 2; }
+.graphCanvas circle { fill: #7467ce; stroke: #fff; stroke-width: 4; }
+.graphCanvas .graphNodeFocused { fill: #167c59; stroke: #d6f2e6; stroke-width: 7; }
+.graphCanvas text { fill: #514d60; font-size: 13px; text-anchor: middle; }
+.graphCanvas [data-testid="graph-viewport"] { transition: transform 180ms ease; }
+.graphSidebar { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.graphSearchLabel { display: grid; gap: 7px; color: #5c5867; font-size: 12px; font-weight: 700; }
+.graphSearchLabel input { min-height: 40px; box-sizing: border-box; padding: 8px 10px; border: 1px solid #d6d3dc; border-radius: 8px; background: #fff; color: var(--text); font: inherit; }
+.graphNodeList { display: grid; gap: 7px; max-height: 230px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.graphNodeList button { width: 100%; text-align: left; }
+.graphNodeList button[aria-pressed="true"] { border-color: #c6bdf1; background: var(--purple-deep); color: #493f9e; }
+.graphDetails { display: grid; gap: 9px; padding: 14px; border: 1px solid #ded8f4; border-radius: 10px; background: #faf8ff; overflow-wrap: anywhere; }
+.graphDetails p, .graphDetails ul { margin: 0; color: #716d79; line-height: 1.5; }
+.graphDetails ul { display: grid; gap: 5px; padding-left: 18px; }
+@media (max-width: 767px) { .knowledgeGraphPanel { padding: 16px; } .graphWorkspace { grid-template-columns: 1fr; } }
