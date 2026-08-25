@@ -25,8 +25,10 @@ from tutor_api.billing.models import (
 from tutor_api.classrooms.models import Classroom, ClassroomMembership, ClassroomRole
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
+from tutor_api.knowledge.models import KnowledgeBase
 from tutor_api.providers.models import FxVersion, PriceVersion, ProviderProfile
 from tutor_api.spaces.models import Space, SpaceKind
+from tutor_api.tutor.models import TutorConversation, TutorMessage, TutorMessageRole
 
 
 @pytest.fixture
@@ -471,7 +473,7 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0008_embedding_contract"
+        assert version == "0015_tutor_conversations"
     finally:
         engine.dispose()
 
@@ -499,7 +501,7 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0008_embedding_contract"
+        assert version == "0015_tutor_conversations"
     finally:
         engine.dispose()
 
@@ -744,7 +746,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
                 MigrationContext.configure(connection), Base.metadata
             ) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0008_embedding_contract"
+                "0015_tutor_conversations"
             )
     finally:
         engine.dispose()
@@ -1271,3 +1273,233 @@ def test_migrated_knowledge_base_names_are_unique_per_space(tmp_path) -> None:
         )
 
     engine.dispose()
+
+def create_identity_and_knowledge_base(
+    session: Session, *, suffix: str | None = None
+) -> tuple[User, Space, KnowledgeBase]:
+    identity_suffix = suffix or uuid4().hex
+    user = User(
+        email=f"tutor-{identity_suffix}@example.com",
+        username=f"tutor-{identity_suffix}"[:32],
+        password_hash="hash",
+    )
+    session.add(user)
+    session.flush()
+    space = Space(owner_id=user.id, kind=SpaceKind.PERSONAL, name=f"Tutor {identity_suffix}")
+    session.add(space)
+    session.flush()
+    knowledge_base = KnowledgeBase(
+        space_id=space.id,
+        owner_user_id=user.id,
+        created_by_user_id=user.id,
+        name=f"Tutor KB {identity_suffix}",
+    )
+    session.add(knowledge_base)
+    session.flush()
+    return user, space, knowledge_base
+
+
+def test_tutor_conversation_accepts_scoped_user_message(session: Session) -> None:
+    user, space, knowledge_base = create_identity_and_knowledge_base(session)
+    conversation = TutorConversation(
+        user_id=user.id,
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        title="路径损耗",
+    )
+    session.add(conversation)
+    session.flush()
+    session.add(
+        TutorMessage(
+            conversation_id=conversation.id,
+            user_id=user.id,
+            space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
+            role=TutorMessageRole.USER,
+            content="解释路径损耗",
+        )
+    )
+    session.flush()
+
+    assert conversation.messages[0].role is TutorMessageRole.USER
+    assert conversation.messages[0].citations == []
+
+
+@pytest.mark.parametrize("mismatched_field", ["user_id", "space_id", "knowledge_base_id"])
+def test_tutor_message_must_match_all_conversation_scope_fields(
+    session: Session, mismatched_field: str
+) -> None:
+    first_user, first_space, first_knowledge_base = create_identity_and_knowledge_base(
+        session, suffix=f"first-{mismatched_field}"
+    )
+    second_user, second_space, second_knowledge_base = create_identity_and_knowledge_base(
+        session, suffix=f"second-{mismatched_field}"
+    )
+    conversation = TutorConversation(
+        user_id=first_user.id,
+        space_id=first_space.id,
+        knowledge_base_id=first_knowledge_base.id,
+        title="租户隔离",
+    )
+    session.add(conversation)
+    session.flush()
+    message_fields = {
+        "conversation_id": conversation.id,
+        "user_id": first_user.id,
+        "space_id": first_space.id,
+        "knowledge_base_id": first_knowledge_base.id,
+        "role": TutorMessageRole.USER,
+        "content": "越界消息",
+    }
+    message_fields[mismatched_field] = {
+        "user_id": second_user.id,
+        "space_id": second_space.id,
+        "knowledge_base_id": second_knowledge_base.id,
+    }[mismatched_field]
+    session.add(TutorMessage(**message_fields))
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_tutor_conversation_knowledge_base_must_belong_to_space(session: Session) -> None:
+    first_user, first_space, _ = create_identity_and_knowledge_base(session, suffix="first-space")
+    _, _, second_knowledge_base = create_identity_and_knowledge_base(
+        session, suffix="second-space"
+    )
+    session.add(
+        TutorConversation(
+            user_id=first_user.id,
+            space_id=first_space.id,
+            knowledge_base_id=second_knowledge_base.id,
+            title="跨空间会话",
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+def test_deleting_tutor_conversation_cascades_messages(session: Session) -> None:
+    user, space, knowledge_base = create_identity_and_knowledge_base(session)
+    conversation = TutorConversation(
+        user_id=user.id,
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        title="级联删除",
+    )
+    message = TutorMessage(
+        conversation=conversation,
+        user_id=user.id,
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        role=TutorMessageRole.ASSISTANT,
+        content="回答",
+    )
+    session.add(conversation)
+    session.flush()
+    message_id = message.id
+
+    session.delete(conversation)
+    session.flush()
+
+    assert session.scalar(select(TutorMessage).where(TutorMessage.id == message_id)) is None
+
+
+@pytest.mark.parametrize("title", ["", "   "])
+def test_tutor_conversation_rejects_empty_title(session: Session, title: str) -> None:
+    user, space, knowledge_base = create_identity_and_knowledge_base(session)
+    session.add(
+        TutorConversation(
+            user_id=user.id,
+            space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
+            title=title,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+@pytest.mark.parametrize(
+    ("overrides", "content"),
+    [
+        ({}, ""),
+        ({}, "   "),
+        ({"prompt_tokens": -1}, "问题"),
+        ({"completion_tokens": -1}, "回答"),
+    ],
+)
+def test_tutor_message_rejects_empty_content_or_negative_usage(
+    session: Session, overrides: dict[str, int], content: str
+) -> None:
+    user, space, knowledge_base = create_identity_and_knowledge_base(session)
+    conversation = TutorConversation(
+        user_id=user.id,
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        title="约束",
+    )
+    session.add(conversation)
+    session.flush()
+    session.add(
+        TutorMessage(
+            conversation_id=conversation.id,
+            user_id=user.id,
+            space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
+            role=TutorMessageRole.USER,
+            content=content,
+            **overrides,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+@pytest.mark.filterwarnings(
+    "ignore:No path_separator found in configuration:DeprecationWarning"
+)
+def test_tutor_migration_matches_model_metadata(tmp_path) -> None:
+    database_path = tmp_path / "tutor-schema.db"
+    config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path.as_posix()}")
+
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        inspector = inspect(engine)
+        assert {"tutor_conversations", "tutor_messages"}.issubset(
+            inspector.get_table_names()
+        )
+        message_foreign_keys = {
+            (
+                tuple(foreign_key["constrained_columns"]),
+                foreign_key["referred_table"],
+                tuple(foreign_key["referred_columns"]),
+                foreign_key["options"].get("ondelete"),
+            )
+            for foreign_key in inspector.get_foreign_keys("tutor_messages")
+        }
+        assert (
+            (
+                "conversation_id",
+                "user_id",
+                "space_id",
+                "knowledge_base_id",
+            ),
+            "tutor_conversations",
+            ("id", "user_id", "space_id", "knowledge_base_id"),
+            "CASCADE",
+        ) in message_foreign_keys
+        with engine.connect() as connection:
+            assert compare_metadata(
+                MigrationContext.configure(connection), Base.metadata
+            ) == []
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
+                "0015_tutor_conversations"
+            )
+    finally:
+        engine.dispose()
