@@ -9,6 +9,10 @@ from fastapi import HTTPException
 from sqlalchemy import event
 from sqlalchemy.orm import Session, sessionmaker
 
+from fastapi.testclient import TestClient
+
+from tutor_api.core.config import Settings
+
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
 from tutor_api.knowledge.candidates import CandidateLinkKind, CandidateNoteKind
@@ -24,6 +28,8 @@ from tutor_api.knowledge.models import (
     KnowledgeCandidateNote,
 )
 from tutor_api.spaces.models import Space, SpaceKind
+
+from tutor_api.main import create_app
 
 
 @pytest.fixture
@@ -292,3 +298,127 @@ def test_graph_orders_identical_timestamps_and_batch_ordinals_deterministically(
 
     assert [node.id for node in graph.nodes] == [second_note.id, first_note.id]
     assert [edge.id for edge in graph.edges] == [second_link.id, first_link.id]
+
+def make_client() -> tuple[TestClient, object]:
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    return TestClient(create_app(Settings(app_env="test"), sessionmaker(bind=engine))), engine
+
+
+def register(client: TestClient, username: str) -> dict:
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": f"{username}@example.com",
+            "username": username,
+            "password": "Correct horse battery staple 9",
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def create_knowledge_base(client: TestClient, space_id: str) -> dict:
+    response = client.post(
+        f"/api/v1/spaces/{space_id}/knowledge-bases", json={"name": "图谱教材"}
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def seed_confirmed_graph(
+    engine: object,
+    *,
+    owner_id: UUID,
+    space_id: UUID,
+    knowledge_base_id: UUID,
+) -> tuple[UUID, UUID, UUID]:
+    session = sessionmaker(bind=engine)()
+    try:
+        document = Document(
+            space_id=space_id,
+            knowledge_base_id=knowledge_base_id,
+            owner_user_id=owner_id,
+            created_by_user_id=owner_id,
+            title="无线通信原理与应用",
+            source_kind="upload",
+            source_key="wireless.docx",
+        )
+        session.add(document)
+        session.flush()
+        version = DocumentVersion(
+            space_id=space_id,
+            knowledge_base_id=knowledge_base_id,
+            document_id=document.id,
+            version_number=1,
+            content_sha256="b" * 64,
+            object_key="knowledge/wireless.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            created_by_user_id=owner_id,
+        )
+        session.add(version)
+        session.flush()
+        batch = KnowledgeCandidateBatch(
+            space_id=space_id,
+            knowledge_base_id=knowledge_base_id,
+            document_id=document.id,
+            document_version_id=version.id,
+            generation_number=1,
+            state=CandidateBatchState.CONFIRMED,
+            created_by_user_id=owner_id,
+        )
+        session.add(batch)
+        session.flush()
+        chapter = KnowledgeCandidateNote(
+            space_id=space_id, knowledge_base_id=knowledge_base_id, batch_id=batch.id, ordinal=0,
+            candidate_key="chapter", title="移动无线传播", normalized_title="移动无线传播",
+            kind=CandidateNoteKind.CHAPTER, markdown="# 移动无线传播",
+            source_pointers=["wireless.docx#block=120"], review_state=CandidateReviewState.ACCEPTED,
+        )
+        concept = KnowledgeCandidateNote(
+            space_id=space_id, knowledge_base_id=knowledge_base_id, batch_id=batch.id, ordinal=1,
+            candidate_key="path-loss", title="路径损耗", normalized_title="路径损耗",
+            kind=CandidateNoteKind.CONCEPT, markdown="# 路径损耗",
+            source_pointers=["wireless.docx#block=150"], review_state=CandidateReviewState.ACCEPTED,
+        )
+        session.add_all([chapter, concept])
+        session.flush()
+        link = KnowledgeCandidateLink(
+            space_id=space_id, knowledge_base_id=knowledge_base_id, batch_id=batch.id, ordinal=0,
+            kind=CandidateLinkKind.TERM, relation="mentions", source_key="chapter", target_key="path-loss",
+            source_pointer="wireless.docx#block=150", occurrence="路径损耗", context="提及路径损耗",
+            review_state=CandidateReviewState.ACCEPTED,
+        )
+        session.add(link)
+        session.commit()
+        return chapter.id, concept.id, link.id
+    finally:
+        session.close()
+
+
+def test_get_knowledge_graph_returns_confirmed_snapshot() -> None:
+    client, engine = make_client()
+    registration = register(client, "graphowner")
+    knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+    chapter_id, concept_id, link_id = seed_confirmed_graph(
+        engine,
+        owner_id=UUID(registration["user"]["id"]),
+        space_id=UUID(registration["personal_space"]["id"]),
+        knowledge_base_id=UUID(knowledge_base["id"]),
+    )
+
+    response = client.get(f"/api/v1/knowledge-bases/{knowledge_base['id']}/graph")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "knowledge_base_id": knowledge_base["id"],
+        "nodes": [
+            {"id": str(chapter_id), "title": "移动无线传播", "kind": "chapter", "source_pointers": ["wireless.docx#block=120"]},
+            {"id": str(concept_id), "title": "路径损耗", "kind": "concept", "source_pointers": ["wireless.docx#block=150"]},
+        ],
+        "edges": [{"id": str(link_id), "source_id": str(chapter_id), "target_id": str(concept_id), "kind": "term", "relation": "mentions", "source_pointer": "wireless.docx#block=150"}],
+    }
+
+    outsider = TestClient(client.app)
+    register(outsider, "graphoutsider")
+    assert outsider.get(f"/api/v1/knowledge-bases/{knowledge_base['id']}/graph").status_code == 404

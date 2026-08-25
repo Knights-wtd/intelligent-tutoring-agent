@@ -10,6 +10,8 @@ from tutor_api.core.database import session_scope
 from tutor_api.identity.models import User
 from tutor_api.identity.router import CurrentUser, _session_factory
 from tutor_api.knowledge.access import get_writable_knowledge_base
+
+from tutor_api.knowledge.graph import load_knowledge_graph
 from tutor_api.knowledge.retrieval import (
     SourcePreview,
     parse_preview_range,
@@ -21,6 +23,9 @@ from tutor_api.knowledge.schemas import (
     CreateKnowledgeBaseRequest,
     KnowledgeBaseResponse,
     KnowledgeCitationResponse,
+    KnowledgeGraphEdgeResponse,
+    KnowledgeGraphNodeResponse,
+    KnowledgeGraphResponse,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
     KnowledgeSearchResultResponse,
@@ -152,6 +157,41 @@ def _commit_knowledge_upload(
     finally:
         upload_lease.close_from_worker()
 
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/graph",
+    response_model=KnowledgeGraphResponse,
+)
+def get_knowledge_graph(
+    knowledge_base_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeGraphResponse:
+    with session_scope(_session_factory(request)) as session:
+        graph = load_knowledge_graph(session, current_user, knowledge_base_id)
+    return KnowledgeGraphResponse(
+        knowledge_base_id=graph.knowledge_base_id,
+        nodes=[
+            KnowledgeGraphNodeResponse(
+                id=node.id,
+                title=node.title,
+                kind=node.kind,
+                source_pointers=list(node.source_pointers),
+            )
+            for node in graph.nodes
+        ],
+        edges=[
+            KnowledgeGraphEdgeResponse(
+                id=edge.id,
+                source_id=edge.source_id,
+                target_id=edge.target_id,
+                kind=edge.kind,
+                relation=edge.relation,
+                source_pointer=edge.source_pointer,
+            )
+            for edge in graph.edges
+        ],
+    )
 
 @router.post(
     "/api/v1/spaces/{space_id}/knowledge-bases",

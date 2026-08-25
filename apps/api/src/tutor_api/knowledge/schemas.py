@@ -47,6 +47,27 @@ class KnowledgeUploadResponse(BaseModel):
     created_at: datetime
 
 
+class KnowledgeGraphNodeResponse(BaseModel):
+    id: UUID
+    title: str
+    kind: str
+    source_pointers: list[str]
+
+
+class KnowledgeGraphEdgeResponse(BaseModel):
+    id: UUID
+    source_id: UUID
+    target_id: UUID
+    kind: str
+    relation: str
+    source_pointer: str
+
+
+class KnowledgeGraphResponse(BaseModel):
+    knowledge_base_id: UUID
+    nodes: list[KnowledgeGraphNodeResponse]
+    edges: list[KnowledgeGraphEdgeResponse]
+
 class KnowledgeSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
