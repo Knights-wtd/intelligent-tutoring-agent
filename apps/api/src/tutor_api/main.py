@@ -17,15 +17,19 @@ from tutor_api.identity.router import router as identity_router
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.router import router as knowledge_router
 from tutor_api.knowledge.storage import ObjectStorage, create_object_storage
+from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
+from tutor_api.llm.ports import TutorChatAdapter
 from tutor_api.providers.router import router as providers_router
 from tutor_api.providers.service import synchronize_provider_profiles
 from tutor_api.spaces.router import router as spaces_router
+from tutor_api.tutor.router import router as tutor_router
 
 
 def create_app(
     settings: Settings | None = None,
     session_factory: sessionmaker[Session] | None = None,
     object_storage: ObjectStorage | None = None,
+    tutor_adapter: TutorChatAdapter | None = None,
 ) -> FastAPI:
     active_settings = settings or get_settings()
     production_errors = active_settings.production_errors()
@@ -40,6 +44,12 @@ def create_app(
 
     app = FastAPI(title="Textbook Tutor API", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings
+    app.state.tutor_adapter = tutor_adapter or FaroOpenAICompatibleAdapter(
+        api_key=active_settings.faro_api_key.get_secret_value(),
+        base_url=active_settings.faro_api_base_url,
+        model=active_settings.faro_model,
+        timeout_seconds=active_settings.faro_timeout_seconds,
+    )
     app.state.embedding_adapter = HashEmbeddingAdapter(
         backend=active_settings.embedding_backend,
         model=active_settings.embedding_model,
@@ -84,6 +94,7 @@ def create_app(
     app.include_router(spaces_router)
     app.include_router(classrooms_router)
     app.include_router(knowledge_router)
+    app.include_router(tutor_router)
     app.include_router(providers_router)
     app.include_router(billing_router)
     app.include_router(admin_router)

@@ -1,8 +1,11 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -10,6 +13,7 @@ import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.identity.models  # noqa: F401
 import tutor_api.knowledge.models  # noqa: F401
 import tutor_api.spaces.models  # noqa: F401
+from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
 from tutor_api.knowledge.indexing import (
@@ -33,6 +37,7 @@ from tutor_api.llm.ports import (
     LlmUsage,
     TutorChatMessage,
 )
+from tutor_api.main import create_app
 from tutor_api.spaces.models import Space, SpaceKind
 from tutor_api.tutor.models import TutorConversation, TutorMessage, TutorMessageRole
 from tutor_api.tutor.schemas import TutorSendRequest
@@ -493,3 +498,316 @@ def test_provider_errors_are_safe_and_atomic(
 def test_send_schema_rejects_extra_fields() -> None:
     with pytest.raises(ValueError):
         TutorSendRequest(prompt="path loss", provider_api_key="must-not-be-client-controlled")
+
+def register(client: TestClient, username: str) -> dict[str, object]:
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": f"{username}@example.com",
+            "username": username,
+            "password": "Correct horse battery staple 9",
+        },
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def create_knowledge_base(client: TestClient, space_id: str) -> dict[str, object]:
+    response = client.post(
+        f"/api/v1/spaces/{space_id}/knowledge-bases",
+        json={"name": f"Tutor textbook {uuid4().hex}"},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+def seed_http_knowledge_base(
+    engine: object,
+    registration: dict[str, object],
+    knowledge_base_data: dict[str, object],
+) -> None:
+    from tutor_api.knowledge.models import Page
+
+    with sessionmaker(bind=engine)() as database_session:
+        owner = database_session.get(User, UUID(str(registration["user"]["id"])))
+        knowledge_base = database_session.get(
+            KnowledgeBase, UUID(str(knowledge_base_data["id"]))
+        )
+        assert owner is not None
+        assert knowledge_base is not None
+        text = "path loss increases as wireless transmission distance increases"
+        document = Document(
+            space_id=knowledge_base.space_id,
+            knowledge_base_id=knowledge_base.id,
+            owner_user_id=owner.id,
+            created_by_user_id=owner.id,
+            title="wireless.pdf",
+            source_kind="upload",
+            source_key="wireless.pdf",
+            state=DocumentState.ACTIVE,
+        )
+        database_session.add(document)
+        database_session.flush()
+        version = DocumentVersion(
+            space_id=knowledge_base.space_id,
+            knowledge_base_id=knowledge_base.id,
+            document_id=document.id,
+            version_number=1,
+            content_sha256=content_sha256(text),
+            object_key="objects/wireless.pdf",
+            content_type="application/pdf",
+            state=DocumentVersionState.READY,
+            created_by_user_id=owner.id,
+        )
+        database_session.add(version)
+        database_session.flush()
+        page = Page(
+            space_id=knowledge_base.space_id,
+            document_version_id=version.id,
+            page_number=7,
+            source_pointer="wireless.pdf#page=7",
+            content_sha256=content_sha256(text),
+            source_metadata={},
+        )
+        database_session.add(page)
+        database_session.flush()
+        embedding = FixedEmbeddingAdapter()
+        index = IndexVersion(
+            space_id=knowledge_base.space_id,
+            knowledge_base_id=knowledge_base.id,
+            version_number=1,
+            state=IndexVersionState.ACTIVE,
+            parser_signature="parser:1",
+            ocr_signature="ocr:1",
+            chunking_signature="chunking:1",
+            embedding_backend=embedding.backend,
+            embedding_model=embedding.model,
+            embedding_dimension=embedding.dimension,
+            embedding_contract_signature=_embedding_contract_signature(embedding),
+            index_signature="index:1",
+            created_by_user_id=owner.id,
+            completed_at=datetime.now(UTC),
+            activated_at=datetime.now(UTC),
+        )
+        database_session.add(index)
+        database_session.flush()
+        database_session.add(
+            Chunk(
+                space_id=knowledge_base.space_id,
+                knowledge_base_id=knowledge_base.id,
+                index_version_id=index.id,
+                document_version_id=version.id,
+                page_id=page.id,
+                block_id=None,
+                ordinal=0,
+                source_pointer="wireless.pdf#page=7#chunk=0",
+                content_sha256=content_sha256(text),
+                content=text,
+                lexical_terms=normalize_lexical_terms(text),
+                embedding_dimension=embedding.dimension,
+                index_signature=index.index_signature,
+                embedding=embedding.embed(text),
+            )
+        )
+        database_session.commit()
+
+def make_tutor_client(
+    configured: bool,
+    *,
+    adapter: object | None = None,
+) -> tuple[TestClient, dict[str, object], object, object]:
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    active_adapter = adapter or RecordingTutorAdapter(
+        "Grounded answer from textbook evidence. [1]"
+    )
+    settings = Settings(
+        app_env="test",
+        faro_api_key=SecretStr("sk-test" if configured else ""),
+    )
+    app = create_app(settings, sessionmaker(bind=engine))
+    app.state.tutor_adapter = active_adapter
+    app.state.embedding_adapter = FixedEmbeddingAdapter()
+    client = TestClient(app)
+    registration = register(client, "tutor-http")
+    knowledge_base = create_knowledge_base(client, str(registration["personal_space"]["id"]))
+    seed_http_knowledge_base(engine, registration, knowledge_base)
+    return client, knowledge_base, engine, active_adapter
+
+
+@pytest.fixture
+def client() -> TestClient:
+    active_client, _, engine, _ = make_tutor_client(False)
+    try:
+        yield active_client
+    finally:
+        active_client.close()
+        engine.dispose()
+
+
+@pytest.fixture
+def configured_client() -> tuple[TestClient, dict[str, object], object]:
+    active_client, knowledge_base, engine, adapter = make_tutor_client(True)
+    try:
+        yield active_client, knowledge_base, adapter
+    finally:
+        active_client.close()
+        engine.dispose()
+
+
+def test_tutor_status_reports_missing_key_without_secrets(client: TestClient) -> None:
+    response = client.get("/api/v1/tutor/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "configured": False,
+        "model": "gemini-3.7-flash-tiered",
+    }
+    for secret_name in ("api_key", "base_url", "secret"):
+        assert secret_name not in response.text.casefold()
+
+
+def test_tutor_status_reports_configured_model(
+    configured_client: tuple[TestClient, dict[str, object], object],
+) -> None:
+    active_client, _, _ = configured_client
+    response = active_client.get("/api/v1/tutor/status")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "configured": True,
+        "model": "gemini-3.7-flash-tiered",
+    }
+
+
+def test_unconfigured_create_is_safe_and_does_not_call_adapter(client: TestClient) -> None:
+    personal_space_id = client.get("/api/v1/auth/me").json()["personal_space"]["id"]
+    knowledge_base = create_knowledge_base(client, personal_space_id)
+    adapter = client.app.state.tutor_adapter
+
+    response = client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
+        json={"prompt": "path loss"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "tutor_provider_unavailable"}
+    assert adapter.messages == ()
+
+
+def test_create_get_and_send_conversation_returns_only_public_messages(
+    configured_client: tuple[TestClient, dict[str, object], object],
+) -> None:
+    active_client, knowledge_base, _ = configured_client
+    created = active_client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
+        json={"prompt": "explain path loss"},
+    )
+
+    assert created.status_code == 201
+    body = created.json()
+    assert [message["role"] for message in body["messages"]] == ["user", "assistant"]
+    assert body["messages"][-1]["content"] == "Grounded answer from textbook evidence. [1]"
+    assert body["messages"][-1]["citations"][0]["source_name"] == "wireless.pdf"
+    for hidden in ("api_key", "base_url", "provider body", "untrusted textbook excerpt"):
+        assert hidden not in created.text.casefold()
+
+    conversation_url = (
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations/{body['id']}"
+    )
+    loaded = active_client.get(conversation_url)
+    assert loaded.status_code == 200
+    assert loaded.json() == body
+
+    sent = active_client.post(conversation_url + "/messages", json={"prompt": "and distance?"})
+    assert sent.status_code == 200
+    assert [message["role"] for message in sent.json()["messages"]] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+
+
+def test_conversation_is_hidden_across_users_and_knowledge_bases(
+    configured_client: tuple[TestClient, dict[str, object], object],
+) -> None:
+    owner, knowledge_base, _ = configured_client
+    created = owner.post(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
+        json={"prompt": "private question"},
+    ).json()
+    other_base = create_knowledge_base(
+        owner, owner.get("/api/v1/auth/me").json()["personal_space"]["id"]
+    )
+    cross_base_url = (
+        f"/api/v1/knowledge-bases/{other_base['id']}/tutor/conversations/{created['id']}"
+    )
+    assert owner.get(cross_base_url).status_code == 404
+    assert owner.post(cross_base_url + "/messages", json={"prompt": "steal"}).status_code == 404
+
+    outsider = TestClient(owner.app)
+    try:
+        register(outsider, f"outsider-{uuid4().hex[:8]}")
+        original_url = (
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations/{created['id']}"
+        )
+        assert outsider.get(original_url).status_code == 404
+        hidden_send = outsider.post(
+            original_url + "/messages", json={"prompt": "steal"}
+        )
+        assert hidden_send.status_code == 404
+    finally:
+        outsider.close()
+
+
+@pytest.mark.parametrize(
+    ("provider_code", "expected_status"),
+    [
+        ("llm_timeout", 503),
+        ("llm_unauthorized", 503),
+        ("llm_provider_error", 503),
+        ("llm_network_error", 503),
+        ("llm_rate_limited", 429),
+    ],
+)
+def test_provider_errors_have_stable_safe_http_mapping(
+    provider_code: str, expected_status: int
+) -> None:
+    active_client, knowledge_base, engine, _ = make_tutor_client(
+        True, adapter=FailingTutorAdapter(provider_code)
+    )
+    try:
+        response = active_client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
+            json={"prompt": "path loss"},
+        )
+        assert response.status_code == expected_status
+        expected_detail = (
+            "tutor_provider_rate_limited"
+            if provider_code == "llm_rate_limited"
+            else (
+                "tutor_provider_timeout"
+                if provider_code == "llm_timeout"
+                else "tutor_provider_unavailable"
+            )
+        )
+        assert response.json() == {"detail": expected_detail}
+        assert "provider body secret" not in response.text
+    finally:
+        active_client.close()
+        engine.dispose()
+
+
+def test_http_validation_does_not_echo_grounded_prompt_or_secrets(
+    configured_client: tuple[TestClient, dict[str, object], object],
+) -> None:
+    active_client, knowledge_base, _ = configured_client
+    response = active_client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
+        json={"provider_api_key": "sk-client-secret"},
+    )
+
+    assert response.status_code == 422
+    assert "sk-client-secret" not in response.text
+    assert "untrusted textbook excerpt" not in response.text.casefold()
