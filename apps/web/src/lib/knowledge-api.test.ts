@@ -147,4 +147,21 @@ describe("knowledgeApi", () => {
     expect(String(error)).not.toContain("secret-key");
     expect(String(error)).not.toContain("credentials");
   });
+
+  it("loads a knowledge graph with an encoded knowledge base id", async () => {
+    const graph = {
+      knowledge_base_id: "kb/1",
+      nodes: [{ id: "node-1", title: "勾股定理", kind: "concept", source_pointers: ["page:42"] }],
+      edges: [{ id: "edge-1", source_id: "node-1", target_id: "node-2", kind: "term", relation: "related_to", source_pointer: "page:42" }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(graph), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(knowledgeApi.graph("kb/1")).resolves.toEqual(graph);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/knowledge-bases/kb%2F1/graph",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
 });

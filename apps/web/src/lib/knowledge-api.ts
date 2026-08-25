@@ -28,6 +28,28 @@ export type KnowledgeUpload = {
   job_state: string;
   created_at: string;
 };
+export type KnowledgeGraphNode = {
+  id: string;
+  title: string;
+  kind: string;
+  source_pointers: string[];
+};
+
+export type KnowledgeGraphEdge = {
+  id: string;
+  source_id: string;
+  target_id: string;
+  kind: string;
+  relation: string;
+  source_pointer: string;
+};
+
+export type KnowledgeGraph = {
+  knowledge_base_id: string;
+  nodes: KnowledgeGraphNode[];
+  edges: KnowledgeGraphEdge[];
+};
+
 
 export type KnowledgeCitation = {
   id: string;
@@ -110,6 +132,10 @@ export const knowledgeApi = {
     if (!response.ok) throw new KnowledgeApiError(response.status);
     return response.json() as Promise<KnowledgeUpload>;
   },
+  graph(knowledgeBaseId: string, signal?: AbortSignal): Promise<KnowledgeGraph> {
+    return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/graph`, { signal });
+  },
+
 
   search(
     knowledgeBaseId: string,
