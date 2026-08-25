@@ -33,6 +33,33 @@ def test_settings_parse_non_secret_provider_profiles() -> None:
     assert settings.provider_profiles[0].enabled_by_default is True
 
 
+def test_settings_parse_faro_runtime_configuration_without_exposing_key() -> None:
+    secret = "sk-faro-config-secret"
+    settings = Settings(
+        faro_api_key=secret,
+        faro_model="gemini-3.7-flash-tiered",
+        faro_context_window=64_000,
+        faro_timeout_seconds=90,
+        faro_max_concurrency=4,
+    )
+
+    assert settings.faro_api_base_url == "https://faroapi.com/v1"
+    assert settings.faro_api_key.get_secret_value() == secret
+    assert settings.faro_context_window == 64_000
+    assert secret not in repr(settings)
+
+
+def test_settings_rejects_insecure_faro_base_url() -> None:
+    with pytest.raises(ValueError, match="FARO_API_BASE_URL"):
+        Settings(faro_api_base_url="http://faroapi.com/v1")
+
+
+def test_settings_normalizes_faro_base_url_whitespace_and_trailing_slash() -> None:
+    settings = Settings(faro_api_base_url="  https://faroapi.com/v1/  ")
+
+    assert settings.faro_api_base_url == "https://faroapi.com/v1"
+
+
 @pytest.mark.parametrize(
     "provider_profiles_json",
     [

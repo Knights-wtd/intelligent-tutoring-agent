@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     embedding_backend: str = "hash"
     embedding_model: str = "feature-hash-v1"
     embedding_dimension: int = 384
+    faro_api_base_url: str = Field(default="https://faroapi.com/v1", repr=False)
+    faro_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    faro_model: str = "gemini-3.7-flash-tiered"
+    faro_context_window: int = 32_000
+    faro_timeout_seconds: int = 60
+    faro_max_concurrency: int = 2
     session_cookie_name: str = "session"
     session_ttl_seconds: int = 604800
     provider_profiles: Annotated[tuple[ProviderProfileConfig, ...], NoDecode] = Field(
@@ -217,6 +223,44 @@ class Settings(BaseSettings):
     @classmethod
     def validate_embedding_model_setting(cls, value: Any) -> str:
         return normalize_embedding_model(value)
+
+    @field_validator("faro_api_base_url")
+    @classmethod
+    def validate_faro_api_base_url(cls, value: str) -> str:
+        normalized = value.strip()
+        parsed = _parse_absolute_url(normalized)
+        if parsed is None or parsed.scheme != "https" or parsed.query or parsed.fragment:
+            raise ValueError("FARO_API_BASE_URL must be an absolute HTTPS URL")
+        return normalized.rstrip("/")
+
+    @field_validator("faro_model")
+    @classmethod
+    def validate_faro_model(cls, value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).strip()
+        if not normalized or len(normalized) > 255 or any(char.isspace() for char in normalized):
+            raise ValueError("FARO_MODEL must be a non-blank model id without whitespace")
+        return normalized
+
+    @field_validator("faro_context_window")
+    @classmethod
+    def validate_faro_context_window(cls, value: int) -> int:
+        if not 1_024 <= value <= 1_000_000:
+            raise ValueError("FARO_CONTEXT_WINDOW must be between 1024 and 1000000")
+        return value
+
+    @field_validator("faro_timeout_seconds")
+    @classmethod
+    def validate_faro_timeout_seconds(cls, value: int) -> int:
+        if not 5 <= value <= 600:
+            raise ValueError("FARO_TIMEOUT_SECONDS must be between 5 and 600")
+        return value
+
+    @field_validator("faro_max_concurrency")
+    @classmethod
+    def validate_faro_max_concurrency(cls, value: int) -> int:
+        if not 1 <= value <= 32:
+            raise ValueError("FARO_MAX_CONCURRENCY must be between 1 and 32")
+        return value
 
     @field_validator("ocr_languages", mode="before")
     @classmethod
