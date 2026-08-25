@@ -30,6 +30,21 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator, UserDefinedType
 
 from tutor_api.core.database import Base
+from tutor_api.knowledge.candidate_models import (
+    CandidateBatchState as CandidateBatchState,
+)
+from tutor_api.knowledge.candidate_models import (
+    CandidateReviewState as CandidateReviewState,
+)
+from tutor_api.knowledge.candidate_models import (
+    KnowledgeCandidateBatch as KnowledgeCandidateBatch,
+)
+from tutor_api.knowledge.candidate_models import (
+    KnowledgeCandidateLink as KnowledgeCandidateLink,
+)
+from tutor_api.knowledge.candidate_models import (
+    KnowledgeCandidateNote as KnowledgeCandidateNote,
+)
 
 
 def _enum(enum_type: type[StrEnum], name: str) -> Enum:
