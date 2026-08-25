@@ -149,6 +149,10 @@ class KnowledgeCandidateNote(Base):
     parent_key: Mapped[str | None] = mapped_column(String(200))
     markdown: Mapped[str] = mapped_column(Text, nullable=False)
     source_pointers: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    formula_verification: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    external_sources: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, nullable=False, default=list, server_default="[]"
+    )
 
     review_state: Mapped[CandidateReviewState] = mapped_column(
         _enum(CandidateReviewState, "candidate_note_review_state"),
