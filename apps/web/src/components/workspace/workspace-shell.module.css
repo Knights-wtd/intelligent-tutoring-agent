@@ -545,3 +545,33 @@
 .tutorError p { margin: 0; }
 @media (max-width: 767px) { .tutorPanel { padding: 16px; } .tutorHeader { flex-direction: column; } .tutorMessageUser, .tutorMessageAssistant { max-width: 100%; } .tutorForm { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .tutorPanel * { scroll-behavior: auto; transition-duration: .01ms !important; } }
+/* Workspace knowledge library sidebar */
+.knowledgeLibrary { display: flex; min-height: 0; height: 100%; flex-direction: column; color: var(--text, #282733); background: #fbfafc; }
+.knowledgeLibraryHeader { display: grid; gap: 12px; padding: 18px 16px 14px; border-bottom: 1px solid var(--line, #e7e4ec); }
+.knowledgeLibraryHeader > div { display: grid; gap: 3px; }
+.knowledgeCreateDetails { position: relative; }
+.knowledgeCreateDetails summary { display: flex; min-height: 36px; align-items: center; justify-content: center; gap: 7px; box-sizing: border-box; padding: 7px 10px; border: 1px solid #d7d2e8; border-radius: 8px; background: #f5f2ff; color: #5549aa; font-size: 13px; font-weight: 750; cursor: pointer; list-style: none; }
+.knowledgeCreateDetails summary::-webkit-details-marker { display: none; }
+.knowledgeCreateDetails summary svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 1.8; }
+.knowledgeCreateForm { display: grid; gap: 8px; margin-top: 8px; padding: 11px; border: 1px solid #ddd8ed; border-radius: 9px; background: #fff; }
+.knowledgeCreateForm label { color: #5c5867; font-size: 12px; font-weight: 700; }
+.knowledgeCreateForm input { min-height: 36px; box-sizing: border-box; padding: 7px 9px; border: 1px solid #d6d3dc; border-radius: 7px; background: #fff; color: var(--text, #282733); font: inherit; }
+.knowledgeCreateForm button, .knowledgeLibraryError button { min-height: 36px; padding: 7px 10px; border: 1px solid var(--purple, #6558c9); border-radius: 7px; background: var(--purple, #6558c9); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+.knowledgeCreateError { margin: 0; color: #9a3445; font-size: 12px; line-height: 1.45; }
+.knowledgeLibraryBody { min-height: 0; flex: 1; overflow: auto; padding: 10px 8px; }
+.knowledgeLibraryStatus { margin: 0; padding: 16px 10px; color: #716d79; font-size: 13px; line-height: 1.5; text-align: center; }
+.knowledgeLibraryError { display: grid; gap: 10px; margin: 4px; padding: 12px; border: 1px solid #ecc9cf; border-radius: 9px; background: #fff7f8; color: #9a3445; }
+.knowledgeLibraryError p { margin: 0; font-size: 13px; line-height: 1.5; }
+.knowledgeBaseList { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.knowledgeBaseRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: stretch; gap: 3px; }
+.knowledgeBaseName, .knowledgeGraphButton, .knowledgeLibraryFooter button { min-height: 36px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #514d60; font: inherit; cursor: pointer; }
+.knowledgeBaseName { min-width: 0; padding: 7px 9px; overflow: hidden; font-size: 13px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.knowledgeBaseName[aria-current="page"] { border-color: #d8d1f5; background: #eeeafd; color: #493f9e; font-weight: 750; }
+.knowledgeGraphButton { display: grid; width: 36px; place-items: center; padding: 0; color: #716d79; }
+.knowledgeGraphButton svg { width: 17px; height: 17px; stroke: currentColor; stroke-width: 1.7; }
+.knowledgeBaseName:hover, .knowledgeGraphButton:hover, .knowledgeLibraryFooter button:hover { background: #f1eff5; color: #493f9e; }
+.knowledgeLibraryFooter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 10px 8px 12px; border-top: 1px solid var(--line, #e7e4ec); }
+.knowledgeLibraryFooter button { padding: 7px 8px; font-size: 12px; text-align: left; }
+.knowledgeLibraryFooter button:nth-last-child(1):nth-child(odd) { grid-column: 1 / -1; }
+.knowledgeLibrary button:disabled, .knowledgeLibrary input:disabled { cursor: not-allowed; opacity: .58; }
+.knowledgeLibrary summary:focus-visible, .knowledgeLibrary button:focus-visible, .knowledgeLibrary input:focus-visible { outline: 3px solid #c8bdf5; outline-offset: 2px; }
