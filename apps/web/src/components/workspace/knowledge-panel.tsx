@@ -3,7 +3,6 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  MAX_KNOWLEDGE_BASE_NAME_CHARACTERS,
   MAX_KNOWLEDGE_QUERY_CHARACTERS,
   MAX_KNOWLEDGE_UPLOAD_BYTES,
   MAX_SOURCE_NAME_CHARACTERS,
@@ -18,8 +17,8 @@ import styles from "./workspace-shell.module.css";
 const SUPPORTED_SOURCE = /\.(?:pdf|docx|md|jpe?g|png|zip)$/i;
 
 type KnowledgePanelProps = {
-  spaceId: string;
   spaceName: string;
+  knowledgeBase: KnowledgeBase;
 };
 
 type UploadEntry = {
@@ -36,18 +35,10 @@ type PreviewState =
   | { kind: "unsupported"; label: string };
 
 export function KnowledgePanel(props: KnowledgePanelProps) {
-  return <KnowledgePanelForSpace key={props.spaceId} {...props} />;
+  return <KnowledgePanelForKnowledgeBase key={props.knowledgeBase.id} {...props} />;
 }
 
-function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
-  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [loadAttempt, setLoadAttempt] = useState(0);
-  const [newKnowledgeBaseName, setNewKnowledgeBaseName] = useState("");
-  const [createMessage, setCreateMessage] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
+function KnowledgePanelForKnowledgeBase({ spaceName, knowledgeBase }: KnowledgePanelProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploadsByKnowledgeBase, setUploadsByKnowledgeBase] = useState<
@@ -64,7 +55,6 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
   const searchSequenceRef = useRef(0);
   const previewSequenceRef = useRef(0);
   const previewUrlRef = useRef<string | null>(null);
-  const createControllerRef = useRef<AbortController | null>(null);
   const searchControllerRef = useRef<AbortController | null>(null);
   const previewControllerRef = useRef<AbortController | null>(null);
   const activeUploadRef = useRef<
@@ -110,7 +100,6 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      createControllerRef.current?.abort();
       activeUploadRef.current?.controller.abort();
       abortSearchRequest();
       abortPreviewRequest();
@@ -118,111 +107,11 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
     };
   }, [abortPreviewRequest, abortSearchRequest, disposePreviewUrl]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let isCurrent = true;
-
-    void knowledgeApi
-      .list(spaceId, controller.signal)
-      .then((items) => {
-        if (!isCurrent || controller.signal.aborted) return;
-        setKnowledgeBases(items);
-        setSelectedKnowledgeBaseId(items[0]?.id ?? "");
-        setIsLoading(false);
-      })
-      .catch(() => {
-        if (!isCurrent || controller.signal.aborted) return;
-        setIsLoading(false);
-        setLoadFailed(true);
-      });
-
-    return () => {
-      isCurrent = false;
-      controller.abort();
-    };
-  }, [loadAttempt, spaceId]);
-
-  const selectedKnowledgeBase = knowledgeBases.find(
-    (knowledgeBase) => knowledgeBase.id === selectedKnowledgeBaseId,
-  );
+  const selectedKnowledgeBase = knowledgeBase;
+  const selectedKnowledgeBaseId = knowledgeBase.id;
   const uploads = selectedKnowledgeBaseId
     ? (uploadsByKnowledgeBase[selectedKnowledgeBaseId] ?? [])
     : [];
-
-  function cancelActiveUpload(knowledgeBaseId: string) {
-    const activeUpload = activeUploadRef.current;
-    if (activeUpload === null || activeUpload.knowledgeBaseId !== knowledgeBaseId) return;
-
-    activeUploadRef.current = null;
-    activeUpload.controller.abort();
-    setIsUploading(false);
-    setUploadsByKnowledgeBase((current) => ({
-      ...current,
-      [knowledgeBaseId]: (current[knowledgeBaseId] ?? []).filter(
-        (entry) => entry.id !== activeUpload.entry.id,
-      ),
-    }));
-  }
-
-  function selectKnowledgeBase(knowledgeBaseId: string) {
-    if (knowledgeBaseId === selectedKnowledgeBaseId) return;
-    cancelActiveUpload(selectedKnowledgeBaseId);
-    abortSearchRequest();
-    contextSequenceRef.current += 1;
-    searchSequenceRef.current += 1;
-    setSelectedKnowledgeBaseId(knowledgeBaseId);
-    setSearchResults([]);
-    setSearchMessage("");
-    setIsSearching(false);
-    setSelectedFile(null);
-    setUploadMessage("");
-    clearPreview();
-  }
-
-  function retryLoad() {
-    setIsLoading(true);
-    setLoadFailed(false);
-    setLoadAttempt((attempt) => attempt + 1);
-  }
-
-  async function createKnowledgeBase(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const normalizedName = newKnowledgeBaseName.trim();
-    if (!normalizedName) {
-      setCreateMessage("请输入知识库名称。");
-      return;
-    }
-    if (normalizedName.length > MAX_KNOWLEDGE_BASE_NAME_CHARACTERS) {
-      setCreateMessage("知识库名称不能超过 120 个字符。");
-      return;
-    }
-
-    const contextSequence = contextSequenceRef.current;
-    const controller = new AbortController();
-    createControllerRef.current = controller;
-    setIsCreating(true);
-    setCreateMessage("");
-    try {
-      const created = await knowledgeApi.create(spaceId, normalizedName, controller.signal);
-      if (!mountedRef.current || controller.signal.aborted) return;
-      setKnowledgeBases((current) => [...current, created]);
-      if (contextSequence === contextSequenceRef.current) {
-        selectKnowledgeBase(created.id);
-        setNewKnowledgeBaseName("");
-      }
-    } catch {
-      if (
-        !controller.signal.aborted &&
-        mountedRef.current &&
-        contextSequence === contextSequenceRef.current
-      ) {
-        setCreateMessage("暂时无法创建知识库，请重试。");
-      }
-    } finally {
-      if (createControllerRef.current === controller) createControllerRef.current = null;
-      if (mountedRef.current && !controller.signal.aborted) setIsCreating(false);
-    }
-  }
 
   function validateFile(file: File): string | null {
     if (!file.name || file.name.length > MAX_SOURCE_NAME_CHARACTERS) {
@@ -472,48 +361,9 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
           <span className={styles.eyebrow}>{spaceName}</span>
           <h2>知识库</h2>
         </div>
-        {loadFailed ? (
-          <button type="button" onClick={retryLoad}>
-            重试知识库
-          </button>
-        ) : null}
       </header>
 
-      {isLoading ? <p role="status">正在加载知识库…</p> : null}
-      {loadFailed ? <p>知识库暂时无法加载。</p> : null}
-
-      {!isLoading && !loadFailed ? (
-        <>
-          <nav aria-label="知识库列表" className={styles.knowledgeBaseList}>
-            {knowledgeBases.length === 0 ? <span>当前空间还没有知识库。</span> : null}
-            {knowledgeBases.map((knowledgeBase) => (
-              <button
-                aria-pressed={knowledgeBase.id === selectedKnowledgeBaseId}
-                key={knowledgeBase.id}
-                onClick={() => selectKnowledgeBase(knowledgeBase.id)}
-                type="button"
-              >
-                {knowledgeBase.name}
-              </button>
-            ))}
-          </nav>
-
-          <form className={styles.inlineForm} onSubmit={createKnowledgeBase}>
-            <label>
-              知识库名称
-              <input
-                aria-label="知识库名称"
-                maxLength={MAX_KNOWLEDGE_BASE_NAME_CHARACTERS}
-                onChange={(event) => setNewKnowledgeBaseName(event.target.value)}
-                value={newKnowledgeBaseName}
-              />
-            </label>
-            <button disabled={isCreating} type="submit">
-              {isCreating ? "创建中…" : "创建知识库"}
-            </button>
-          </form>
-          {createMessage ? <p role="alert">{createMessage}</p> : null}
-
+      <>
           <div aria-label="知识库内容层级" className={styles.knowledgeHierarchy}>
             <strong>知识库</strong>
             <span>当前知识库：{selectedKnowledgeBase?.name ?? "请选择知识库"}</span>
@@ -622,8 +472,7 @@ function KnowledgePanelForSpace({ spaceId, spaceName }: KnowledgePanelProps) {
               ) : null}
             </section>
           ) : null}
-        </>
-      ) : null}
+      </>
     </section>
   );
 }

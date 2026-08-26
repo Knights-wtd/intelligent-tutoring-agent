@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +18,14 @@ vi.mock("@/lib/knowledge-api", async (importOriginal) => {
 });
 vi.mock("@/lib/question-bank-api", () => ({ questionBankApi: mockQuestionBankApi }));
 
+const knowledgeBase = {
+  id: "kb-math",
+  space_id: "space-math",
+  name: "七年级数学",
+  state: "active",
+  created_at: "2026-08-21T00:00:00Z",
+  updated_at: "2026-08-21T00:00:00Z",
+};
 const assessment = {
   question_version_id: "version-1",
   created_at: "2026-08-21T00:00:00Z",
@@ -67,10 +75,22 @@ beforeEach(() => {
 });
 
 describe("QuestionBankPanel", () => {
+  it("uses the shell-controlled knowledge base and initial question", async () => {
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} initialQuestionVersionId="version-1" />);
+
+    expect(mockKnowledgeApi.list).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mockQuestionBankApi.listQuestions).toHaveBeenCalledWith(
+        "kb-math",
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(await screen.findByText("请写出勾股定理。")).toBeInTheDocument();
+  });
   it("lets a learner answer, see safe feedback, review items, and own history", async () => {
     const user = userEvent.setup();
     mockQuestionBankApi.submitAttempt.mockResolvedValue(assessment);
-    render(<QuestionBankPanel spaceId="space-math" spaceName="七年级数学空间" />);
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} />);
 
     expect(await screen.findByText("请写出勾股定理。")).toBeInTheDocument();
     await user.type(screen.getByLabelText("你的答案"), "直角三角形两直角边平方和等于斜边平方");
@@ -131,7 +151,7 @@ describe("QuestionBankPanel", () => {
         });
       },
     );
-    render(<QuestionBankPanel spaceId="space-math" spaceName="七年级数学空间" />);
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} />);
 
     expect(await screen.findByText("第一题")).toBeInTheDocument();
     await user.type(screen.getByLabelText("你的答案"), "第一题答案");
@@ -163,7 +183,7 @@ describe("QuestionBankPanel", () => {
       .mockResolvedValueOnce({ items: [], next_cursor: null })
       .mockRejectedValueOnce(new Error("review refresh failed"))
       .mockResolvedValueOnce({ items: [], next_cursor: null });
-    render(<QuestionBankPanel spaceId="space-math" spaceName="七年级数学空间" />);
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} />);
 
     expect(await screen.findByText("请写出勾股定理。")).toBeInTheDocument();
     const answerInput = screen.getByLabelText("你的答案");
@@ -190,7 +210,7 @@ describe("QuestionBankPanel", () => {
       .mockRejectedValueOnce(new Error("temporary network failure"))
       .mockRejectedValueOnce(new Error("temporary network failure"))
       .mockRejectedValueOnce(new Error("temporary network failure"));
-    render(<QuestionBankPanel spaceId="space-math" spaceName="七年级数学空间" />);
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} />);
 
     expect(await screen.findByText("请写出勾股定理。")).toBeInTheDocument();
     const answerInput = screen.getByLabelText("你的答案");

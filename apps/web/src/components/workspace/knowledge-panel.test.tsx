@@ -45,15 +45,16 @@ const uploadResponse = (overrides: Record<string, string> = {}) => ({
 
 beforeEach(() => {
   for (const mock of Object.values(mockKnowledgeApi)) mock.mockReset();
-  mockKnowledgeApi.list.mockResolvedValue([knowledgeBase]);
 });
 
 describe("KnowledgePanel", () => {
-  it("loads space-scoped knowledge bases and displays the learner hierarchy", async () => {
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
+  it("uses the shell-controlled knowledge base and displays the learner hierarchy", () => {
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
-    expect(await screen.findByRole("button", { name: "七年级数学" })).toBeInTheDocument();
-    expect(mockKnowledgeApi.list).toHaveBeenCalledWith("space-math", expect.any(AbortSignal));
+    expect(mockKnowledgeApi.list).not.toHaveBeenCalled();
+    expect(mockKnowledgeApi.create).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("知识库面板")).toHaveTextContent("七年级数学空间");
+    expect(screen.queryByLabelText("知识库名称")).not.toBeInTheDocument();
 
     const hierarchy = screen.getByLabelText("知识库内容层级");
     expect(within(hierarchy).getByText("知识库")).toBeInTheDocument();
@@ -63,24 +64,6 @@ describe("KnowledgePanel", () => {
     expect(hierarchy).toHaveTextContent("尚未上传文件");
     expect(hierarchy).not.toHaveTextContent(/OCR|embedding|worker|job/i);
   });
-
-  it("creates a knowledge base with a bounded learner-facing name", async () => {
-    const user = userEvent.setup();
-    mockKnowledgeApi.create.mockResolvedValue({ ...knowledgeBase, id: "kb-new", name: "几何练习" });
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
-
-    await user.type(screen.getByLabelText("知识库名称"), "  几何练习  ");
-    await user.click(screen.getByRole("button", { name: "创建知识库" }));
-
-    expect(mockKnowledgeApi.create).toHaveBeenCalledWith(
-      "space-math",
-      "几何练习",
-      expect.any(AbortSignal),
-    );
-    expect(await screen.findByRole("button", { name: "几何练习" })).toBeInTheDocument();
-  });
-
   it("shows truthful bounded upload state, then a ready file state", async () => {
     const user = userEvent.setup();
     let resolveUpload: (value: ReturnType<typeof uploadResponse>) => void = () => undefined;
@@ -89,8 +72,7 @@ describe("KnowledgePanel", () => {
         resolveUpload = resolve;
       }),
     );
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     const file = new File(["# chapter"], "chapter.md", { type: "text/markdown" });
     await user.upload(screen.getByLabelText("选择学习资料"), file);
@@ -118,8 +100,7 @@ describe("KnowledgePanel", () => {
     mockKnowledgeApi.upload.mockResolvedValue(
       uploadResponse({ document_state: "ACTIVE", version_state: "UPLOADED", job_state: "QUEUED" }),
     );
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     await user.upload(
       screen.getByLabelText("选择学习资料"),
@@ -137,8 +118,7 @@ describe("KnowledgePanel", () => {
     mockKnowledgeApi.upload
       .mockRejectedValueOnce(new Error("provider credentials at s3://secret"))
       .mockResolvedValueOnce(uploadResponse());
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     await user.upload(
       screen.getByLabelText("选择学习资料"),
@@ -158,8 +138,7 @@ describe("KnowledgePanel", () => {
   it("allows only one active logical upload", async () => {
     const user = userEvent.setup();
     mockKnowledgeApi.upload.mockReturnValue(new Promise(() => undefined));
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     await user.upload(
       screen.getByLabelText("选择学习资料"),
@@ -181,8 +160,7 @@ describe("KnowledgePanel", () => {
         resolveUpload = resolve;
       }),
     );
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     const firstFile = new File(["first"], "first.md", { type: "text/markdown" });
     const secondFile = new File(["second"], "second.md", { type: "text/markdown" });
@@ -221,8 +199,7 @@ describe("KnowledgePanel", () => {
       blob: new Blob(["教材第 42 页内容"], { type: "text/plain" }),
       contentType: "text/plain; charset=utf-8",
     });
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     await user.type(screen.getByLabelText("搜索知识库"), " 勾股定理 ");
     await user.click(screen.getByRole("button", { name: "搜索" }));
@@ -248,42 +225,6 @@ describe("KnowledgePanel", () => {
     expect(screen.queryByText("cite_opaque-token")).not.toBeInTheDocument();
   });
 
-  it("keeps a failed knowledge request retryable", async () => {
-    const user = userEvent.setup();
-    mockKnowledgeApi.list
-      .mockRejectedValueOnce(new Error("not for display"))
-      .mockResolvedValueOnce([knowledgeBase]);
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-
-    expect(await screen.findByText("知识库暂时无法加载。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "重试知识库" }));
-
-    expect(await screen.findByRole("button", { name: "七年级数学" })).toBeInTheDocument();
-    expect(mockKnowledgeApi.list).toHaveBeenCalledTimes(2);
-  });
-
-  it("aborts an in-flight create request when the panel unmounts", async () => {
-    const user = userEvent.setup();
-    let createSignal: AbortSignal | undefined;
-    mockKnowledgeApi.create.mockImplementation(
-      (_spaceId: string, _name: string, signal: AbortSignal) => {
-        createSignal = signal;
-        return new Promise(() => undefined);
-      },
-    );
-    const { unmount } = render(
-      <KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />,
-    );
-    await screen.findByRole("button", { name: "七年级数学" });
-
-    await user.type(screen.getByLabelText("知识库名称"), "几何练习");
-    await user.click(screen.getByRole("button", { name: "创建知识库" }));
-    expect(createSignal).toBeDefined();
-
-    unmount();
-    expect(createSignal?.aborted).toBe(true);
-  });
-
   it("aborts selected knowledge-base requests when switching knowledge bases", async () => {
     const user = userEvent.setup();
     const otherKnowledgeBase = {
@@ -294,7 +235,6 @@ describe("KnowledgePanel", () => {
     let uploadSignal: AbortSignal | undefined;
     let previewSignal: AbortSignal | undefined;
     let searchSignal: AbortSignal | undefined;
-    mockKnowledgeApi.list.mockResolvedValue([knowledgeBase, otherKnowledgeBase]);
     mockKnowledgeApi.upload.mockImplementation(
       (_knowledgeBaseId: string, _file: File, _idempotencyKey: string, signal: AbortSignal) => {
         uploadSignal = signal;
@@ -326,8 +266,9 @@ describe("KnowledgePanel", () => {
         return new Promise(() => undefined);
       },
     );
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    const { rerender } = render(
+      <KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />,
+    );
 
     await user.upload(
       screen.getByLabelText("选择学习资料"),
@@ -351,34 +292,10 @@ describe("KnowledgePanel", () => {
     expect(previewSignal?.aborted).toBe(true);
     expect(searchSignal).toBeDefined();
 
-    await user.click(screen.getByRole("button", { name: "科学资料" }));
+    rerender(<KnowledgePanel spaceName="科学空间" knowledgeBase={otherKnowledgeBase} />);
     expect(uploadSignal?.aborted).toBe(true);
     expect(searchSignal?.aborted).toBe(true);
     expect(screen.queryByText("上传失败，请重试。")).not.toBeInTheDocument();
-  });
-
-  it("ignores a stale response after the active space changes", async () => {
-    let resolveOld: (value: Array<typeof knowledgeBase>) => void = () => undefined;
-    mockKnowledgeApi.list
-      .mockReturnValueOnce(
-        new Promise((resolve) => {
-          resolveOld = resolve;
-        }),
-      )
-      .mockResolvedValueOnce([{ ...knowledgeBase, id: "kb-science", name: "科学资料", space_id: "space-science" }]);
-    const { rerender } = render(
-      <KnowledgePanel spaceId="space-math" spaceName="数学空间" />,
-    );
-
-    rerender(<KnowledgePanel spaceId="space-science" spaceName="科学空间" />);
-    expect(await screen.findByRole("button", { name: "科学资料" })).toBeInTheDocument();
-
-    await act(async () => {
-      resolveOld([knowledgeBase]);
-    });
-
-    expect(screen.queryByRole("button", { name: "七年级数学" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "科学资料" })).toBeInTheDocument();
   });
 
   it("shows a learner-facing failed state returned by the upload endpoint", async () => {
@@ -386,8 +303,7 @@ describe("KnowledgePanel", () => {
     mockKnowledgeApi.upload.mockResolvedValue(
       uploadResponse({ document_state: "FAILED", version_state: "FAILED", job_state: "FAILED" }),
     );
-    render(<KnowledgePanel spaceId="space-math" spaceName="七年级数学空间" />);
-    await screen.findByRole("button", { name: "七年级数学" });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     await user.upload(
       screen.getByLabelText("选择学习资料"),

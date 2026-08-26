@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 
-import { knowledgeApi, type KnowledgeBase } from "@/lib/knowledge-api";
+import type { KnowledgeBase } from "@/lib/knowledge-api";
 import {
   questionBankApi,
   type AttemptAssessment,
@@ -14,17 +14,19 @@ import {
 import styles from "./workspace-shell.module.css";
 
 type QuestionBankPanelProps = {
-  spaceId: string;
-  spaceName: string;
+  knowledgeBase: KnowledgeBase;
+  initialQuestionVersionId?: string;
 };
 
 export function QuestionBankPanel(props: QuestionBankPanelProps) {
-  return <QuestionBankPanelForSpace key={props.spaceId} {...props} />;
+  return <QuestionBankPanelForKnowledgeBase key={props.knowledgeBase.id} {...props} />;
 }
 
-function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProps) {
-  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
-  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState("");
+function QuestionBankPanelForKnowledgeBase({
+  knowledgeBase,
+  initialQuestionVersionId,
+}: QuestionBankPanelProps) {
+  const knowledgeBaseId = knowledgeBase.id;
   const [questions, setQuestions] = useState<LearnerQuestion[]>([]);
   const [selectedQuestionVersionId, setSelectedQuestionVersionId] = useState("");
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
@@ -57,75 +59,43 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
   }
 
   useEffect(() => {
-    const controller = new AbortController();
-    let current = true;
-    void Promise.resolve().then(() => {
-      if (!current || controller.signal.aborted) return;
-      setIsLoading(true);
-      setMessage("");
-    });
-    void knowledgeApi
-      .list(spaceId, controller.signal)
-      .then((items) => {
-        if (!current || controller.signal.aborted) return;
-        setKnowledgeBases(items);
-        setSelectedKnowledgeBaseId(items[0]?.id ?? "");
-      })
-      .catch(() => {
-        if (!current || controller.signal.aborted) return;
-        setMessage("题库暂时无法加载，请重试。");
-      })
-      .finally(() => {
-        if (current && !controller.signal.aborted) setIsLoading(false);
-      });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [spaceId]);
-
-  useEffect(() => {
     abortQuestionRequests();
     attemptKeyRef.current = null;
     const sequence = sequenceRef.current;
-    if (!selectedKnowledgeBaseId) {
-      let current = true;
-      void Promise.resolve().then(() => {
-        if (!current || sequence !== sequenceRef.current) return;
-        setQuestions([]);
-        setSelectedQuestionVersionId("");
-        setReviewItems([]);
-      });
-      return () => {
-        current = false;
-      };
-    }
     const controller = new AbortController();
     void Promise.resolve().then(() => {
       if (controller.signal.aborted || sequence !== sequenceRef.current) return;
+      setIsLoading(true);
       setQuestions([]);
-      setSelectedQuestionVersionId("");
+      setSelectedQuestionVersionId(initialQuestionVersionId ?? "");
       setReviewItems([]);
       setAssessment(null);
       setHistory(null);
       setMessage("");
     });
     void Promise.all([
-      questionBankApi.listQuestions(selectedKnowledgeBaseId, controller.signal),
-      questionBankApi.listReviewItems(selectedKnowledgeBaseId, controller.signal),
+      questionBankApi.listQuestions(knowledgeBaseId, controller.signal),
+      questionBankApi.listReviewItems(knowledgeBaseId, controller.signal),
     ])
       .then(([loadedQuestions, loadedReviewItems]) => {
         if (controller.signal.aborted || sequence !== sequenceRef.current) return;
         setQuestions(loadedQuestions);
-        setSelectedQuestionVersionId(loadedQuestions[0]?.question_version_id ?? "");
+        setSelectedQuestionVersionId(
+          loadedQuestions.some((question) => question.question_version_id === initialQuestionVersionId)
+            ? (initialQuestionVersionId ?? "")
+            : (loadedQuestions[0]?.question_version_id ?? ""),
+        );
         setReviewItems(loadedReviewItems.items);
       })
       .catch(() => {
         if (controller.signal.aborted || sequence !== sequenceRef.current) return;
         setMessage("题库暂时无法加载，请重试。");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && sequence === sequenceRef.current) setIsLoading(false);
       });
     return () => controller.abort();
-  }, [selectedKnowledgeBaseId]);
+  }, [initialQuestionVersionId, knowledgeBaseId]);
 
   useEffect(() => {
     return () => {
@@ -139,14 +109,6 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
   const selectedQuestion = questions.find(
     (question) => question.question_version_id === selectedQuestionVersionId,
   );
-
-  function selectKnowledgeBase(knowledgeBaseId: string) {
-    if (knowledgeBaseId === selectedKnowledgeBaseId) return;
-    cancelQuestionRequests();
-    attemptKeyRef.current = null;
-    setAnswer("");
-    setSelectedKnowledgeBaseId(knowledgeBaseId);
-  }
 
   function selectQuestion(questionVersionId: string) {
     if (questionVersionId === selectedQuestionVersionId) return;
@@ -166,7 +128,7 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
   async function submitAnswer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const normalizedAnswer = answer.trim();
-    if (!selectedKnowledgeBaseId || !selectedQuestion || !normalizedAnswer) {
+    if (!selectedQuestion || !normalizedAnswer) {
       setMessage("请先选择题目并填写答案。");
       return;
     }
@@ -178,13 +140,13 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
     const existingAttemptKey = attemptKeyRef.current;
     const idempotencyKey =
       existingAttemptKey !== null &&
-      existingAttemptKey.knowledgeBaseId === selectedKnowledgeBaseId &&
+      existingAttemptKey.knowledgeBaseId === knowledgeBaseId &&
       existingAttemptKey.questionVersionId === questionVersionId &&
       existingAttemptKey.answer === normalizedAnswer
         ? existingAttemptKey.value
         : newAttemptKey();
     attemptKeyRef.current = {
-      knowledgeBaseId: selectedKnowledgeBaseId,
+      knowledgeBaseId: knowledgeBaseId,
       questionVersionId,
       answer: normalizedAnswer,
       value: idempotencyKey,
@@ -194,7 +156,7 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
     let attemptSubmitted = false;
     try {
       const result = await questionBankApi.submitAttempt(
-        selectedKnowledgeBaseId,
+        knowledgeBaseId,
         questionVersionId,
         normalizedAnswer,
         idempotencyKey,
@@ -204,7 +166,7 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
       attemptSubmitted = true;
       setAssessment(result);
       const loadedReviewItems = await questionBankApi.listReviewItems(
-        selectedKnowledgeBaseId,
+        knowledgeBaseId,
         controller.signal,
       );
       if (controller.signal.aborted || sequence !== sequenceRef.current) return;
@@ -228,7 +190,7 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
   }
 
   async function loadHistory() {
-    if (!selectedKnowledgeBaseId || !selectedQuestion) return;
+    if (!selectedQuestion) return;
     historyControllerRef.current?.abort();
     const controller = new AbortController();
     historyControllerRef.current = controller;
@@ -238,7 +200,7 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
     setMessage("");
     try {
       const result = await questionBankApi.listAttemptHistory(
-        selectedKnowledgeBaseId,
+        knowledgeBaseId,
         questionVersionId,
         controller.signal,
       );
@@ -260,27 +222,13 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
     <section aria-label="题库练习面板" className={styles.questionBankPanel}>
       <header className={styles.knowledgeHeader}>
         <div>
-          <span className={styles.eyebrow}>{spaceName}</span>
+          <span className={styles.eyebrow}>{knowledgeBase.name}</span>
           <h2>题库练习</h2>
         </div>
       </header>
       {isLoading ? <p role="status">正在加载题库…</p> : null}
       {!isLoading ? (
         <>
-          <nav aria-label="题库知识库列表" className={styles.knowledgeBaseList}>
-            {knowledgeBases.length === 0 ? <span>当前空间还没有题库资料。</span> : null}
-            {knowledgeBases.map((knowledgeBase) => (
-              <button
-                aria-pressed={knowledgeBase.id === selectedKnowledgeBaseId}
-                key={knowledgeBase.id}
-                onClick={() => selectKnowledgeBase(knowledgeBase.id)}
-                type="button"
-              >
-                {knowledgeBase.name}
-              </button>
-            ))}
-          </nav>
-
           {questions.length > 0 ? (
             <div className={styles.questionList} aria-label="题目列表">
               {questions.map((question, index) => (
@@ -294,9 +242,9 @@ function QuestionBankPanelForSpace({ spaceId, spaceName }: QuestionBankPanelProp
                 </button>
               ))}
             </div>
-          ) : selectedKnowledgeBaseId ? (
+          ) : (
             <p>当前知识库还没有可练习题目。</p>
-          ) : null}
+          )}
 
           {selectedQuestion ? (
             <article className={styles.questionCard}>
