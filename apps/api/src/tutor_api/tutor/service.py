@@ -8,11 +8,11 @@ from sqlalchemy.orm import Session
 from tutor_api.identity.models import User
 from tutor_api.knowledge.access import get_readable_knowledge_base
 from tutor_api.knowledge.indexing import EmbeddingAdapter
-from tutor_api.knowledge.retrieval import SearchHit, search_knowledge
+from tutor_api.knowledge.retrieval import MAX_QUERY_CHARACTERS, SearchHit, search_knowledge
 from tutor_api.llm.ports import LlmProviderError, TutorChatAdapter, TutorChatMessage
 from tutor_api.tutor.models import TutorConversation, TutorMessage, TutorMessageRole
 
-MAX_TUTOR_PROMPT_CHARACTERS = 4_000
+MAX_TUTOR_PROMPT_CHARACTERS = MAX_QUERY_CHARACTERS
 MAX_TUTOR_HISTORY_MESSAGES = 10
 MAX_TUTOR_SOURCES = 5
 
@@ -194,6 +194,15 @@ def send_tutor_message(
             completion_tokens=completion.usage.completion_tokens,
             created_at=assistant_created_at,
         )
+        if conversation_id is not None:
+            previous_updated_at = (
+                conversation.updated_at.replace(tzinfo=UTC)
+                if conversation.updated_at.tzinfo is None
+                else conversation.updated_at.astimezone(UTC)
+            )
+            conversation.updated_at = max(
+                previous_updated_at + timedelta(microseconds=1), assistant_created_at
+            )
         session.add_all((user_message, assistant_message))
         session.flush()
 

@@ -43,7 +43,6 @@ from tutor_api.tutor.models import TutorConversation, TutorMessage, TutorMessage
 from tutor_api.tutor.schemas import TutorSendRequest
 from tutor_api.tutor.service import (
     MAX_TUTOR_HISTORY_MESSAGES,
-    MAX_TUTOR_PROMPT_CHARACTERS,
     MAX_TUTOR_SOURCES,
     TutorServiceError,
     send_tutor_message,
@@ -347,6 +346,45 @@ def test_next_send_reads_previous_user_before_assistant(
     ]
     assert second_adapter.messages[-1].role == "user"
     assert "second question" in second_adapter.messages[-1].content
+
+
+def test_appending_message_advances_conversation_updated_at(session: Session) -> None:
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+    first = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="first question",
+        conversation_id=None,
+        adapter=RecordingTutorAdapter("first answer"),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+    session.commit()
+    session.refresh(first.conversation)
+    original_updated_at = first.conversation.updated_at
+
+    second = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="second question",
+        conversation_id=first.conversation.id,
+        adapter=RecordingTutorAdapter("second answer"),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+    session.flush()
+    session.refresh(first.conversation)
+    session.refresh(second.messages[-1])
+
+    def as_utc(value: datetime) -> datetime:
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    assert as_utc(first.conversation.updated_at) > as_utc(original_updated_at)
+    assert as_utc(first.conversation.updated_at) >= as_utc(second.messages[-1].created_at)
+
+
 def test_history_is_bounded_and_ordered_before_current_grounded_prompt(session: Session) -> None:
     owner, knowledge_base = seed_searchable_knowledge_base(session)
     conversation = TutorConversation(
@@ -396,8 +434,7 @@ def test_history_is_bounded_and_ordered_before_current_grounded_prompt(session: 
     assert len(adapter.messages) == MAX_TUTOR_HISTORY_MESSAGES + 1
 
 
-@pytest.mark.parametrize("prompt", ["   ", "x" * (MAX_TUTOR_PROMPT_CHARACTERS + 1)])
-def test_prompt_is_nonempty_and_bounded(session: Session, prompt: str) -> None:
+def test_prompt_is_nonempty(session: Session) -> None:
     owner, knowledge_base = seed_searchable_knowledge_base(session)
 
     with pytest.raises(TutorServiceError) as error:
@@ -405,7 +442,42 @@ def test_prompt_is_nonempty_and_bounded(session: Session, prompt: str) -> None:
             session,
             owner,
             knowledge_base.id,
-            prompt=prompt,
+            prompt="   ",
+            conversation_id=None,
+            adapter=RecordingTutorAdapter("never"),
+            embedding_adapter=FixedEmbeddingAdapter(),
+            citation_secret="test-secret",
+        )
+
+    assert error.value.code == "tutor_prompt_invalid"
+
+
+def test_prompt_at_retrieval_limit_is_accepted(session: Session) -> None:
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+
+    result = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="x" * 500,
+        conversation_id=None,
+        adapter=RecordingTutorAdapter("answer"),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+
+    assert result.messages[0].content == "x" * 500
+
+
+def test_prompt_above_retrieval_limit_is_rejected(session: Session) -> None:
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+
+    with pytest.raises(TutorServiceError) as error:
+        send_tutor_message(
+            session,
+            owner,
+            knowledge_base.id,
+            prompt="x" * 501,
             conversation_id=None,
             adapter=RecordingTutorAdapter("never"),
             embedding_adapter=FixedEmbeddingAdapter(),
