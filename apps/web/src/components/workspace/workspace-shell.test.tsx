@@ -1,13 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { WorkspaceShell } from "./workspace-shell";
+import type { KnowledgeBase } from "@/lib/knowledge-api";
 
-const mockApi = vi.hoisted(() => ({
-  models: vi.fn(),
-  billingMe: vi.fn(),
-}));
+import { WorkspaceShell } from "./workspace-shell";
 
 const mockKnowledgeApi = vi.hoisted(() => ({
   list: vi.fn(),
@@ -15,21 +12,63 @@ const mockKnowledgeApi = vi.hoisted(() => ({
   upload: vi.fn(),
   search: vi.fn(),
   pagePreview: vi.fn(),
+  documentStatus: vi.fn(),
+  graph: vi.fn(),
+}));
+const mockQuestionBankApi = vi.hoisted(() => ({
+  listQuestions: vi.fn(),
+  submitAttempt: vi.fn(),
+  listReviewItems: vi.fn(),
+  listAttemptHistory: vi.fn(),
+}));
+const mockClassroomApi = vi.hoisted(() => ({
+  create: vi.fn(),
+  join: vi.fn(),
+}));
+const mockTutorApi = vi.hoisted(() => ({
+  status: vi.fn(),
+  createConversation: vi.fn(),
+  getConversation: vi.fn(),
+  sendMessage: vi.fn(),
 }));
 
-vi.mock("@/lib/api", () => ({ api: mockApi }));
 vi.mock("@/lib/knowledge-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/knowledge-api")>();
   return { ...actual, knowledgeApi: mockKnowledgeApi };
 });
+vi.mock("@/lib/question-bank-api", () => ({ questionBankApi: mockQuestionBankApi }));
+vi.mock("@/lib/classrooms-api", () => ({ classroomApi: mockClassroomApi }));
+vi.mock("@/lib/tutor-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/tutor-api")>();
+  return { ...actual, tutorApi: mockTutorApi };
+});
+
+const personalSpace = { id: "personal", kind: "personal" as const, name: "我的空间" };
+const wireless: KnowledgeBase = {
+  id: "kb-wireless",
+  space_id: "personal",
+  name: "无线通信",
+  state: "ready",
+  created_at: "2026-08-01T00:00:00Z",
+  updated_at: "2026-08-01T00:00:00Z",
+};
+const digital: KnowledgeBase = {
+  ...wireless,
+  id: "kb-digital",
+  name: "数字通信",
+};
 
 beforeEach(() => {
-  mockApi.models.mockReset();
-  mockApi.billingMe.mockReset();
-  mockApi.models.mockResolvedValue([]);
-  mockApi.billingMe.mockResolvedValue({ balance: "0", currency: "CNY", entries: [] });
+  localStorage.clear();
   for (const mock of Object.values(mockKnowledgeApi)) mock.mockReset();
-  mockKnowledgeApi.list.mockResolvedValue([]);
+  for (const mock of Object.values(mockQuestionBankApi)) mock.mockReset();
+  for (const mock of Object.values(mockClassroomApi)) mock.mockReset();
+  for (const mock of Object.values(mockTutorApi)) mock.mockReset();
+  mockKnowledgeApi.list.mockResolvedValue([wireless, digital]);
+  mockKnowledgeApi.graph.mockResolvedValue({ nodes: [], edges: [] });
+  mockQuestionBankApi.listQuestions.mockResolvedValue([]);
+  mockQuestionBankApi.listReviewItems.mockResolvedValue({ items: [], next_cursor: null });
+  mockTutorApi.status.mockResolvedValue({ configured: false, model: "" });
 });
 
 afterEach(() => {
@@ -37,212 +76,95 @@ afterEach(() => {
 });
 
 describe("WorkspaceShell", () => {
-  it("shows enabled models and simple balance without internal provider data", async () => {
-    mockApi.models.mockResolvedValue([
-      {
-        id: "example-chat",
-        display_name: "学习助手",
-        provider: "example",
-        price_summary: "按量计费",
-      },
-    ]);
-    mockApi.billingMe.mockResolvedValue({ balance: "1.00500000", currency: "CNY", entries: [] });
+  it("renders knowledge bases at far left and the tutor at right", async () => {
+    render(<WorkspaceShell spaces={[personalSpace]} />);
 
-    render(<WorkspaceShell />);
-
-    expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
-    expect(screen.getByText("余额 ¥1.01")).toBeInTheDocument();
-    expect(screen.queryByText(/API Key|Base URL/i)).not.toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "知识库" })).toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveAttribute("data-layout", "library-center-tutor");
+    expect(screen.getByLabelText("AI 家教")).toBeInTheDocument();
+    expect(screen.queryByText("服务正常")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("MVP 功能说明")).not.toBeInTheDocument();
   });
 
-  it("keeps the balance visible and retries only the model catalog when it is unavailable", async () => {
+  it("opens and reuses the requested graph tab without changing library selection", async () => {
     const user = userEvent.setup();
-    mockApi.models
-      .mockRejectedValueOnce(new Error("not for display"))
-      .mockResolvedValueOnce([
-        {
-          id: "example-chat",
-          display_name: "学习助手",
-          provider: "example",
-          price_summary: "按量计费",
-        },
-      ]);
-    mockApi.billingMe
-      .mockResolvedValueOnce({ balance: "0", currency: "CNY", entries: [] })
-      .mockResolvedValueOnce({ balance: "20.00", currency: "CNY", entries: [] });
+    render(<WorkspaceShell spaces={[personalSpace]} />);
 
-    render(<WorkspaceShell />);
+    await user.click(await screen.findByRole("button", { name: "打开数字通信关联图" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("模型暂时无法加载。");
-    expect(screen.getByText("余额 ¥0.00")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "重试模型" }));
-
-    expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
-    expect(screen.getByText("余额 ¥0.00")).toBeInTheDocument();
-    expect(screen.queryByText("not for display")).not.toBeInTheDocument();
-  });
-
-  it("keeps the model choice visible and retries only the balance when it is unavailable", async () => {
-    const user = userEvent.setup();
-    mockApi.models.mockResolvedValueOnce([
-      {
-        id: "example-chat",
-        display_name: "学习助手",
-        provider: "example",
-        price_summary: "按量计费",
-      },
-    ]);
-    mockApi.billingMe
-      .mockRejectedValueOnce(new Error("not for display"))
-      .mockResolvedValueOnce({ balance: "20.00", currency: "CNY", entries: [] });
-
-    render(<WorkspaceShell />);
-
-    expect(await screen.findByRole("option", { name: "学习助手" })).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("余额暂时无法加载。");
-    await user.click(screen.getByRole("button", { name: "重试余额" }));
-
-    expect(await screen.findByText("余额 ¥20.00")).toBeInTheDocument();
-    expect(screen.queryByText("not for display")).not.toBeInTheDocument();
-  });
-
-  it("renders authenticated personal and classroom spaces in the left rail", () => {
-    render(
-      <WorkspaceShell
-        spaces={[
-          { id: "personal", kind: "personal", name: "我的空间" },
-          { id: "math", kind: "classroom", name: "七年级数学" },
-        ]}
-      />,
-    );
-
-    expect(screen.getByLabelText("个人空间")).toBeInTheDocument();
-    expect(screen.getByLabelText("七年级数学")).toBeInTheDocument();
-    expect(screen.getAllByRole("separator")).toHaveLength(2);
-  });
-
-  it("updates the content pane heading when a space is selected", async () => {
-    const user = userEvent.setup();
-    render(
-      <WorkspaceShell
-        spaces={[
-          { id: "personal", kind: "personal", name: "我的空间" },
-          { id: "math", kind: "classroom", name: "七年级数学" },
-        ]}
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "个人空间" }));
-
-    expect(screen.getByLabelText("当前空间内容")).toHaveTextContent("我的空间");
-  });
-
-  it("keeps spaces in the far-left rail and content in the second pane", () => {
-    render(<WorkspaceShell />);
-
-    const rail = screen.getByLabelText("空间切换");
-    const tree = screen.getByLabelText("当前空间内容");
-    expect(rail).toHaveTextContent("个人空间");
-    expect(rail).toHaveTextContent("七年级数学");
-    expect(tree).toHaveTextContent("教材与练习");
-    expect(tree).toHaveTextContent("知识图谱");
-    expect(tree).not.toHaveTextContent("个人空间");
-  });
-
-  it("uses ordinary pressed buttons for placeholder content views", () => {
-    render(<WorkspaceShell />);
-
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
-    expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "知识图谱" })).toHaveAttribute(
-      "aria-pressed",
+    expect(screen.getByRole("tab", { name: "关联图 · 数字通信" })).toHaveAttribute(
+      "aria-selected",
       "true",
     );
-    expect(screen.getByRole("button", { name: "教材原页" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
+    expect(screen.getByRole("button", { name: "选择无线通信" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
+    expect(screen.getByLabelText("AI 家教")).toHaveTextContent("关联图：数字通信");
+
+    await user.click(screen.getByRole("button", { name: "打开数字通信关联图" }));
+    expect(screen.getAllByRole("tab", { name: "关联图 · 数字通信" })).toHaveLength(1);
   });
 
-  it("changes the selected workspace view and its center content", async () => {
+  it("switches central tabs while keeping the selected knowledge base controlled by the shell", async () => {
     const user = userEvent.setup();
-    render(<WorkspaceShell />);
+    render(<WorkspaceShell spaces={[personalSpace]} />);
 
-    const graphButton = screen.getByRole("button", { name: "知识图谱" });
-    const sourceButton = screen.getByRole("button", { name: "教材原页" });
-    await user.click(sourceButton);
+    await screen.findByRole("button", { name: "选择无线通信" });
+    await user.click(screen.getByRole("tab", { name: "知识库" }));
+    expect(await screen.findByLabelText("知识库面板")).toHaveTextContent("无线通信");
 
-    expect(sourceButton).toHaveAttribute("aria-pressed", "true");
-    expect(graphButton).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: "选择数字通信" }));
+    expect(screen.getByLabelText("知识库面板")).toHaveTextContent("数字通信");
 
-    const workspace = screen.getByLabelText("知识工作区");
-    expect(within(workspace).getByRole("heading", { name: "教材原页" })).toBeInTheDocument();
-    expect(workspace).toHaveTextContent("查看教材原始页面及其版面内容。");
+    await user.click(screen.getByRole("tab", { name: "题库练习" }));
+    expect(await screen.findByLabelText("题库练习面板")).toBeInTheDocument();
   });
 
-  it("renders three keyboard-resizable content panes", async () => {
+  it("renders three keyboard-resizable desktop panes", async () => {
     const user = userEvent.setup();
     vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(400);
-    render(<WorkspaceShell />);
-    expect(screen.getByLabelText("当前空间内容")).toBeInTheDocument();
-    expect(screen.getByLabelText("知识工作区")).toBeInTheDocument();
-    expect(screen.getByLabelText("AI 家教")).toBeInTheDocument();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+    await screen.findByRole("navigation", { name: "知识库" });
 
     const separators = screen.getAllByRole("separator");
     expect(separators).toHaveLength(2);
-
     const firstSeparator = separators[0];
     expect(firstSeparator).toHaveAttribute("tabindex", "0");
-    expect(firstSeparator).toHaveAttribute("aria-valuemin");
-    expect(firstSeparator).toHaveAttribute("aria-valuemax");
-    expect(firstSeparator).toHaveAttribute("aria-valuenow");
-
     const initialValue = Number(firstSeparator.getAttribute("aria-valuenow"));
     firstSeparator.focus();
     await user.keyboard("{ArrowRight}");
-
     expect(Number(firstSeparator.getAttribute("aria-valuenow"))).toBeGreaterThan(initialValue);
   });
 
-  it("keeps model and balance data available when knowledge loading fails", async () => {
-    const user = userEvent.setup();
-    mockApi.models.mockResolvedValue([
-      {
-        id: "study-model",
-        display_name: "学习模型",
-        provider: "example",
-        price_summary: "按量计费",
-      },
-    ]);
-    mockApi.billingMe.mockResolvedValue({ balance: "8.00", currency: "CNY", entries: [] });
-    mockKnowledgeApi.list.mockRejectedValue(new Error("provider detail"));
+  it("restores the selected knowledge base and active tab for each space", async () => {
+    localStorage.setItem(
+      "workspace:personal",
+      JSON.stringify({ selectedKnowledgeBaseId: "kb-digital", activeTabId: "knowledge" }),
+    );
+    render(<WorkspaceShell spaces={[personalSpace]} />);
 
-    render(<WorkspaceShell />);
-    await user.click(screen.getByRole("button", { name: "知识库" }));
-
-    expect(await screen.findByText("知识库暂时无法加载。")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "学习模型" })).toBeInTheDocument();
-    expect(screen.getByText("余额 ¥8.00")).toBeInTheDocument();
-    expect(screen.getByLabelText("AI 家教")).toBeInTheDocument();
+    await screen.findByRole("button", { name: "选择数字通信" });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "选择数字通信" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      expect(screen.getByRole("tab", { name: "知识库" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+    expect(await screen.findByLabelText("知识库面板")).toHaveTextContent("数字通信");
   });
 
-  it("reloads the knowledge panel for the newly selected space", async () => {
+  it("keeps the real classroom entry in the knowledge sidebar footer", async () => {
     const user = userEvent.setup();
-    mockKnowledgeApi.list.mockResolvedValue([]);
-    render(
-      <WorkspaceShell
-        spaces={[
-          { id: "personal", kind: "personal", name: "我的空间" },
-          { id: "math", kind: "classroom", name: "七年级数学" },
-        ]}
-      />,
-    );
+    render(<WorkspaceShell spaces={[personalSpace]} />);
 
-    await user.click(screen.getByRole("button", { name: "知识库" }));
-    expect(await screen.findByText("当前空间还没有知识库。")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "七年级数学" }));
-
-    expect(mockKnowledgeApi.list).toHaveBeenLastCalledWith("math", expect.any(AbortSignal));
-    expect(screen.getByLabelText("知识库面板")).toHaveTextContent("七年级数学");
+    await user.click(await screen.findByRole("button", { name: "创建或加入班级" }));
+    expect(screen.getByRole("dialog", { name: "创建或加入班级" })).toBeInTheDocument();
+    expect(screen.getByLabelText("班级名称")).toBeInTheDocument();
+    expect(screen.getByLabelText("邀请码")).toBeInTheDocument();
   });
 });
