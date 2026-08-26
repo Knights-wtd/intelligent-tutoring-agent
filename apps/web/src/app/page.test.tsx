@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import HomePage from "./page";
@@ -22,6 +23,7 @@ describe("HomePage", () => {
   });
 
   it("loads authenticated space summaries into the workspace", async () => {
+    const user = userEvent.setup();
     mockApi.me.mockResolvedValue({
       user: { id: "user-1", email: "learner@example.com", username: "learner" },
       personal_space: { id: "personal", kind: "personal", name: "我的空间" },
@@ -35,7 +37,9 @@ describe("HomePage", () => {
 
     render(<HomePage />);
 
-    expect(await screen.findByLabelText("个人空间")).toBeInTheDocument();
-    expect(screen.getByLabelText("七年级数学")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "切换空间" }));
+    expect(screen.getByRole("dialog", { name: "切换空间" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "个人空间" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "七年级数学" })).toBeInTheDocument();
   });
 });

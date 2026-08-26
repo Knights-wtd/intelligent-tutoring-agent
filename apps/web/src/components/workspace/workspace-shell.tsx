@@ -14,6 +14,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { type SpaceSummary } from "@/lib/api";
 import { classroomApi } from "@/lib/classrooms-api";
 import type { KnowledgeBase } from "@/lib/knowledge-api";
+import type { TutorCitation } from "@/lib/tutor-api";
 
 import { KnowledgeGraphPanel } from "./knowledge-graph-panel";
 import { KnowledgeLibrarySidebar } from "./knowledge-library-sidebar";
@@ -49,6 +50,12 @@ type WorkspaceShellProps = {
   onClassroomAdded?: (space: SpaceSummary) => void;
 };
 
+type CitationOpenRequest = {
+  knowledgeBaseId: string;
+  citation: TutorCitation;
+  requestId: number;
+};
+
 export function WorkspaceShell({
   spaces = exampleSpaces,
   onClassroomAdded,
@@ -66,6 +73,8 @@ export function WorkspaceShell({
   const [createdInviteCode, setCreatedInviteCode] = useState<string | null>(null);
   const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
   const [isTutorDrawerOpen, setIsTutorDrawerOpen] = useState(false);
+  const [citationOpenRequest, setCitationOpenRequest] = useState<CitationOpenRequest | null>(null);
+  const citationRequestSequenceRef = useRef(0);
   const libraryDrawerTriggerRef = useRef<HTMLButtonElement>(null);
   const libraryDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const tutorDrawerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -239,7 +248,25 @@ export function WorkspaceShell({
       knowledgeBaseName: knowledgeBase.name,
     });
   };
+  const openTutorCitation = (citation: TutorCitation) => {
+    if (!tutorKnowledgeBase) return;
+    setCitationOpenRequest({
+      knowledgeBaseId: tutorKnowledgeBase.id,
+      citation,
+      requestId: ++citationRequestSequenceRef.current,
+    });
+    if (selectedKnowledgeBaseId !== tutorKnowledgeBase.id) {
+      selectKnowledgeBase(tutorKnowledgeBase.id);
+    }
+    dispatchTabs({ type: "focus", tabId: "knowledge" });
+    if (breakpoint !== "desktop") setIsTutorDrawerOpen(false);
+  };
 
+  const handleCitationRequestHandled = (requestId: number) => {
+    setCitationOpenRequest((current) =>
+      current?.requestId === requestId ? null : current,
+    );
+  };
   const closeLibraryDrawer = () => {
     setIsLibraryDrawerOpen(false);
     libraryDrawerTriggerRef.current?.focus();
@@ -301,6 +328,12 @@ export function WorkspaceShell({
           graphKnowledgeBase: knowledgeBaseForGraphTab,
           selectedKnowledgeBase,
           selectedSpace,
+          citationRequest:
+            citationOpenRequest !== null &&
+            citationOpenRequest.knowledgeBaseId === selectedKnowledgeBase?.id
+              ? citationOpenRequest
+              : undefined,
+          onCitationRequestHandled: handleCitationRequestHandled,
           onOpenKnowledge: () => dispatchTabs({ type: "focus", tabId: "knowledge" }),
           onOpenPractice: (questionVersionId) =>
             dispatchTabs({ type: "open-practice", questionVersionId }),
@@ -314,7 +347,7 @@ export function WorkspaceShell({
         <TutorPanel
           contextLabel={tutorContext}
           knowledgeBase={tutorKnowledgeBase}
-          onOpenCitation={() => dispatchTabs({ type: "focus", tabId: "knowledge" })}
+          onOpenCitation={openTutorCitation}
         />
       ) : (
         <KnowledgeEmptyState
@@ -582,6 +615,8 @@ function renderActivePanel({
   graphKnowledgeBase,
   selectedKnowledgeBase,
   selectedSpace,
+  citationRequest,
+  onCitationRequestHandled,
   onOpenKnowledge,
   onOpenPractice,
 }: {
@@ -589,6 +624,8 @@ function renderActivePanel({
   graphKnowledgeBase: KnowledgeBase | null;
   selectedKnowledgeBase: KnowledgeBase | null;
   selectedSpace: SpaceSummary;
+  citationRequest?: CitationOpenRequest;
+  onCitationRequestHandled: (requestId: number) => void;
   onOpenKnowledge: () => void;
   onOpenPractice: (questionVersionId: string) => void;
 }) {
@@ -603,7 +640,12 @@ function renderActivePanel({
       );
     case "knowledge":
       return selectedKnowledgeBase ? (
-        <KnowledgePanel knowledgeBase={selectedKnowledgeBase} spaceName={selectedSpace.name} />
+        <KnowledgePanel
+          citationRequest={citationRequest}
+          knowledgeBase={selectedKnowledgeBase}
+          onCitationRequestHandled={onCitationRequestHandled}
+          spaceName={selectedSpace.name}
+        />
       ) : (
         <KnowledgeEmptyState description="先在左侧创建或选择知识库。" title="知识库" />
       );

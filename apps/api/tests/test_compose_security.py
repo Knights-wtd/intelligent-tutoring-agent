@@ -108,6 +108,24 @@ def test_multipart_runtime_dependency_is_pinned_in_production_lock() -> None:
     assert locked_specifiers[0].version in multipart.specifier
 
 
+def test_faro_http_client_is_pinned_in_production_lock() -> None:
+    pyproject = tomllib.loads(
+        (REPOSITORY_ROOT / "apps" / "api" / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    declared = {
+        canonicalize_name(requirement.name): requirement
+        for value in pyproject["project"]["dependencies"]
+        for requirement in [Requirement(value)]
+    }
+    httpx = declared["httpx"]
+    locked = _locked_requirements()["httpx"]
+
+    locked_specifiers = list(locked.specifier)
+    assert len(locked_specifiers) == 1
+    assert locked_specifiers[0].operator == "=="
+    assert locked_specifiers[0].version in httpx.specifier
+
+
 def test_migrations_use_the_runtime_database_url_when_it_is_provided() -> None:
     migration_environment = (
         REPOSITORY_ROOT / "apps" / "api" / "migrations" / "env.py"

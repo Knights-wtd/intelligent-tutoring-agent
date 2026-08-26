@@ -16,9 +16,22 @@ import styles from "./workspace-shell.module.css";
 
 const SUPPORTED_SOURCE = /\.(?:pdf|docx|md|jpe?g|png|zip)$/i;
 
+export type KnowledgeCitation = {
+  id: string;
+  source_name: string;
+  page_number: number | null;
+};
+
+export type KnowledgeCitationRequest = {
+  citation: KnowledgeCitation;
+  requestId: number;
+};
+
 type KnowledgePanelProps = {
   spaceName: string;
   knowledgeBase: KnowledgeBase;
+  citationRequest?: KnowledgeCitationRequest;
+  onCitationRequestHandled?: (requestId: number) => void;
 };
 
 type UploadEntry = {
@@ -38,7 +51,12 @@ export function KnowledgePanel(props: KnowledgePanelProps) {
   return <KnowledgePanelForKnowledgeBase key={props.knowledgeBase.id} {...props} />;
 }
 
-function KnowledgePanelForKnowledgeBase({ spaceName, knowledgeBase }: KnowledgePanelProps) {
+function KnowledgePanelForKnowledgeBase({
+  spaceName,
+  knowledgeBase,
+  citationRequest,
+  onCitationRequestHandled,
+}: KnowledgePanelProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploadsByKnowledgeBase, setUploadsByKnowledgeBase] = useState<
@@ -54,6 +72,7 @@ function KnowledgePanelForKnowledgeBase({ spaceName, knowledgeBase }: KnowledgeP
   const contextSequenceRef = useRef(0);
   const searchSequenceRef = useRef(0);
   const previewSequenceRef = useRef(0);
+  const lastCitationRequestIdRef = useRef<number | null>(null);
   const previewUrlRef = useRef<string | null>(null);
   const searchControllerRef = useRef<AbortController | null>(null);
   const previewControllerRef = useRef<AbortController | null>(null);
@@ -278,35 +297,26 @@ function KnowledgePanelForKnowledgeBase({ spaceName, knowledgeBase }: KnowledgeP
     }
   }
 
-  async function openPreview(result: KnowledgeSearchResult) {
-    if (!selectedKnowledgeBase) return;
-    abortPreviewRequest();
-    const sequence = ++previewSequenceRef.current;
-    const knowledgeBaseId = selectedKnowledgeBase.id;
-    const contextSequence = contextSequenceRef.current;
-    const label = citationLabel(result);
-    const controller = new AbortController();
-    previewControllerRef.current = controller;
-    disposePreviewUrl();
-    setPreview(null);
-    setPreviewMessage("");
-    setIsOpeningPreview(true);
-    try {
-      const response = await knowledgeApi.pagePreview(
-        knowledgeBaseId,
-        result.citation.id,
-        controller.signal,
-      );
-      if (
-        !mountedRef.current ||
-        controller.signal.aborted ||
-        sequence !== previewSequenceRef.current ||
-        contextSequence !== contextSequenceRef.current
-      ) {
-        return;
-      }
-      if (response.contentType.toLowerCase().startsWith("text/")) {
-        const text = await response.blob.text();
+  const openPreview = useCallback(
+    async (citation: KnowledgeCitation) => {
+      if (!selectedKnowledgeBase) return;
+      abortPreviewRequest();
+      const sequence = ++previewSequenceRef.current;
+      const knowledgeBaseId = selectedKnowledgeBase.id;
+      const contextSequence = contextSequenceRef.current;
+      const label = citationLabel(citation);
+      const controller = new AbortController();
+      previewControllerRef.current = controller;
+      disposePreviewUrl();
+      setPreview(null);
+      setPreviewMessage("");
+      setIsOpeningPreview(true);
+      try {
+        const response = await knowledgeApi.pagePreview(
+          knowledgeBaseId,
+          citation.id,
+          controller.signal,
+        );
         if (
           !mountedRef.current ||
           controller.signal.aborted ||
@@ -315,44 +325,68 @@ function KnowledgePanelForKnowledgeBase({ spaceName, knowledgeBase }: KnowledgeP
         ) {
           return;
         }
-        setPreview({ kind: "text", label, text });
-      } else if (response.contentType.toLowerCase().startsWith("image/")) {
-        const url = URL.createObjectURL(response.blob);
-        if (
-          !mountedRef.current ||
-          controller.signal.aborted ||
-          sequence !== previewSequenceRef.current ||
-          contextSequence !== contextSequenceRef.current
-        ) {
-          URL.revokeObjectURL(url);
-          return;
+        if (response.contentType.toLowerCase().startsWith("text/")) {
+          const text = await response.blob.text();
+          if (
+            !mountedRef.current ||
+            controller.signal.aborted ||
+            sequence !== previewSequenceRef.current ||
+            contextSequence !== contextSequenceRef.current
+          ) {
+            return;
+          }
+          setPreview({ kind: "text", label, text });
+        } else if (response.contentType.toLowerCase().startsWith("image/")) {
+          const url = URL.createObjectURL(response.blob);
+          if (
+            !mountedRef.current ||
+            controller.signal.aborted ||
+            sequence !== previewSequenceRef.current ||
+            contextSequence !== contextSequenceRef.current
+          ) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          previewUrlRef.current = url;
+          setPreview({ kind: "image", label, url });
+        } else {
+          setPreview({ kind: "unsupported", label });
         }
-        previewUrlRef.current = url;
-        setPreview({ kind: "image", label, url });
-      } else {
-        setPreview({ kind: "unsupported", label });
+      } catch {
+        if (
+          !controller.signal.aborted &&
+          mountedRef.current &&
+          sequence === previewSequenceRef.current &&
+          contextSequence === contextSequenceRef.current
+        ) {
+          setPreviewMessage("原页暂时无法打开，请重试。");
+        }
+      } finally {
+        if (previewControllerRef.current === controller) previewControllerRef.current = null;
+        if (
+          !controller.signal.aborted &&
+          mountedRef.current &&
+          sequence === previewSequenceRef.current &&
+          contextSequence === contextSequenceRef.current
+        ) {
+          setIsOpeningPreview(false);
+        }
       }
-    } catch {
-      if (
-        !controller.signal.aborted &&
-        mountedRef.current &&
-        sequence === previewSequenceRef.current &&
-        contextSequence === contextSequenceRef.current
-      ) {
-        setPreviewMessage("原页暂时无法打开，请重试。");
-      }
-    } finally {
-      if (previewControllerRef.current === controller) previewControllerRef.current = null;
-      if (
-        !controller.signal.aborted &&
-        mountedRef.current &&
-        sequence === previewSequenceRef.current &&
-        contextSequence === contextSequenceRef.current
-      ) {
-        setIsOpeningPreview(false);
-      }
+    },
+    [abortPreviewRequest, disposePreviewUrl, selectedKnowledgeBase],
+  );
+
+  useEffect(() => {
+    if (
+      citationRequest === undefined ||
+      lastCitationRequestIdRef.current === citationRequest.requestId
+    ) {
+      return;
     }
-  }
+    lastCitationRequestIdRef.current = citationRequest.requestId;
+    onCitationRequestHandled?.(citationRequest.requestId);
+    void openPreview(citationRequest.citation);
+  }, [citationRequest, onCitationRequestHandled, openPreview]);
 
   return (
     <section aria-label="知识库面板" className={styles.knowledgePanel}>
@@ -439,10 +473,10 @@ function KnowledgePanelForKnowledgeBase({ spaceName, knowledgeBase }: KnowledgeP
               {searchResults.map((result) => (
                 <li key={result.citation.id}>
                   <p>{result.excerpt}</p>
-                  <span>{citationLabel(result)}</span>
+                  <span>{citationLabel(result.citation)}</span>
                   <button
                     disabled={isOpeningPreview}
-                    onClick={() => void openPreview(result)}
+                    onClick={() => void openPreview(result.citation)}
                     type="button"
                   >
                     打开原页
@@ -504,9 +538,7 @@ function learnerUploadState(response?: KnowledgeUpload): string {
   return "处理中";
 }
 
-function citationLabel(result: KnowledgeSearchResult): string {
-  const page = result.citation.page_number;
-  return page === null
-    ? result.citation.source_name
-    : `${result.citation.source_name} · 第 ${page} 页`;
+function citationLabel(citation: KnowledgeCitation): string {
+  const page = citation.page_number;
+  return page === null ? citation.source_name : `${citation.source_name} · 第 ${page} 页`;
 }

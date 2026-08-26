@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -238,5 +238,86 @@ describe("WorkspaceShell", () => {
     expect(screen.getByRole("dialog", { name: "创建或加入班级" })).toBeInTheDocument();
     expect(screen.getByLabelText("班级名称")).toBeInTheDocument();
     expect(screen.getByLabelText("邀请码")).toBeInTheDocument();
+  });
+  it("opens a Tutor citation in the matching knowledge preview", async () => {
+    mockBreakpoint.value = "compact";
+    mockTutorApi.status.mockResolvedValue({ configured: true, model: "faro" });
+    mockTutorApi.createConversation.mockResolvedValue({
+      id: "conversation-1",
+      knowledge_base_id: "kb-wireless",
+      title: "路径损耗",
+      messages: [
+        {
+          id: "message-user",
+          role: "user",
+          content: "解释路径损耗",
+          citations: [],
+          created_at: "2026-08-26T00:00:00Z",
+        },
+        {
+          id: "message-assistant",
+          role: "assistant",
+          content: "路径损耗随距离增加而增大。",
+          citations: [
+            {
+              id: "citation-wireless",
+              source_name: "无线通信.txt",
+              page_number: 1,
+            },
+          ],
+          created_at: "2026-08-26T00:00:01Z",
+        },
+      ],
+      created_at: "2026-08-26T00:00:00Z",
+      updated_at: "2026-08-26T00:00:01Z",
+    });
+    mockKnowledgeApi.pagePreview.mockResolvedValue({
+      blob: new Blob(["路径损耗随距离增加而增大。"], { type: "text/plain" }),
+      contentType: "text/plain; charset=utf-8",
+    });
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    await waitFor(() => {
+      expect(localStorage.getItem("workspace:personal")).not.toBeNull();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await user.click(screen.getByRole("button", { name: "打开 AI 家教" }));
+    const prompt = screen.getByLabelText("向 AI 导师提问");
+    await waitFor(() => expect(prompt).toBeEnabled());
+    const form = prompt.closest("form");
+    expect(form).not.toBeNull();
+    fireEvent.change(prompt, { target: { value: "解释路径损耗" } });
+    expect(prompt).toHaveValue("解释路径损耗");
+    fireEvent.submit(form!);
+    await waitFor(() => {
+      expect(mockTutorApi.createConversation).toHaveBeenCalledWith(
+        "kb-wireless",
+        "解释路径损耗",
+        expect.any(AbortSignal),
+      );
+    });
+    expect(await screen.findByText("路径损耗随距离增加而增大。")).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "打开引用：无线通信.txt，第 1 页" }));
+    expect(screen.queryByRole("dialog", { name: "AI 家教抽屉" })).not.toBeInTheDocument();
+
+    expect(screen.getByRole("tab", { name: "知识库" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await waitFor(() => {
+      expect(mockKnowledgeApi.pagePreview).toHaveBeenCalledWith(
+        "kb-wireless",
+        "citation-wireless",
+        expect.any(AbortSignal),
+      );
+    });
+    expect(await screen.findByRole("region", { name: "引用原页预览" })).toHaveTextContent(
+      "路径损耗随距离增加而增大。",
+    );
+
+    await user.click(screen.getByRole("tab", { name: "今日任务" }));
+    await user.click(screen.getByRole("tab", { name: "知识库" }));
+    expect(mockKnowledgeApi.pagePreview).toHaveBeenCalledTimes(1);
   });
 });
