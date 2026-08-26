@@ -24,6 +24,35 @@ describe("workspace preferences", () => {
     });
   });
 
+  it("keeps workspace preferences isolated by space", () => {
+    writeWorkspacePreference("personal", {
+      selectedKnowledgeBaseId: "wireless",
+      activeTabId: "graph:wireless",
+    });
+    writeWorkspacePreference("math", {
+      selectedKnowledgeBaseId: "geometry",
+      activeTabId: "practice",
+    });
+
+    expect(JSON.parse(localStorage.getItem("workspace:personal") ?? "null")).toEqual({
+      selectedKnowledgeBaseId: "wireless",
+      activeTabId: "graph:wireless",
+    });
+    expect(JSON.parse(localStorage.getItem("workspace:math") ?? "null")).toEqual({
+      selectedKnowledgeBaseId: "geometry",
+      activeTabId: "practice",
+    });
+
+    expect(readWorkspacePreference("personal")).toEqual({
+      selectedKnowledgeBaseId: "wireless",
+      activeTabId: "graph:wireless",
+    });
+    expect(readWorkspacePreference("math")).toEqual({
+      selectedKnowledgeBaseId: "geometry",
+      activeTabId: "practice",
+    });
+  });
+
   it.each([
     "not-json",
     "null",
