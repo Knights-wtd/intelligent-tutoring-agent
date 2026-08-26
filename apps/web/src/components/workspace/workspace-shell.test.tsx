@@ -31,6 +31,9 @@ const mockTutorApi = vi.hoisted(() => ({
   getConversation: vi.fn(),
   sendMessage: vi.fn(),
 }));
+const mockBreakpoint = vi.hoisted(() => ({
+  value: "desktop" as "desktop" | "tablet" | "compact" | "mobile",
+}));
 
 vi.mock("@/lib/knowledge-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/knowledge-api")>();
@@ -42,6 +45,9 @@ vi.mock("@/lib/tutor-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tutor-api")>();
   return { ...actual, tutorApi: mockTutorApi };
 });
+vi.mock("./use-workspace-breakpoint", () => ({
+  useWorkspaceBreakpoint: () => mockBreakpoint.value,
+}));
 
 const personalSpace = { id: "personal", kind: "personal" as const, name: "我的空间" };
 const wireless: KnowledgeBase = {
@@ -60,6 +66,7 @@ const digital: KnowledgeBase = {
 
 beforeEach(() => {
   localStorage.clear();
+  mockBreakpoint.value = "desktop";
   for (const mock of Object.values(mockKnowledgeApi)) mock.mockReset();
   for (const mock of Object.values(mockQuestionBankApi)) mock.mockReset();
   for (const mock of Object.values(mockClassroomApi)) mock.mockReset();
@@ -156,6 +163,71 @@ describe("WorkspaceShell", () => {
       );
     });
     expect(await screen.findByLabelText("知识库面板")).toHaveTextContent("数字通信");
+  });
+
+
+  it("uses accessible library drawers in compact layouts without losing selection", async () => {
+    mockBreakpoint.value = "compact";
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    expect(screen.getByRole("main")).toHaveAttribute("data-layout", "center-drawers");
+    expect(screen.queryByRole("navigation", { name: "知识库" })).not.toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: "打开知识库" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "知识库抽屉" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "关闭知识库抽屉" })).toHaveFocus();
+
+    await user.click(await screen.findByRole("button", { name: "选择数字通信" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "知识库抽屉" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    expect(screen.getByRole("button", { name: "选择数字通信" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await user.click(screen.getByRole("button", { name: "关闭知识库抽屉背景" }));
+    expect(screen.queryByRole("dialog", { name: "知识库抽屉" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps tutor draft state mounted while its compact drawer is closed", async () => {
+    mockBreakpoint.value = "compact";
+    mockTutorApi.status.mockResolvedValue({ configured: true, model: "faro" });
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    const trigger = screen.getByRole("button", { name: "打开 AI 家教" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "AI 家教抽屉" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "关闭 AI 家教抽屉" })).toHaveFocus();
+
+    const prompt = await screen.findByLabelText("向 AI 导师提问");
+    await waitFor(() => expect(prompt).toBeEnabled());
+    await user.type(prompt, "请解释香农定理");
+    await user.click(screen.getByRole("button", { name: "关闭 AI 家教抽屉" }));
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    expect(screen.getByLabelText("向 AI 导师提问")).toHaveValue("请解释香农定理");
+    await user.click(screen.getByRole("button", { name: "关闭 AI 家教抽屉背景" }));
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps the library inline and moves only the tutor into a tablet drawer", async () => {
+    mockBreakpoint.value = "tablet";
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    expect(await screen.findByRole("navigation", { name: "知识库" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "打开知识库" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("separator")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "打开 AI 家教" }));
+    expect(screen.getByRole("dialog", { name: "AI 家教抽屉" })).toBeInTheDocument();
   });
 
   it("keeps the real classroom entry in the knowledge sidebar footer", async () => {

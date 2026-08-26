@@ -5,8 +5,10 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { type SpaceSummary } from "@/lib/api";
@@ -20,6 +22,7 @@ import { QuestionBankPanel } from "./question-bank-panel";
 import { StudyDashboard } from "./study-dashboard";
 import { TutorPanel } from "./tutor-panel";
 import { useKnowledgeLibrary } from "./use-knowledge-library";
+import { useWorkspaceBreakpoint } from "./use-workspace-breakpoint";
 import {
   initialWorkspaceTabs,
   reduceWorkspaceTabs,
@@ -61,6 +64,13 @@ export function WorkspaceShell({
   const [inviteCode, setInviteCode] = useState("");
   const [classroomError, setClassroomError] = useState<string | null>(null);
   const [createdInviteCode, setCreatedInviteCode] = useState<string | null>(null);
+  const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
+  const [isTutorDrawerOpen, setIsTutorDrawerOpen] = useState(false);
+  const libraryDrawerTriggerRef = useRef<HTMLButtonElement>(null);
+  const libraryDrawerCloseRef = useRef<HTMLButtonElement>(null);
+  const tutorDrawerTriggerRef = useRef<HTMLButtonElement>(null);
+  const tutorDrawerCloseRef = useRef<HTMLButtonElement>(null);
+  const breakpoint = useWorkspaceBreakpoint();
 
   const selectedSpace =
     availableSpaces.find((space) => space.id === selectedSpaceId) ?? availableSpaces[0];
@@ -149,6 +159,36 @@ export function WorkspaceShell({
   }, [activeTab, knowledgeBases]);
   const tutorKnowledgeBase = knowledgeBaseForGraphTab ?? selectedKnowledgeBase;
   const tutorContext = getTutorContext(activeTab, tutorKnowledgeBase);
+  const showsInlineLibrary = breakpoint === "desktop" || breakpoint === "tablet";
+  const showsLibraryDrawer = breakpoint === "compact" || breakpoint === "mobile";
+  const showsTutorDrawer = breakpoint !== "desktop";
+  const portalTarget = typeof document === "undefined" ? null : document.body;
+
+  useEffect(() => {
+    if (!isLibraryDrawerOpen) return;
+    libraryDrawerCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setIsLibraryDrawerOpen(false);
+      libraryDrawerTriggerRef.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [isLibraryDrawerOpen]);
+
+  useEffect(() => {
+    if (!isTutorDrawerOpen) return;
+    tutorDrawerCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setIsTutorDrawerOpen(false);
+      tutorDrawerTriggerRef.current?.focus();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [isTutorDrawerOpen]);
 
   const addClassroomSpace = (space: SpaceSummary, closeDialog: boolean) => {
     setAvailableSpaces((current) =>
@@ -200,78 +240,205 @@ export function WorkspaceShell({
     });
   };
 
+  const closeLibraryDrawer = () => {
+    setIsLibraryDrawerOpen(false);
+    libraryDrawerTriggerRef.current?.focus();
+  };
+  const closeTutorDrawer = () => {
+    setIsTutorDrawerOpen(false);
+    tutorDrawerTriggerRef.current?.focus();
+  };
+  const librarySidebar = (
+    <KnowledgeLibrarySidebar
+      error={knowledgeError}
+      isLoading={isKnowledgeLoading}
+      knowledgeBases={knowledgeBases}
+      onCreate={async (name) => {
+        await createKnowledgeBase(name);
+      }}
+      onOpenClassroom={openClassroomDialog}
+      onOpenDueReview={() => dispatchTabs({ type: "focus", tabId: "today" })}
+      onOpenGraph={openGraph}
+      onRetry={refreshKnowledgeBases}
+      onSelect={selectKnowledgeBase}
+      onSwitchSpace={
+        availableSpaces.length > 1 ? () => setIsSpaceDialogOpen(true) : undefined
+      }
+      selectedKnowledgeBaseId={selectedKnowledgeBaseId}
+    />
+  );
+  const centralWorkspace = (
+    <section aria-label="学习内容" className={styles.centralWorkspace}>
+      {breakpoint !== "desktop" ? (
+        <div aria-label="工作区侧栏" className={styles.workspaceToolbar}>
+          {showsLibraryDrawer ? (
+            <button
+              onClick={() => setIsLibraryDrawerOpen(true)}
+              ref={libraryDrawerTriggerRef}
+              type="button"
+            >
+              打开知识库
+            </button>
+          ) : null}
+          <button
+            onClick={() => setIsTutorDrawerOpen(true)}
+            ref={tutorDrawerTriggerRef}
+            type="button"
+          >
+            打开 AI 家教
+          </button>
+        </div>
+      ) : null}
+      <WorkspaceTabBar
+        activeTabId={tabsState.activeTabId}
+        onClose={(tabId) => dispatchTabs({ type: "close", tabId })}
+        onFocus={(tabId) => dispatchTabs({ type: "focus", tabId })}
+        tabs={tabsState.tabs}
+      />
+      <div className={styles.centralContent} id="workspace-active-panel" role="tabpanel">
+        {renderActivePanel({
+          activeTab,
+          graphKnowledgeBase: knowledgeBaseForGraphTab,
+          selectedKnowledgeBase,
+          selectedSpace,
+          onOpenKnowledge: () => dispatchTabs({ type: "focus", tabId: "knowledge" }),
+          onOpenPractice: (questionVersionId) =>
+            dispatchTabs({ type: "open-practice", questionVersionId }),
+        })}
+      </div>
+    </section>
+  );
+  const tutorWorkspace = (
+    <aside aria-label="AI 家教" className={styles.tutorWorkspace}>
+      {tutorKnowledgeBase ? (
+        <TutorPanel
+          contextLabel={tutorContext}
+          knowledgeBase={tutorKnowledgeBase}
+          onOpenCitation={() => dispatchTabs({ type: "focus", tabId: "knowledge" })}
+        />
+      ) : (
+        <KnowledgeEmptyState
+          description="选择或创建知识库后，AI 家教会跟随当前学习上下文。"
+          title="AI 家教"
+        />
+      )}
+    </aside>
+  );
+  const layoutName =
+    breakpoint === "desktop"
+      ? "library-center-tutor"
+      : breakpoint === "tablet"
+        ? "library-center"
+        : "center-drawers";
+
   return (
-    <main className={styles.shell} data-layout="library-center-tutor">
-      <section aria-label="学习工作区" className={styles.desktopWorkspace}>
-        <Group
-          className={styles.panelGroup}
-          defaultLayout={{ library: 20, center: 55, tutor: 25 }}
-          orientation="horizontal"
-        >
-          <Panel className={styles.libraryPanelSlot} id="library" maxSize="32%" minSize="16%">
-            <KnowledgeLibrarySidebar
-              error={knowledgeError}
-              isLoading={isKnowledgeLoading}
-              knowledgeBases={knowledgeBases}
-              onCreate={async (name) => {
-                await createKnowledgeBase(name);
-              }}
-              onOpenClassroom={openClassroomDialog}
-              onOpenDueReview={() => dispatchTabs({ type: "focus", tabId: "today" })}
-              onOpenGraph={openGraph}
-              onRetry={refreshKnowledgeBases}
-              onSelect={selectKnowledgeBase}
-              onSwitchSpace={
-                availableSpaces.length > 1 ? () => setIsSpaceDialogOpen(true) : undefined
-              }
-              selectedKnowledgeBaseId={selectedKnowledgeBaseId}
-            />
-          </Panel>
-
-          <Separator aria-label="调整知识库和学习内容宽度" className={styles.separator} />
-
-          <Panel className={styles.centerPanelSlot} id="center" minSize="36%">
-            <section aria-label="学习内容" className={styles.centralWorkspace}>
-              <WorkspaceTabBar
-                activeTabId={tabsState.activeTabId}
-                onClose={(tabId) => dispatchTabs({ type: "close", tabId })}
-                onFocus={(tabId) => dispatchTabs({ type: "focus", tabId })}
-                tabs={tabsState.tabs}
-              />
-              <div className={styles.centralContent} id="workspace-active-panel" role="tabpanel">
-                {renderActivePanel({
-                  activeTab,
-                  graphKnowledgeBase: knowledgeBaseForGraphTab,
-                  selectedKnowledgeBase,
-                  selectedSpace,
-                  onOpenKnowledge: () => dispatchTabs({ type: "focus", tabId: "knowledge" }),
-                  onOpenPractice: (questionVersionId) =>
-                    dispatchTabs({ type: "open-practice", questionVersionId }),
-                })}
-              </div>
-            </section>
-          </Panel>
-
-          <Separator aria-label="调整学习内容和 AI 家教宽度" className={styles.separator} />
-
-          <Panel className={styles.tutorPanelSlot} id="tutor" maxSize="36%" minSize="20%">
-            <aside aria-label="AI 家教" className={styles.tutorWorkspace}>
-              {tutorKnowledgeBase ? (
-                <TutorPanel
-                  contextLabel={tutorContext}
-                  knowledgeBase={tutorKnowledgeBase}
-                  onOpenCitation={() => dispatchTabs({ type: "focus", tabId: "knowledge" })}
-                />
-              ) : (
-                <KnowledgeEmptyState
-                  description="选择或创建知识库后，AI 家教会跟随当前学习上下文。"
-                  title="AI 家教"
-                />
-              )}
-            </aside>
-          </Panel>
-        </Group>
+    <main className={styles.shell} data-breakpoint={breakpoint} data-layout={layoutName}>
+      <section
+        aria-label="学习工作区"
+        className={`${styles.desktopWorkspace} ${styles.responsiveWorkspace}`}
+      >
+        {breakpoint === "desktop" ? (
+          <Group
+            className={styles.panelGroup}
+            defaultLayout={{ library: 20, center: 55, tutor: 25 }}
+            orientation="horizontal"
+          >
+            <Panel className={styles.libraryPanelSlot} id="library" maxSize="32%" minSize="16%">
+              {librarySidebar}
+            </Panel>
+            <Separator aria-label="调整知识库和学习内容宽度" className={styles.separator} />
+            <Panel className={styles.centerPanelSlot} id="center" minSize="36%">
+              {centralWorkspace}
+            </Panel>
+            <Separator aria-label="调整学习内容和 AI 家教宽度" className={styles.separator} />
+            <Panel className={styles.tutorPanelSlot} id="tutor" maxSize="36%" minSize="20%">
+              {tutorWorkspace}
+            </Panel>
+          </Group>
+        ) : showsInlineLibrary ? (
+          <Group
+            className={styles.panelGroup}
+            defaultLayout={{ library: 28, center: 72 }}
+            orientation="horizontal"
+          >
+            <Panel className={styles.libraryPanelSlot} id="library" maxSize="38%" minSize="22%">
+              {librarySidebar}
+            </Panel>
+            <Separator aria-label="调整知识库和学习内容宽度" className={styles.separator} />
+            <Panel className={styles.centerPanelSlot} id="center" minSize="56%">
+              {centralWorkspace}
+            </Panel>
+          </Group>
+        ) : (
+          <div className={styles.centerOnly}>{centralWorkspace}</div>
+        )}
       </section>
+
+      {showsLibraryDrawer && portalTarget
+        ? createPortal(
+            <div className={styles.drawerLayer} hidden={!isLibraryDrawerOpen}>
+              <button
+                aria-label="关闭知识库抽屉背景"
+                className={styles.drawerBackdrop}
+                onClick={closeLibraryDrawer}
+                type="button"
+              />
+              <section
+                aria-label="知识库抽屉"
+                aria-modal="true"
+                className={`${styles.drawer} ${styles.drawerLeft}`}
+                role="dialog"
+              >
+                <header className={styles.drawerHeader}>
+                  <strong>知识库</strong>
+                  <button
+                    aria-label="关闭知识库抽屉"
+                    onClick={closeLibraryDrawer}
+                    ref={libraryDrawerCloseRef}
+                    type="button"
+                  >
+                    关闭
+                  </button>
+                </header>
+                <div className={styles.drawerBody}>{librarySidebar}</div>
+              </section>
+            </div>,
+            portalTarget,
+          )
+        : null}
+
+      {showsTutorDrawer && portalTarget
+        ? createPortal(
+            <div className={styles.drawerLayer} hidden={!isTutorDrawerOpen}>
+              <button
+                aria-label="关闭 AI 家教抽屉背景"
+                className={styles.drawerBackdrop}
+                onClick={closeTutorDrawer}
+                type="button"
+              />
+              <section
+                aria-label="AI 家教抽屉"
+                aria-modal="true"
+                className={`${styles.drawer} ${styles.drawerRight}`}
+                role="dialog"
+              >
+                <header className={styles.drawerHeader}>
+                  <strong>AI 家教</strong>
+                  <button
+                    aria-label="关闭 AI 家教抽屉"
+                    onClick={closeTutorDrawer}
+                    ref={tutorDrawerCloseRef}
+                    type="button"
+                  >
+                    关闭
+                  </button>
+                </header>
+                <div className={styles.drawerBody}>{tutorWorkspace}</div>
+              </section>
+            </div>,
+            portalTarget,
+          )
+        : null}
 
       {isSpaceDialogOpen ? (
         <div className={styles.classroomDialogBackdrop} role="presentation">
