@@ -30,6 +30,20 @@ docker compose --env-file .env up --build -d
 docker compose --env-file .env ps
 ```
 
+### 首次拉取或 Python 依赖更新后必须重建镜像
+
+Docker 用户不需要在 Windows 上单独安装 Python 包。API 与 Worker 的 Python 依赖由 `apps/api/requirements.lock` 安装进 `textbook-tutor-api` 镜像；当前版本已经锁定 `httpx==0.28.1`。如果拉取更新后仍复用旧镜像，Worker 可能报告 `ModuleNotFoundError: No module named 'httpx'`。
+
+遇到这种情况，不要在运行中的容器里执行临时 `pip install`，因为容器重建后临时安装会丢失。请从仓库根目录重建并重新创建 API、Worker 和 Web：
+
+```powershell
+docker compose --env-file .env build --no-cache api worker
+docker compose --env-file .env up -d --force-recreate api worker web
+docker compose --env-file .env exec api python -c "import httpx; print(httpx.__version__)"
+```
+
+最后一条命令应输出 `0.28.1`。如果 API 日志显示 PostgreSQL `password authentication failed`，那是 `.env` 与既有数据库卷密码不一致，不是 Python 依赖问题；请按本文“首次启动后修改了 PostgreSQL 密码”一节处理，不要用安装依赖或反复重建镜像来掩盖凭据不一致。
+
 启动完成后可访问：
 
 - Web 工作区：<http://localhost:3000>
