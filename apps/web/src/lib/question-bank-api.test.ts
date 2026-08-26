@@ -3,6 +3,9 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   QuestionBankApiError,
   questionBankApi,
+  type AttemptAssessment,
+  type AttemptHistoryItem,
+  type LearnerQuestion,
   type ReviewItem,
   type ReviewItemsResponse,
 } from "./question-bank-api";
@@ -13,6 +16,110 @@ afterEach(() => {
 });
 
 describe("questionBankApi", () => {
+  it("loads encoded knowledge-base questions with cookie authentication", async () => {
+    const payload = [
+      {
+        question_version_id: "question-version-1",
+        question_type: "single_choice",
+        prompt: "What is the Shannon capacity formula?",
+      },
+    ] satisfies LearnerQuestion[];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(
+      questionBankApi.listQuestions("wireless/communications", controller.signal),
+    ).resolves.toEqual(payload);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/knowledge-bases/wireless%2Fcommunications/questions",
+      expect.objectContaining({
+        credentials: "include",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it("submits an answer with encoded resources and an idempotency key", async () => {
+    const payload = {
+      question_version_id: "question-version/1",
+      correct: false,
+      score_basis_points: 2500,
+      error_type: "application",
+      needs_review: true,
+      review_due_at: "2026-08-26T08:00:00Z",
+      review_interval_days: 1,
+    } satisfies AttemptAssessment;
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(
+      questionBankApi.submitAttempt(
+        "wireless/communications",
+        "question-version/1",
+        "42",
+        "attempt-key-1",
+        controller.signal,
+      ),
+    ).resolves.toEqual(payload);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/knowledge-bases/wireless%2Fcommunications/question-versions/question-version%2F1/attempts",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          "Idempotency-Key": "attempt-key-1",
+        }),
+        body: JSON.stringify({ answer: "42" }),
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it("loads encoded attempt history for the selected question version", async () => {
+    const item = {
+      question_version_id: "question-version/1",
+      question_type: "single_choice",
+      prompt: "What is the Shannon capacity formula?",
+      correct: true,
+      score_basis_points: 10000,
+      error_type: "none",
+      needs_review: false,
+      review_due_at: "2026-08-26T08:00:00Z",
+      review_interval_days: 3,
+    } satisfies AttemptHistoryItem;
+    const payload = { items: [item], next_cursor: null };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(
+      questionBankApi.listAttemptHistory(
+        "wireless/communications",
+        "question-version/1",
+        controller.signal,
+      ),
+    ).resolves.toEqual(payload);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/knowledge-bases/wireless%2Fcommunications/question-versions/question-version%2F1/attempt-history",
+      expect.objectContaining({
+        credentials: "include",
+        signal: controller.signal,
+      }),
+    );
+  });
   it("loads encoded knowledge-base review items with supplied query options and cookie authentication", async () => {
     const payload = {
       items: [
