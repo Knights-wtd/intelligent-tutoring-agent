@@ -575,3 +575,20 @@
 .knowledgeLibraryFooter button:nth-last-child(1):nth-child(odd) { grid-column: 1 / -1; }
 .knowledgeLibrary button:disabled, .knowledgeLibrary input:disabled { cursor: not-allowed; opacity: .58; }
 .knowledgeLibrary summary:focus-visible, .knowledgeLibrary button:focus-visible, .knowledgeLibrary input:focus-visible { outline: 3px solid #c8bdf5; outline-offset: 2px; }
+
+/* Workspace Task 3 study dashboard */
+.studyDashboard { display: grid; min-height: 0; flex: 1; place-items: center; overflow: auto; padding: 24px; color: var(--text, #282733); background: #fdfcff; }
+.studyDashboardCard { display: grid; width: min(100%, 680px); gap: 14px; box-sizing: border-box; padding: 28px; border: 1px solid var(--line, #e7e4ec); border-radius: 16px; background: #fff; box-shadow: 0 14px 36px rgb(60 52 105 / 8%); }
+.studyDashboardCard h2, .studyDashboardCard p { margin: 0; }
+.studyDashboardCard h2 { color: var(--text, #282733); font-size: clamp(24px, 3vw, 34px); }
+.studyDashboardCard p { color: #716d79; line-height: 1.6; }
+.studyDashboardCard button { justify-self: start; min-height: 42px; padding: 9px 15px; border: 1px solid var(--purple, #6558c9); border-radius: 9px; background: var(--purple, #6558c9); color: #fff; font: inherit; font-weight: 750; cursor: pointer; }
+.studyDashboardCard button:hover { background: #5549aa; }
+.studyDashboardCard button:focus-visible { outline: 3px solid #c8bdf5; outline-offset: 2px; }
+.studyDashboardEyebrow { color: #6558c9 !important; font-size: 13px; font-weight: 750; }
+.studyDashboardCount { font-weight: 700; }
+.studyDashboardList { display: grid; gap: 8px; margin: 0; padding-left: 24px; color: #514d60; }
+.studyDashboardList li { padding-left: 4px; line-height: 1.5; }
+.studyDashboardError { display: grid; justify-items: start; gap: 12px; padding: 14px; border: 1px solid #ecc9cf; border-radius: 10px; background: #fff7f8; }
+.studyDashboardError p { color: #9a3445; }
+@media (max-width: 767px) { .studyDashboard { padding: 16px; } .studyDashboardCard { padding: 20px; } }
