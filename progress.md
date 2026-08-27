@@ -1,5 +1,21 @@
 # Progress Log
 
+## Session: 2026-08-27 · Knowledge Index Build Fix & Persistence Verification
+
+- **Status:** complete
+- Actions taken:
+  - 诊断“PDF 上传后一直显示上传中”：解析（parse_document）实际成功，卡在 build_index 重试 3 次后终态失败。真实根因经容器内回放探针定位：本 PDF 解析出 104 个纯标点碎片块（如 `} }]`），嵌入器 `_normalize_text` 将其判为空文本抛 ValueError，而 `build_index` 捕获一切异常并以 `from None` 吞掉细节统一报 `index_build_failed`，worker 又固定写 `last_error_detail=None`。
+  - 修复：以 `is_embedding_blank` 作为嵌入空白判定的唯一标准（embeddings.py 抽取共享规则）；索引构建加载块阶段过滤空白块（indexing.py），纯标点文档改报稳定的 `index_source_empty`；worker 失败时向 stderr 打印完整堆栈（数据库仍只保留脱敏公开错误码）。
+  - 测试先行：新增 2 个回归测试（含标点碎片的构建必须成功、无可嵌入文本须报 index_source_empty），RED→GREEN；test_knowledge_indexing 22/22、知识库相邻套件全绿、ruff 通过。基线对照证明仓库现存 4 个与本改动无关的失败：schema 迁移往返 ×2（question_versions 元数据/迁移漂移，属题库 WIP）、OCR tesseract 超时杀进程 ×2（本临时容器环境确定性失败，两变体均复现）。
+  - 部署与恢复：重建 api/worker 镜像并滚动替换；将两条失败的 build_index 任务重置为 queued（attempt_count=0、清租约），修复后一次尝试即完成，两个知识库索引激活、各 12958 chunks；`search_knowledge("智能体的规划和记忆模块")` 端到端返回带页码引用命中（p154/p147/p16）。
+  - 持久化核实：文档元数据/pgvector 向量存于 `ita_repo_postgres-data` 卷；11MB PDF 原件与每份 306 个页文本对象经应用存储适配器从 MinIO 卷完整读回。命名卷跨重启/重建持久；需防 `docker compose down -v`。UI 层状态映射本身区分 FAILED，缺的是任务状态轮询接口（后续项：GET 文档/任务状态端点 + 前端轮询）。
+- Files created/modified:
+  - `apps/api/src/tutor_api/knowledge/embeddings.py`
+  - `apps/api/src/tutor_api/knowledge/indexing.py`
+  - `apps/api/src/tutor_api/knowledge/worker.py`
+  - `apps/api/tests/test_knowledge_indexing.py`
+  - `progress.md`
+
 ## Session: 2026-08-27 · Auth Fixes, Rate Limiting & Web API Base Repair
 
 - **Status:** complete
