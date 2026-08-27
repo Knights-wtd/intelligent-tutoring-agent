@@ -271,9 +271,20 @@ def _normalize_keywords(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+_WORD_KEYWORD = re.compile(r"^[A-Za-z0-9_]+$")
+
+
 def _contains_normalized_phrase(answer: str, phrase: str) -> bool:
-    """Match a normalized phrase without treating a substring of a word as present."""
-    return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", answer) is not None
+    """Match a normalized phrase without treating a substring of a word as present.
+
+    ``\\w`` also matches CJK characters, so boundary assertions around a Chinese
+    keyword would almost never hold inside a natural sentence. Boundaries apply
+    only to pure ASCII-word keywords; every other keyword falls back to a
+    substring match.
+    """
+    if _WORD_KEYWORD.fullmatch(phrase):
+        return re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", answer) is not None
+    return phrase in answer
 
 
 def _validate_basis_points(value: int) -> None:

@@ -10,6 +10,7 @@ from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter, is_embedding_blank
 from tutor_api.knowledge.indexing import (
+    MAX_LEXICAL_TERMS,
     ChunkingConfig,
     IndexBuildRequest,
     IndexingError,
@@ -1073,4 +1074,24 @@ def test_document_without_embeddable_text_fails_with_stable_code(session: Sessio
             HashEmbeddingAdapter(dimension=8),
         )
     assert raised.value.code == "index_source_empty"
+
+
+def test_lexical_terms_include_cjk_bigrams_for_natural_language_recall() -> None:
+    chunk_terms = set(
+        normalize_lexical_terms("路径损耗用于描述接收功率随距离的衰减。Vectors are neat.")
+    )
+
+    assert {"路径", "径损", "损耗", "衰减"} <= chunk_terms
+    assert {"vectors", "are", "neat"} <= chunk_terms
+    query_terms = set(normalize_lexical_terms("什么是路径损耗？"))
+    assert query_terms & chunk_terms, "中文查询词必须能与正文词法项相交"
+
+
+def test_lexical_terms_cap_stays_bounded_for_long_chinese_text() -> None:
+    long_text = "无线" * 5_000
+
+    terms = normalize_lexical_terms(long_text)
+
+    assert len(terms) <= MAX_LEXICAL_TERMS
+    assert "无线" in terms
 

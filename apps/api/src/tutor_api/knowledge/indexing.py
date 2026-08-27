@@ -107,8 +107,10 @@ class ChunkingConfig:
 
     @property
     def signature(self) -> str:
+        # Version 2 adds CJK character bigrams to lexical terms; old indexes keep
+        # serving until a rebuild produces the new chunking signature.
         return make_pipeline_signature(
-            "chunking", "heading-window", "1", self.max_chars, self.overlap_chars
+            "chunking", "heading-window", "2", self.max_chars, self.overlap_chars
         )
 
 
@@ -209,9 +211,19 @@ def make_index_signature(
     )
 
 
+_CJK_RUN = re.compile(r"[\u3400-\u9fff]+")
+MAX_LEXICAL_TERMS = 1024
+
+
 def normalize_lexical_terms(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKC", text).casefold()
-    return sorted(set(_TERM.findall(normalized)))
+    terms = set(_TERM.findall(normalized))
+    # CJK text has no word separators, so _TERM yields one token per punctuation-free
+    # run and exact-set intersection almost never matches a natural query. Character
+    # bigrams give those runs matchable granularity; word tokens stay unchanged.
+    for run in _CJK_RUN.findall(normalized):
+        terms.update(run[index : index + 2] for index in range(len(run) - 1))
+    return sorted(terms)[:MAX_LEXICAL_TERMS]
 
 
 def _normalize_content(text: str) -> str:

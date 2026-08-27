@@ -1336,9 +1336,11 @@ def test_fail_job_lease_loss_preserves_replacement_owner_status_and_result(
         engine.dispose()
 
 
-def test_worker_main_injects_real_formula_evidence_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tutor_api.core.config import Settings
+def test_worker_main_injects_real_formula_evidence_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from tutor_api import worker_main
+    from tutor_api.core.config import Settings
 
     sentinel = object()
     captured: dict[str, object] = {}

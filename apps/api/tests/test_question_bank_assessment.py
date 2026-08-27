@@ -249,3 +249,25 @@ def test_dependency_import_helper_detects_from_learning_imports() -> None:
     )
 
     assert "tutor_api.learning.grading" in imported
+
+
+def test_open_keywords_match_inside_chinese_sentences_without_word_boundaries() -> None:
+    rubric = QuestionRubric(
+        question_type=QuestionType.OPEN,
+        expected_keywords=("摩擦力", "正压力"),
+    )
+
+    result = assess_answer(rubric, "答案是摩擦力很大，且正压力保持不变。")
+
+    assert result.correct is True
+    assert result.score_basis_points == 10_000
+
+
+def test_ascii_word_keywords_still_require_word_boundaries() -> None:
+    rubric = QuestionRubric(
+        question_type=QuestionType.OPEN,
+        expected_keywords=("loss",),
+    )
+
+    assert assess_answer(rubric, "pathloss").score_basis_points == 0
+    assert assess_answer(rubric, "the path loss model").score_basis_points == 10_000
