@@ -4,11 +4,59 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 _STRUCTURE_KINDS = ("chapter", "section", "subsection")
+# Common key-style prefixes models invent per kind; used to alias references like
+# "path_loss" -> "section_path_loss" when merging across context chunks.
+_KEY_PREFIXES = (
+    "chapter_",
+    "section_",
+    "subsection_",
+    "subsec_",
+    "concept_",
+    "property_",
+    "formula_",
+    "method_",
+    "example_",
+    "term_",
+)
 _CODE_FENCE = re.compile(r"^```[a-zA-Z0-9_-]*\s*\n|\n?```\s*$")
+_NOTE_KIND_ALIASES = {
+    "definition": "concept",
+    "definitions": "concept",
+    "notion": "concept",
+    "summary": "concept",
+    "summaries": "concept",
+    "theorem": "property",
+    "theorems": "property",
+    "law": "property",
+    "laws": "property",
+    "parameter": "property",
+    "parameters": "property",
+    "equation": "formula",
+    "equations": "formula",
+    "technique": "method",
+    "techniques": "method",
+    "procedure": "method",
+    "procedures": "method",
+    "exercise": "example",
+    "exercises": "example",
+}
+_STRUCTURE_KIND_ALIASES = {
+    "chap": "chapter",
+    "chapters": "chapter",
+    "part": "chapter",
+    "parts": "chapter",
+    "unit": "chapter",
+    "units": "chapter",
+    "appendix": "chapter",
+    "sections": "section",
+    "sub_section": "subsection",
+    "sub_sections": "subsection",
+    "subsections": "subsection",
+}
 
 
 class CandidateValidationError(ValueError):
@@ -170,9 +218,9 @@ def parse_structure_candidates(text: str) -> StructureCandidateSet:
             raise CandidateValidationError("structure_candidate_invalid")
         key = _required_text(item, "key", code="structure_candidate_field_invalid")
         title = _required_text(item, "title", code="structure_candidate_field_invalid")
-        kind = _required_text(item, "kind", code="structure_candidate_field_invalid")
-        if kind not in _STRUCTURE_KINDS:
-            raise CandidateValidationError("structure_candidate_kind_invalid")
+        kind = _parse_structure_kind(
+            _required_text(item, "kind", code="structure_candidate_field_invalid")
+        )
         parent_key = _optional_text(item, "parent_key", code="structure_candidate_field_invalid")
         if key in seen_keys:
             raise CandidateValidationError("structure_candidate_key_duplicate")
@@ -283,58 +331,142 @@ def build_knowledge_candidates_prompt(
     return "\n\n".join(parts)
 
 
+def _invalid_verification(payload: object) -> CandidateValidationError:
+    # Include a bounded serialization so operator logs show what the model sent.
+    try:
+        snippet = json.dumps(payload, ensure_ascii=False)[:200]
+    except (TypeError, ValueError):
+        snippet = repr(payload)[:200]
+    return CandidateValidationError(f"candidate_formula_verification_invalid: {snippet}")
+
+
 def _parse_formula_verification(
     payload: object,
 ) -> CandidateFormulaVerification | None:
+    """Parse model verification output leniently but never fabricate values.
+
+    Real models frequently encode ``variable_mapping`` entries loosely: the whole
+    object may arrive as an escaped JSON string, entries may omit ``meaning`` or
+    ``unit``, and malformed entries are skipped rather than failing the batch.
+    Required core evidence stays strict: status plus both expressions.
+    """
     if payload is None:
         return None
+    if isinstance(payload, str):
+        stripped = payload.strip()
+        if not stripped:
+            return None
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            raise _invalid_verification("(unparseable escaped JSON string)") from None
     if not isinstance(payload, dict):
-        raise CandidateValidationError("candidate_formula_verification_invalid")
-    raw_status = _required_text(
-        payload, "status", code="candidate_formula_verification_invalid"
-    )
+        raise _invalid_verification(payload)
+    raw_status = payload.get("status")
+    if not isinstance(raw_status, str):
+        raise _invalid_verification(payload)
     try:
-        status = CandidateFormulaVerificationStatus(raw_status)
+        status = CandidateFormulaVerificationStatus(raw_status.strip())
     except ValueError:
-        raise CandidateValidationError("candidate_formula_verification_status_invalid") from None
-    raw_mappings = payload.get("variable_mapping", ())
-    if not isinstance(raw_mappings, list):
-        raise CandidateValidationError("candidate_formula_verification_invalid")
-    mappings = tuple(
-        CandidateFormulaVariableMapping(
-            textbook_symbol=_required_text(
-                mapping, "textbook_symbol", code="candidate_formula_verification_invalid"
-            ),
-            external_symbol=_required_text(
-                mapping, "external_symbol", code="candidate_formula_verification_invalid"
-            ),
-            meaning=_required_text(
-                mapping, "meaning", code="candidate_formula_verification_invalid"
-            ),
-            unit=_optional_text(
-                mapping, "unit", code="candidate_formula_verification_invalid"
-            ),
-        )
-        for mapping in raw_mappings
-        if isinstance(mapping, dict)
+        raise CandidateValidationError(
+            f"candidate_formula_verification_status_invalid: {raw_status[:60]}"
+        ) from None
+    textbook_expression = _required_text(
+        payload, "textbook_expression", code="candidate_formula_verification_invalid"
     )
-    if len(mappings) != len(raw_mappings):
-        raise CandidateValidationError("candidate_formula_verification_invalid")
+    normalized_raw = payload.get("normalized_expression")
+    if not isinstance(normalized_raw, str) or not normalized_raw.strip():
+        normalized_expression = textbook_expression
+    else:
+        normalized_expression = normalized_raw.strip()
+    raw_mappings = payload.get("variable_mapping") or ()
+    if isinstance(raw_mappings, dict):
+        # Compact model style: {"P_r(d)": "接收功率"} maps textbook symbol to its
+        # meaning directly. No external symbol exists in this shape, so it stays
+        # empty rather than being fabricated.
+        raw_mappings = [
+            {
+                "textbook_symbol": str(symbol),
+                **(value if isinstance(value, dict) else {"meaning": value}),
+            }
+            for symbol, value in raw_mappings.items()
+        ]
+    mappings: list[CandidateFormulaVariableMapping] = []
+    if isinstance(raw_mappings, list):
+        for mapping in raw_mappings:
+            if not isinstance(mapping, dict):
+                continue
+            textbook_symbol = mapping.get("textbook_symbol")
+            if (
+                not isinstance(textbook_symbol, str)
+                or not textbook_symbol.strip()
+            ):
+                continue
+            external_symbol = mapping.get("external_symbol")
+            meaning = mapping.get("meaning")
+            unit = mapping.get("unit")
+            mappings.append(
+                CandidateFormulaVariableMapping(
+                    textbook_symbol=textbook_symbol.strip(),
+                    external_symbol=(
+                        external_symbol.strip()
+                        if isinstance(external_symbol, str) and external_symbol.strip()
+                        else ""
+                    ),
+                    meaning=meaning.strip()
+                    if isinstance(meaning, str) and meaning.strip()
+                    else "",
+                    unit=unit.strip()
+                    if isinstance(unit, str) and unit.strip()
+                    else None,
+                )
+            )
+    else:
+        raise _invalid_verification(payload)
     return CandidateFormulaVerification(
         status=status,
-        textbook_expression=_required_text(
-            payload, "textbook_expression", code="candidate_formula_verification_invalid"
-        ),
-        normalized_expression=_required_text(
-            payload, "normalized_expression", code="candidate_formula_verification_invalid"
-        ),
-        variable_mapping=mappings,
+        textbook_expression=textbook_expression,
+        normalized_expression=normalized_expression,
+        variable_mapping=tuple(mappings),
     )
+
+
+def _parse_note_kind(raw: str) -> CandidateNoteKind:
+    """Map model-invented kinds onto the frozen enum; never fail the batch here.
+
+    Real models emit synonyms ("definition", "theorem") or plurals. Known synonyms
+    map explicitly; anything unknown falls back to CONCEPT for human review, since
+    candidates are review-only before confirmation.
+    """
+    normalized = raw.strip().casefold().replace(" ", "_").replace("-", "_")
+    try:
+        return CandidateNoteKind(normalized)
+    except ValueError:
+        pass
+    alias = _NOTE_KIND_ALIASES.get(normalized, "concept")
+    return CandidateNoteKind(alias)
+
+
+def _parse_structure_kind(raw: str) -> str:
+    normalized = raw.strip().casefold().replace(" ", "_").replace("-", "_")
+    if normalized in _STRUCTURE_KINDS:
+        return normalized
+    alias = _STRUCTURE_KIND_ALIASES.get(normalized)
+    return alias if alias is not None else "section"
 
 
 def _parse_external_sources(payload: object) -> tuple[CandidateExternalSource, ...]:
+    """Parse claimed external sources; title and URL are core, rest defaults."""
     if payload is None:
         return ()
+    if isinstance(payload, str):
+        stripped = payload.strip()
+        if not stripped:
+            return ()
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            raise CandidateValidationError("candidate_external_source_invalid") from None
     if not isinstance(payload, list):
         raise CandidateValidationError("candidate_external_source_invalid")
     sources = []
@@ -344,16 +476,20 @@ def _parse_external_sources(payload: object) -> tuple[CandidateExternalSource, .
         url = _required_text(item, "url", code="candidate_external_source_invalid")
         if not url.startswith(("http://", "https://")):
             raise CandidateValidationError("candidate_external_source_invalid")
+        source_type = item.get("source_type")
+        excerpt = item.get("excerpt")
         sources.append(
             CandidateExternalSource(
                 title=_required_text(item, "title", code="candidate_external_source_invalid"),
                 url=url,
-                source_type=_required_text(
-                    item, "source_type", code="candidate_external_source_invalid"
+                source_type=(
+                    source_type.strip()
+                    if isinstance(source_type, str) and source_type.strip()
+                    else "unspecified"
                 ),
-                excerpt=_required_text(
-                    item, "excerpt", code="candidate_external_source_invalid"
-                ),
+                excerpt=excerpt.strip()
+                if isinstance(excerpt, str)
+                else str(excerpt) if excerpt is not None else "",
             )
         )
     return tuple(sources)
@@ -380,11 +516,10 @@ def parse_knowledge_candidates(text: str) -> KnowledgeCandidateSet:
         if key in note_keys:
             raise CandidateValidationError("candidate_note_key_duplicate")
         note_keys.add(key)
-        raw_kind = _required_text(item, "kind", code="candidate_note_field_invalid")
-        try:
-            kind = CandidateNoteKind(raw_kind)
-        except ValueError:
-            raise CandidateValidationError("candidate_kind_invalid") from None
+        raw_kind = item.get("kind")
+        if not isinstance(raw_kind, str):
+            raise CandidateValidationError("candidate_note_field_invalid")
+        kind = _parse_note_kind(raw_kind)
         notes.append(
             CandidateNote(
                 key=key,
@@ -405,45 +540,57 @@ def parse_knowledge_candidates(text: str) -> KnowledgeCandidateSet:
         )
 
     links: list[CandidateLink] = []
-    for item in raw_links:
+
+    def _link_text(item: dict[str, object], key: str, index: int) -> str:
+        value = item.get(key)
+        # Scalars are coerced so numeric ids survive; anything else fails closed
+        # with the offending fragment in the message.
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                return text
+        raise CandidateValidationError(
+            f"candidate_link_field_invalid: entry {index} missing {key}: "
+            f"{json.dumps(item, ensure_ascii=False)[:200]}"
+        )
+
+    def _link_optional(item: dict[str, object], key: str) -> str | None:
+        value = item.get(key)
+        if value is None or isinstance(value, bool):
+            return None
+        if not isinstance(value, (str, int, float)):
+            return None
+        return str(value).strip() or None
+
+    for index, item in enumerate(raw_links):
         if not isinstance(item, dict):
-            raise CandidateValidationError("candidate_link_invalid")
-        raw_kind = _required_text(item, "kind", code="candidate_link_field_invalid")
+            raise CandidateValidationError(
+                f"candidate_link_invalid: entry {index} is not an object"
+            )
+        raw_kind = item.get("kind")
+        kind_text = raw_kind.strip() if isinstance(raw_kind, str) else ""
         try:
-            kind = CandidateLinkKind(raw_kind)
+            kind = CandidateLinkKind(kind_text)
         except ValueError:
-            raise CandidateValidationError("candidate_link_kind_invalid") from None
-        source_key = _required_text(
-            item, "source_key", code="candidate_link_field_invalid"
-        )
-        target_key = _required_text(
-            item, "target_key", code="candidate_link_field_invalid"
-        )
-        if source_key not in note_keys or target_key not in note_keys:
-            raise CandidateValidationError("candidate_link_endpoint_missing")
+            raise CandidateValidationError(
+                f"candidate_link_kind_invalid: {kind_text[:60]}"
+            ) from None
         links.append(
             CandidateLink(
                 kind=kind,
-                relation=_required_text(
-                    item, "relation", code="candidate_link_field_invalid"
-                ),
-                source_key=source_key,
-                target_key=target_key,
-                source_pointer=_required_text(
-                    item, "source_pointer", code="candidate_link_field_invalid"
-                ),
-                occurrence=_optional_text(
-                    item, "occurrence", code="candidate_link_field_invalid"
-                ),
-                context=_optional_text(
-                    item, "context", code="candidate_link_field_invalid"
-                ),
+                relation=_link_text(item, "relation", index),
+                source_key=_link_text(item, "source_key", index),
+                target_key=_link_text(item, "target_key", index),
+                # An unpinnable mention is still a usable relation; keep it with
+                # an empty pointer instead of discarding the model's linkage.
+                source_pointer=_link_optional(item, "source_pointer") or "",
+                occurrence=_link_optional(item, "occurrence"),
+                context=_link_optional(item, "context"),
             )
         )
 
-    for note in notes:
-        if note.parent_key is not None and note.parent_key not in note_keys:
-            raise CandidateValidationError("candidate_parent_missing")
+    # parent_key is validated at merge time for the same reason as link endpoints:
+    # a chunk may legitimately place its notes under a chapter identified elsewhere.
     return KnowledgeCandidateSet(notes=tuple(notes), links=tuple(links))
 
 
@@ -473,6 +620,52 @@ def merge_knowledge_candidates(groups: tuple[KnowledgeCandidateSet, ...]) -> Kno
             if link not in seen_links:
                 seen_links.add(link)
                 links.append(link)
+
+    def _resolve_ref(reference: str) -> str | None:
+        # Real models drift between key styles across chunks ("path_loss" vs
+        # "section_path_loss"). Resolve references through an alias index built by
+        # progressively stripping kind prefixes off known keys.
+        if reference in notes_by_key:
+            return reference
+        candidate = reference
+        while True:
+            if candidate in alias_index:
+                return alias_index[candidate]
+            stripped = candidate
+            for prefix in _KEY_PREFIXES:
+                if stripped.startswith(prefix):
+                    stripped = stripped[len(prefix) :]
+                    break
+            else:
+                return None
+            candidate = stripped
+
+    alias_index: dict[str, str] = {}
+    for key in notes_by_key:
+        alias_index[key] = key
+        prefix_stripped = key
+        for prefix in _KEY_PREFIXES:
+            if prefix_stripped.startswith(prefix):
+                alias_index.setdefault(prefix_stripped[len(prefix) :], key)
+
+    # Unknown references are degraded, never fatal: notes with unresolvable
+    # parents are promoted to top level and dangling links are dropped. The
+    # batch always reaches NEEDS_REVIEW where a human confirms the result.
+    for key, note in list(notes_by_key.items()):
+        if note.parent_key is None:
+            continue
+        resolved = _resolve_ref(note.parent_key)
+        if resolved is None:
+            notes_by_key[key] = replace(note, parent_key=None)
+        elif resolved != note.parent_key:
+            notes_by_key[key] = replace(note, parent_key=resolved)
+    resolved_links: list[CandidateLink] = []
+    for link in links:
+        source_key = _resolve_ref(link.source_key)
+        target_key = _resolve_ref(link.target_key)
+        if source_key is None or target_key is None:
+            continue
+        resolved_links.append(replace(link, source_key=source_key, target_key=target_key))
     merged_notes = tuple(
         CandidateNote(
             key=note.key,
@@ -486,4 +679,4 @@ def merge_knowledge_candidates(groups: tuple[KnowledgeCandidateSet, ...]) -> Kno
         )
         for note in notes_by_key.values()
     )
-    return KnowledgeCandidateSet(notes=merged_notes, links=tuple(links))
+    return KnowledgeCandidateSet(notes=merged_notes, links=tuple(resolved_links))

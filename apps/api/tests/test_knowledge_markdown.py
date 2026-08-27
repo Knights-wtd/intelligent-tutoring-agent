@@ -216,12 +216,6 @@ def test_candidate_response_keeps_hierarchy_and_reuses_one_canonical_term_note()
             '"source_pointers":["page:1#0"]}],"links":[]}',
             "candidate_contains_wikilink",
         ),
-        (
-            '{"notes":[{"key":"n","title":"路径损耗","kind":"concept",'
-            '"parent_key":"missing","markdown":"定义",'
-            '"source_pointers":["page:1#0"]}],"links":[]}',
-            "candidate_parent_missing",
-        ),
     ],
 )
 def test_candidate_response_fails_closed_before_user_confirmation(
@@ -229,6 +223,49 @@ def test_candidate_response_fails_closed_before_user_confirmation(
 ) -> None:
     with pytest.raises(MarkdownValidationError, match=error_code):
         parse_knowledge_candidates(payload)
+
+
+def test_merge_demotes_notes_with_unknown_parents_and_drops_dangling_links() -> None:
+    # 真实模型跨块引用时键名漂移不可避免：无法解析的父级提升为顶层笔记，
+    # 悬空链接丢弃——批次必须始终到达人工审阅，而不是静默报废。
+    first = parse_knowledge_candidates(
+        '{"notes":[{"key":"section_path_loss","title":"路径损耗","kind":"section",'
+        '"parent_key":null,"markdown":"# 路径损耗","source_pointers":["page:8#0"]}],'
+        '"links":[]}'
+    )
+    second = parse_knowledge_candidates(
+        '{"notes":[{"key":"sec-3-2","title":"相干带宽","kind":"section",'
+        '"parent_key":"ghost-chapter","markdown":"# 相干带宽",'
+        '"source_pointers":["page:12#0"]}],'
+        '"links":[{"kind":"term","relation":"mentions","source_key":"sec-3-2",'
+        '"target_key":"term-nowhere","source_pointer":"page:12#0"}]}'
+    )
+
+    merged = merge_knowledge_candidates((first, second))
+
+    assert [note.key for note in merged.notes] == [
+        "section_path_loss",
+        "sec-3-2",
+    ]
+    assert merged.notes[1].parent_key is None
+    assert merged.links == ()
+
+
+def test_merge_resolves_parent_aliases_across_chunks() -> None:
+    first = parse_knowledge_candidates(
+        '{"notes":[{"key":"section_path_loss","title":"路径损耗","kind":"section",'
+        '"parent_key":null,"markdown":"# 路径损耗","source_pointers":["page:8#0"]}],'
+        '"links":[]}'
+    )
+    second = parse_knowledge_candidates(
+        '{"notes":[{"key":"free_space_model","title":"自由空间模型","kind":"concept",'
+        '"parent_key":"path_loss","markdown":"# 自由空间模型",'
+        '"source_pointers":["page:9#0"]}],"links":[]}'
+    )
+
+    merged = merge_knowledge_candidates((first, second))
+
+    assert [note.parent_key for note in merged.notes] == [None, "section_path_loss"]
 
 
 def test_structure_stage_only_identifies_chapter_section_and_subsection() -> None:
@@ -325,3 +362,30 @@ def test_candidate_results_merge_repeated_terms_to_one_canonical_note() -> None:
         "docx#block=150",
         "docx#block=980",
     ]
+
+
+def test_parse_tolerates_links_referencing_terms_defined_in_other_chunks() -> None:
+    candidates = parse_knowledge_candidates(
+        '{"notes":[{"key":"sec-3-2","title":"相干带宽","kind":"section",'
+        '"parent_key":null,"markdown":"# 相干带宽","source_pointers":["page:12#0"]}],'
+        '"links":[{"kind":"term","relation":"mentions","source_key":"sec-3-2",'
+        '"target_key":"term-path-loss","source_pointer":"page:12#0",'
+        '"occurrence":"路径损耗","context":"引用其他小节定义的术语"}]}'
+    )
+
+    assert [link.target_key for link in candidates.links] == ["term-path-loss"]
+
+
+def test_merge_drops_links_whose_endpoints_exist_nowhere() -> None:
+    # 跨块键名漂移不可避免：悬空链接静默丢弃，避免整批报废。
+    parsed = parse_knowledge_candidates(
+        '{"notes":[{"key":"sec-x","title":"孤立小节","kind":"section",'
+        '"parent_key":null,"markdown":"# 孤立小节","source_pointers":["page:20#0"]}],'
+        '"links":[{"kind":"term","relation":"mentions","source_key":"sec-x",'
+        '"target_key":"term-nowhere","source_pointer":"page:20#0"}]}'
+    )
+
+    merged = merge_knowledge_candidates((parsed,))
+
+    assert merged.links == ()
+    assert [note.key for note in merged.notes] == ["sec-x"]
