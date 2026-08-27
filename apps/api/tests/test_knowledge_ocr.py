@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from tutor_api.knowledge.parsers import (
     ParsedDocument,
     ParsedPage,
 )
+
+_CREATE_SUSPENDED = getattr(subprocess, "CREATE_SUSPENDED", 0x00000004)
 
 
 def _block(text: str, *, page_number: int, order: int, source_name: str) -> ParsedBlock:
@@ -415,6 +418,259 @@ sys.stdout.buffer.write(b" recognized\\x00\\r\\ntext \\n")
     assert input_file.read_bytes() == b"P5\n1 1\n255\n\x00"
 
 
+def test_tesseract_child_environment_filters_coverage_and_preserves_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    environment_file = tmp_path / "environment.txt"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_ENV_MARKER", "ocr-marker")
+    monkeypatch.setenv("KNOWLEDGE_BUSINESS_MARKER", "business-marker")
+    coverage_variables = (
+        "COV_CORE_SOURCE",
+        "COV_CORE_CONFIG",
+        "COV_CORE_DATAFILE",
+        "COV_CORE_BRANCH",
+        "COVERAGE_PROCESS_START",
+    )
+    for index, variable in enumerate(coverage_variables):
+        monkeypatch.setenv(variable, f"coverage-{index}")
+
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+from pathlib import Path
+
+Path(os.environ["OCR_ENV_FILE"]).write_text(
+    "\\n".join(f"{key}={value}" for key, value in sorted(os.environ.items())),
+    encoding="utf-8",
+)
+print("recognized")
+""",
+    )
+    monkeypatch.setenv("OCR_ENV_FILE", str(environment_file))
+    parent_environment = dict(os.environ)
+    captured_environments: list[dict[str, str]] = []
+    real_popen = ocr_module.subprocess.Popen
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        captured_environments.append(dict(kwargs["env"]))
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(ocr_module.subprocess, "Popen", recording_popen)
+
+    assert TesseractOCRAdapter(executable=sys.executable).extract_text(
+        b"image",
+        languages=("eng",),
+    ) == "recognized"
+
+    child_environment = captured_environments[0]
+    assert all(variable not in child_environment for variable in coverage_variables)
+    assert child_environment["OCR_ENV_MARKER"] == "ocr-marker"
+    assert child_environment["KNOWLEDGE_BUSINESS_MARKER"] == "business-marker"
+    assert environment_file.read_text(encoding="utf-8").splitlines() == [
+        f"{key}={value}"
+        for key, value in sorted(child_environment.items())
+    ]
+    assert dict(os.environ) == parent_environment
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX deadline contract")
+def test_tesseract_posix_deadline_is_created_before_popen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    def recording_monotonic() -> float:
+        events.append("deadline")
+        return 100.0
+
+    def failing_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        del args
+        events.append("popen")
+        assert kwargs["start_new_session"] is True
+        raise OSError("private Popen failure")
+
+    monkeypatch.setattr(ocr_module.time, "monotonic", recording_monotonic)
+    monkeypatch.setattr(ocr_module.subprocess, "Popen", failing_popen)
+
+    with pytest.raises(OCRError) as raised:
+        TesseractOCRAdapter(
+            executable="ignored",
+            timeout_seconds=1.0,
+            max_output_bytes=1024,
+        ).extract_text(b"image", languages=("eng",))
+
+    assert raised.value.code is OCRErrorCode.PROCESSING_FAILED
+    assert events == ["deadline", "popen"]
+
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows secure startup contract")
+def test_tesseract_windows_deadline_starts_after_job_assignment_and_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class FakeStream:
+        def close(self) -> None:
+            pass
+
+    class FakeProcess:
+        pid = 1234
+        returncode = 0
+
+        def __init__(self) -> None:
+            self.stdin = FakeStream()
+            self.stdout = FakeStream()
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return 0
+
+    process = FakeProcess()
+
+    class FakeBoundary:
+        def __init__(self, owned_process: FakeProcess) -> None:
+            assert owned_process is process
+            events.append("job-assigned")
+
+        @property
+        def windows_job_assigned(self) -> bool:
+            return True
+
+        def terminate(self) -> None:
+            events.append("terminate")
+
+        def close(self) -> None:
+            events.append("close")
+
+    class FakeThread:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+
+        def start(self) -> None:
+            pass
+
+        def join(self, timeout: float | None = None) -> None:
+            del timeout
+
+    def recording_popen(*args: object, **kwargs: object) -> FakeProcess:
+        del args
+        events.append("popen")
+        assert kwargs["creationflags"] & _CREATE_SUSPENDED
+        return process
+
+    def recording_resume(process_id: int) -> bool:
+        assert process_id == process.pid
+        events.append("resume")
+        return True
+
+    monotonic_values = iter((100.0, 101.0))
+
+    def recording_monotonic() -> float:
+        events.append("deadline")
+        return next(monotonic_values)
+
+    monkeypatch.setattr(ocr_module.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(ocr_module, "_ProcessBoundary", FakeBoundary)
+    monkeypatch.setattr(ocr_module, "_resume_windows_process", recording_resume)
+    monkeypatch.setattr(ocr_module.threading, "Thread", FakeThread)
+    monkeypatch.setattr(ocr_module.time, "monotonic", recording_monotonic)
+
+    with pytest.raises(OCRError) as raised:
+        TesseractOCRAdapter(
+            executable="ignored",
+            timeout_seconds=0.5,
+            max_output_bytes=1024,
+        ).extract_text(b"image", languages=("eng",))
+
+    assert raised.value.code is OCRErrorCode.TIMEOUT
+    assert events.index("popen") < events.index("job-assigned")
+    assert events.index("job-assigned") < events.index("resume")
+    assert events.index("resume") < events.index("deadline")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows suspended process and cleanup behavior")
+def test_tesseract_windows_resume_failure_cleans_suspended_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    side_effect_file = tmp_path / "resume-must-not-run.txt"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCR_SIDE_EFFECT_FILE", str(side_effect_file))
+    _write_tesseract_helper(
+        tmp_path,
+        """import os
+import time
+from pathlib import Path
+
+Path(os.environ["OCR_SIDE_EFFECT_FILE"]).write_text("ran", encoding="ascii")
+time.sleep(5)
+""",
+    )
+    real_popen = ocr_module.subprocess.Popen
+    processes: list[subprocess.Popen[bytes]] = []
+    resume_calls: list[int] = []
+    terminate_calls: list[int] = []
+    close_calls: list[int] = []
+
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        creationflags = kwargs["creationflags"]
+        assert isinstance(creationflags, int)
+        assert kwargs["creationflags"] & _CREATE_SUSPENDED
+        assert creationflags & subprocess.CREATE_NEW_PROCESS_GROUP
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    def fake_create_windows_job(process: subprocess.Popen[bytes]) -> int:
+        assert process is processes[0]
+        return 1
+
+    def failing_resume(process_id: int) -> bool:
+        resume_calls.append(process_id)
+        return False
+
+    def terminate_suspended_child(job_handle: int) -> None:
+        terminate_calls.append(job_handle)
+        processes[0].terminate()
+        processes[0].wait(timeout=1.0)
+
+    def close_fake_job(job_handle: int) -> None:
+        close_calls.append(job_handle)
+
+    monkeypatch.setattr(ocr_module.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(ocr_module, "_create_windows_job", fake_create_windows_job)
+    monkeypatch.setattr(ocr_module, "_resume_windows_process", failing_resume)
+    monkeypatch.setattr(ocr_module, "_terminate_windows_job", terminate_suspended_child)
+    monkeypatch.setattr(ocr_module, "_close_windows_handle", close_fake_job)
+
+    try:
+        with pytest.raises(OCRError) as raised:
+            TesseractOCRAdapter(
+                executable=sys.executable,
+                timeout_seconds=1.0,
+            ).extract_text(b"image", languages=("eng",))
+
+        assert raised.value.code is OCRErrorCode.PROCESSING_FAILED
+        assert raised.value.__cause__ is None
+        assert raised.value.__context__ is None
+        assert len(processes) == 1
+        assert resume_calls == [processes[0].pid]
+        assert terminate_calls == [1]
+        assert close_calls == [1]
+        assert not side_effect_file.exists()
+        assert processes[0].poll() is not None
+    finally:
+        _stop_recorded_processes(processes)
+
+
+
 def test_tesseract_timeout_maps_to_context_free_public_code(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -651,8 +907,51 @@ time.sleep(5)
     real_popen = ocr_module.subprocess.Popen
     processes: list[subprocess.Popen[bytes]] = []
     resume_calls: list[int] = []
+    close_calls: list[int] = []
+    created_job_handles: list[int] = []
+    assigned_process_handles: list[int] = []
+
+    class FakeWinFunction:
+        def __init__(self, callback: Callable[..., object]) -> None:
+            self.callback = callback
+
+        def __call__(self, *args: object) -> object:
+            return self.callback(*args)
+
+    created_job_handle = 123
+
+    def create_job_object(*args: object) -> int:
+        del args
+        created_job_handles.append(created_job_handle)
+        return created_job_handle
+
+    def set_job_information(*args: object) -> bool:
+        del args
+        return True
+
+    def fail_job_assignment(job_handle: int, process_handle: int) -> bool:
+        assigned_process_handles.append(process_handle)
+        assert job_handle == created_job_handle
+        return False
+
+    def close_job_handle(job_handle: int) -> bool:
+        close_calls.append(job_handle)
+        return True
+
+    class FakeKernel32:
+        def __init__(self) -> None:
+            self.CreateJobObjectW = FakeWinFunction(create_job_object)
+            self.SetInformationJobObject = FakeWinFunction(set_job_information)
+            self.AssignProcessToJobObject = FakeWinFunction(fail_job_assignment)
+            self.CloseHandle = FakeWinFunction(close_job_handle)
+
+    fake_kernel32 = FakeKernel32()
 
     def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        creationflags = kwargs["creationflags"]
+        assert isinstance(creationflags, int)
+        assert creationflags & _CREATE_SUSPENDED
+        assert creationflags & subprocess.CREATE_NEW_PROCESS_GROUP
         process = real_popen(*args, **kwargs)
         processes.append(process)
         return process
@@ -662,7 +961,7 @@ time.sleep(5)
         return False
 
     monkeypatch.setattr(ocr_module.subprocess, "Popen", recording_popen)
-    monkeypatch.setattr(ocr_module, "_create_windows_job", lambda process: None)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: fake_kernel32)
     monkeypatch.setattr(ocr_module, "_resume_windows_process", forbidden_resume)
 
     try:
@@ -676,6 +975,9 @@ time.sleep(5)
         assert raised.value.__cause__ is None
         assert raised.value.__context__ is None
         assert resume_calls == []
+        assert created_job_handles == [created_job_handle]
+        assert assigned_process_handles == [processes[0]._handle]
+        assert close_calls == [created_job_handle]
         assert not side_effect_file.exists()
         assert len(processes) == 1
         assert processes[0].poll() is not None

@@ -1,3 +1,4 @@
+import struct
 from collections.abc import Generator
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from tutor_api.knowledge.indexing import (
     ChunkingConfig,
     IndexBuildRequest,
     IndexingError,
+    _embedding_values_match_with_pgvector_precision,
     build_index,
     chunk_source_blocks,
     content_sha256,
@@ -175,7 +177,10 @@ def test_heading_aware_chunks_keep_context_and_bound_overlap() -> None:
         assert shared <= 18
 
 
-@pytest.mark.parametrize("maximum,overlap", [(0, 0), (20, -1), (20, 20), (20, 21), (500000, 1)])
+@pytest.mark.parametrize(
+    "maximum,overlap",
+    [(True, 0), (0, 0), (20, False), (20, -1), (20, 20), (20, 21), (500000, 1)],
+)
 def test_chunking_bounds_fail_closed(maximum: int, overlap: int) -> None:
     with pytest.raises(ValueError):
         ChunkingConfig(max_chars=maximum, overlap_chars=overlap)
@@ -204,6 +209,54 @@ def test_signatures_are_stable_versioned_and_domain_separated() -> None:
     assert parser.startswith("tutor:parser:v1:") and parser != ocr
     assert signature.startswith("tutor:index:v1:") and len(signature.rsplit(":", 1)[1]) == 64
     assert moved_source != signature
+
+
+def test_persisted_embedding_accepts_pgvector_float4_text_roundtrip() -> None:
+    # PostgreSQL/pgvector can return float4 as text such as -0.15858996;
+    # parsing that text yields a Python float64 distinct from the float4 canonical value.
+    persisted = [float("-0.15858996")]
+    expected = [-0.15858995914459229]
+
+    assert _embedding_values_match_with_pgvector_precision(persisted, expected)
+
+
+def test_persisted_embedding_rejects_signed_zero_float4_bit_pattern_mismatch() -> None:
+    persisted = [struct.unpack("<f", struct.pack("<I", 0x80000000))[0]]
+    expected = [struct.unpack("<f", struct.pack("<I", 0x00000000))[0]]
+
+    assert persisted == expected
+    assert struct.pack("<f", persisted[0]) != struct.pack("<f", expected[0])
+    assert not _embedding_values_match_with_pgvector_precision(persisted, expected)
+
+
+def test_persisted_embedding_accepts_values_in_the_same_float4_bin() -> None:
+    assert _embedding_values_match_with_pgvector_precision([1.0], [1.0 + 2**-24])
+
+
+def test_persisted_embedding_rejects_different_float4_values() -> None:
+    assert not _embedding_values_match_with_pgvector_precision([1.0 + 2**-23], [1.0])
+
+
+def test_persisted_embedding_rejects_two_ulp_cross_binade_error() -> None:
+    expected = [1.9999998807907104]
+    persisted = [2.000000238418579]
+
+    assert not _embedding_values_match_with_pgvector_precision(persisted, expected)
+
+
+@pytest.mark.parametrize(
+    "persisted,expected",
+    (
+        ([], [0.0]),
+        ([float("nan")], [float("nan")]),
+        ([float("inf")], [float("inf")]),
+        ([1e39], [1e39]),
+    ),
+)
+def test_persisted_embedding_rejects_invalid_float4_inputs(
+    persisted: list[float], expected: list[float]
+) -> None:
+    assert not _embedding_values_match_with_pgvector_precision(persisted, expected)
 
 
 def test_build_persists_pointers_terms_hashes_and_embedding_contract(session: Session) -> None:
@@ -802,3 +855,165 @@ def test_multi_document_build_isolates_headings_and_namespaces_source_pointers(
     )
     assert len({chunk.source_pointer for chunk in chunks}) == len(chunks)
     assert all(str(chunk.document_version_id) in chunk.source_pointer for chunk in chunks)
+
+
+@pytest.mark.parametrize("source_case", ("missing", "cross_kb", "not_ready"))
+def test_prepare_index_build_rejects_invalid_immutable_source_contract(
+    session: Session, source_case: str
+) -> None:
+    user, space, kb = graph(session, f"source-contract-{source_case}")
+    version = add_version(
+        session,
+        user,
+        space,
+        kb,
+        "valid",
+        ((BlockKind.PARAGRAPH, "immutable source"),),
+    )
+    version_ids = (version.id,)
+    if source_case == "missing":
+        version_ids = (UUID(int=999),)
+    elif source_case == "cross_kb":
+        other_user, other_space, other_kb = graph(session, "other-source")
+        foreign = add_version(
+            session,
+            other_user,
+            other_space,
+            other_kb,
+            "foreign",
+            ((BlockKind.PARAGRAPH, "foreign immutable source"),),
+        )
+        version_ids = (foreign.id,)
+    else:
+        version.state = DocumentVersionState.FAILED
+        session.flush()
+
+    with pytest.raises(IndexingError) as captured:
+        prepare_index_build(session, request(user, space, kb, version_ids), CountingEmbedding())
+
+    assert captured.value.code == "index_source_contract_invalid"
+    assert session.scalar(select(func.count()).select_from(IndexVersion)) == 0
+
+
+def test_build_rejects_empty_ready_source_and_cleans_failed_target(session: Session) -> None:
+    user, space, kb = graph(session, "empty-source")
+    version = add_version(session, user, space, kb, "empty", ())
+
+    with pytest.raises(IndexingError) as captured:
+        build_index(session, request(user, space, kb, (version.id,)), CountingEmbedding())
+
+    session.commit()
+    failed = session.scalar(
+        select(IndexVersion).where(
+            IndexVersion.knowledge_base_id == kb.id,
+            IndexVersion.state == IndexVersionState.FAILED,
+        )
+    )
+    assert captured.value.code == "index_source_empty"
+    assert failed is not None
+    assert (
+        session.scalar(
+            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == failed.id)
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "vector",
+    (
+        [0.0] * 7,
+        [True] + [0.0] * 7,
+        ["invalid"] + [0.0] * 7,
+        [float("nan")] + [0.0] * 7,
+        [float("inf")] + [0.0] * 7,
+    ),
+)
+def test_build_rejects_malformed_embedding_without_replacing_active_index(
+    session: Session, vector: object
+) -> None:
+    class MalformedEmbedding(CountingEmbedding):
+        def embed(self, text: str):
+            self.calls.append(text)
+            return vector
+
+    user, space, kb = graph(session, "malformed-embedding")
+    stable = add_version(
+        session,
+        user,
+        space,
+        kb,
+        "stable",
+        ((BlockKind.PARAGRAPH, "stable immutable content"),),
+    )
+    active = build_index(session, request(user, space, kb, (stable.id,)), CountingEmbedding())
+    session.commit()
+    candidate = add_version(
+        session,
+        user,
+        space,
+        kb,
+        "candidate",
+        ((BlockKind.PARAGRAPH, "candidate immutable content"),),
+    )
+
+    with pytest.raises(IndexingError) as captured:
+        build_index(
+            session,
+            request(user, space, kb, (stable.id, candidate.id)),
+            MalformedEmbedding(),
+        )
+
+    session.commit()
+    current = session.scalar(
+        select(IndexVersion).where(
+            IndexVersion.knowledge_base_id == kb.id,
+            IndexVersion.state == IndexVersionState.ACTIVE,
+        )
+    )
+    failed = session.scalar(
+        select(IndexVersion).where(
+            IndexVersion.knowledge_base_id == kb.id,
+            IndexVersion.state == IndexVersionState.FAILED,
+        )
+    )
+    assert captured.value.code == "embedding_contract_invalid"
+    assert current is not None and current.id == active.index_version_id
+    assert failed is not None
+    assert (
+        session.scalar(
+            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == failed.id)
+        )
+        == 0
+    )
+
+
+def test_build_bounds_long_source_pointer_without_losing_immutable_identity(
+    session: Session,
+) -> None:
+    user, space, kb = graph(session, "long-pointer")
+    version = add_version(
+        session,
+        user,
+        space,
+        kb,
+        "pointer",
+        ((BlockKind.PARAGRAPH, "bounded pointer body"),),
+    )
+    raw_pointer = "p" * 1_000
+    block = session.scalar(
+        select(Block)
+        .join(Page, Block.page_id == Page.id)
+        .where(Page.document_version_id == version.id)
+    )
+    assert block is not None
+    block.source_pointer = raw_pointer
+    session.flush()
+
+    result = build_index(session, request(user, space, kb, (version.id,)), CountingEmbedding())
+    chunk = session.scalar(select(Chunk).where(Chunk.index_version_id == result.index_version_id))
+
+    assert chunk is not None
+    expected_pointer = f"document-version:{version.id}:sha256:{content_sha256(raw_pointer)}"
+    assert chunk.source_pointer == expected_pointer
+    assert len(chunk.source_pointer) <= 980

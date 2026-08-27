@@ -162,6 +162,12 @@ services:
       OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY is required}
       OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY is required}
       OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:?OBJECT_STORAGE_BUCKET is required}
+      FARO_API_BASE_URL: ${FARO_API_BASE_URL:-https://faroapi.com/v1}
+      FARO_API_KEY: ${FARO_API_KEY:?FARO_API_KEY is required}
+      FARO_MODEL: ${FARO_MODEL:-gemini-3.7-flash-tiered}
+      FARO_CONTEXT_WINDOW: ${FARO_CONTEXT_WINDOW:-32000}
+      FARO_TIMEOUT_SECONDS: ${FARO_TIMEOUT_SECONDS:-60}
+      FARO_MAX_CONCURRENCY: ${FARO_MAX_CONCURRENCY:-2}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:${API_PORT:-8000}"
     depends_on:
@@ -192,6 +198,12 @@ services:
       OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?OBJECT_STORAGE_ACCESS_KEY is required}
       OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?OBJECT_STORAGE_SECRET_KEY is required}
       OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:?OBJECT_STORAGE_BUCKET is required}
+      FARO_API_BASE_URL: ${FARO_API_BASE_URL:-https://faroapi.com/v1}
+      FARO_API_KEY: ${FARO_API_KEY:?FARO_API_KEY is required}
+      FARO_MODEL: ${FARO_MODEL:-gemini-3.7-flash-tiered}
+      FARO_CONTEXT_WINDOW: ${FARO_CONTEXT_WINDOW:-32000}
+      FARO_TIMEOUT_SECONDS: ${FARO_TIMEOUT_SECONDS:-60}
+      FARO_MAX_CONCURRENCY: ${FARO_MAX_CONCURRENCY:-2}
     command: ["python", "-m", "tutor_api.worker_main"]
     healthcheck:
       disable: true
@@ -204,8 +216,8 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
-      args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    environment:
+      API_INTERNAL_URL: http://api:${API_PORT:-8000}
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

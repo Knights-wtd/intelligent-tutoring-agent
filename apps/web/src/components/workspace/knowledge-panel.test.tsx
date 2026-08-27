@@ -10,6 +10,10 @@ const mockKnowledgeApi = vi.hoisted(() => ({
   upload: vi.fn(),
   search: vi.fn(),
   pagePreview: vi.fn(),
+  startCandidateGeneration: vi.fn(),
+  candidateBatch: vi.fn(),
+  confirmCandidateBatch: vi.fn(),
+  documentStatus: vi.fn(),
 }));
 
 vi.mock("@/lib/knowledge-api", async (importOriginal) => {
@@ -29,16 +33,7 @@ const knowledgeBase = {
 const uploadResponse = (overrides: Record<string, string> = {}) => ({
   document_id: "doc-1",
   document_version_id: "version-1",
-  ingestion_job_id: "job-1",
-  space_id: "space-math",
-  knowledge_base_id: "kb-math",
   source_name: "chapter.md",
-  version_number: 1,
-  content_sha256: "digest",
-  content_type: "text/markdown",
-  document_state: "PROCESSING",
-  version_state: "UPLOADED",
-  job_state: "PENDING",
   created_at: "2026-08-18T00:00:00Z",
   ...overrides,
 });
@@ -64,6 +59,7 @@ describe("KnowledgePanel", () => {
     expect(hierarchy).toHaveTextContent("尚未上传文件");
     expect(hierarchy).not.toHaveTextContent(/OCR|embedding|worker|job/i);
   });
+
   it("shows truthful bounded upload state, then a ready file state", async () => {
     const user = userEvent.setup();
     let resolveUpload: (value: ReturnType<typeof uploadResponse>) => void = () => undefined;
@@ -87,12 +83,13 @@ describe("KnowledgePanel", () => {
     );
 
     await act(async () => {
-      resolveUpload(uploadResponse({ document_state: "READY", version_state: "READY", job_state: "COMPLETED" }));
+      resolveUpload(uploadResponse());
     });
 
     const hierarchy = screen.getByLabelText("知识库内容层级");
     expect(hierarchy).toHaveTextContent("chapter.md");
-    expect(hierarchy).toHaveTextContent("可搜索");
+    expect(hierarchy).toHaveTextContent("处理中");
+    expect(hierarchy).not.toHaveTextContent("可搜索");
   });
 
   it("keeps a newly accepted active document in processing until its version completes", async () => {
@@ -298,11 +295,14 @@ describe("KnowledgePanel", () => {
     expect(screen.queryByText("上传失败，请重试。")).not.toBeInTheDocument();
   });
 
-  it("shows a learner-facing failed state returned by the upload endpoint", async () => {
+  it("shows a learner-facing failed state only after a status refresh", async () => {
     const user = userEvent.setup();
-    mockKnowledgeApi.upload.mockResolvedValue(
-      uploadResponse({ document_state: "FAILED", version_state: "FAILED", job_state: "FAILED" }),
-    );
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse());
+    mockKnowledgeApi.documentStatus.mockResolvedValue({
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      processing_state: "failed",
+    });
     render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     await user.upload(
@@ -310,8 +310,193 @@ describe("KnowledgePanel", () => {
       new File(["content"], "broken.md", { type: "text/markdown" }),
     );
     await user.click(screen.getByRole("button", { name: "上传文件" }));
-
+    expect(await screen.findByText("处理中")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "刷新处理状态" }));
     expect(await screen.findByText("处理失败")).toBeInTheDocument();
     expect(screen.queryByText(/worker|job|embedding|OCR/i)).not.toBeInTheDocument();
+  });
+  it("keeps concurrent status refreshes independent for different uploads", async () => {
+    const user = userEvent.setup();
+    const pendingStatuses = new Map<
+      string,
+      {
+        resolve: (value: {
+          document_id: string;
+          document_version_id: string;
+          processing_state: "processing" | "searchable" | "failed";
+        }) => void;
+        signal: AbortSignal;
+      }
+    >();
+    mockKnowledgeApi.upload
+      .mockResolvedValueOnce(
+        uploadResponse({ document_id: "doc-1", document_version_id: "version-1", source_name: "first.md" }),
+      )
+      .mockResolvedValueOnce(
+        uploadResponse({ document_id: "doc-2", document_version_id: "version-2", source_name: "second.md" }),
+      );
+    mockKnowledgeApi.documentStatus.mockImplementation(
+      (_knowledgeBaseId: string, documentId: string, documentVersionId: string, signal: AbortSignal) =>
+        new Promise((resolve) => {
+          pendingStatuses.set(documentId, { resolve, signal });
+          expect(documentVersionId).toMatch(/^version-[12]$/);
+        }),
+    );
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    const fileInput = screen.getByLabelText("选择学习资料");
+    await user.upload(fileInput, new File(["first"], "first.md", { type: "text/markdown" }));
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    expect(await screen.findByText("first.md")).toBeInTheDocument();
+    await user.upload(fileInput, new File(["second"], "second.md", { type: "text/markdown" }));
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    expect(await screen.findByText("second.md")).toBeInTheDocument();
+
+    const refreshButtons = screen.getAllByRole("button", { name: "刷新处理状态" });
+    await user.click(refreshButtons[0]);
+    await user.click(refreshButtons[1]);
+    expect(pendingStatuses.get("doc-1")?.signal.aborted).toBe(false);
+    expect(pendingStatuses.get("doc-2")?.signal.aborted).toBe(false);
+
+    await act(async () => {
+      pendingStatuses.get("doc-1")?.resolve({
+        document_id: "doc-1",
+        document_version_id: "version-1",
+        processing_state: "searchable",
+      });
+    });
+
+    expect(screen.getByRole("button", { name: "刷新处理状态" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "刷新中…" })).toBeDisabled();
+    expect(screen.getByText("可搜索")).toBeInTheDocument();
+  });
+
+  it("refreshes the post-upload status without exposing worker details", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse());
+    mockKnowledgeApi.documentStatus.mockResolvedValue({
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      processing_state: "searchable",
+    });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["# chapter"], "chapter.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    expect(await screen.findByText("处理中")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "刷新处理状态" }));
+
+    expect(mockKnowledgeApi.documentStatus).toHaveBeenCalledWith(
+      "kb-math",
+      "doc-1",
+      "version-1",
+      expect.any(AbortSignal),
+    );
+    expect(await screen.findByText("可搜索")).toBeInTheDocument();
+    expect(screen.queryByText(/worker|job|embedding|OCR|checkpoint/i)).not.toBeInTheDocument();
+  });
+
+
+  it("reviews structure and repeated-term links before writing formal wikilinks", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse());
+    mockKnowledgeApi.documentStatus.mockResolvedValue({
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      processing_state: "searchable",
+    });
+    const batch = {
+      id: "batch-1",
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      generation_number: 1,
+      state: "needs_review",
+      failure_code: null,
+      notes: [
+        {
+          id: "note-chapter",
+          ordinal: 0,
+          candidate_key: "ch-3",
+          title: "移动无线传播",
+          kind: "chapter",
+          parent_key: null,
+          markdown: "# 移动无线传播",
+          source_pointers: ["wireless#1"],
+          review_state: "pending",
+        },
+        {
+          id: "note-term",
+          ordinal: 1,
+          candidate_key: "term-path-loss",
+          title: "路径损耗",
+          kind: "concept",
+          parent_key: "ch-3",
+          markdown: "# 路径损耗",
+          source_pointers: ["wireless#2"],
+          review_state: "pending",
+        },
+      ],
+      links: [
+        {
+          id: "link-structure",
+          ordinal: 0,
+          kind: "structure",
+          relation: "defines",
+          source_key: "ch-3",
+          target_key: "term-path-loss",
+          source_pointer: "wireless#2",
+          occurrence: "路径损耗",
+          context: "章节定义概念",
+          review_state: "pending",
+        },
+        {
+          id: "link-term",
+          ordinal: 1,
+          kind: "term",
+          relation: "mentions",
+          source_key: "ch-3",
+          target_key: "term-path-loss",
+          source_pointer: "wireless#2",
+          occurrence: "路径损耗",
+          context: "术语出现",
+          review_state: "pending",
+        },
+      ],
+      created_at: "2026-08-24T00:00:00Z",
+      updated_at: "2026-08-24T00:00:00Z",
+    };
+    mockKnowledgeApi.startCandidateGeneration.mockResolvedValue(batch);
+    mockKnowledgeApi.confirmCandidateBatch.mockResolvedValue({
+      ...batch,
+      state: "confirmed",
+    });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["# chapter"], "chapter.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    await user.click(await screen.findByRole("button", { name: "刷新处理状态" }));
+    await screen.findByText("可搜索");
+    await user.click(screen.getByRole("button", { name: "生成知识候选" }));
+
+    expect(await screen.findByRole("heading", { name: "结构候选" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "重复术语链接" })).toBeInTheDocument();
+    expect(screen.getByText("路径损耗")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "确认并生成层级知识库" }));
+
+    expect(mockKnowledgeApi.confirmCandidateBatch).toHaveBeenCalledWith(
+      "kb-math",
+      "batch-1",
+      ["note-chapter", "note-term"],
+      ["link-structure", "link-term"],
+    );
+    expect(await screen.findByText("已写入正式知识库")).toBeInTheDocument();
   });
 });

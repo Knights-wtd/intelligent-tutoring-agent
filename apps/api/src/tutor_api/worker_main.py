@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
+from tutor_api.knowledge.formula_evidence import WikipediaFormulaEvidenceProvider
 from tutor_api.knowledge.models import IngestionJobKind
 from tutor_api.knowledge.ocr import (
     OCR_BACKEND_DISABLED,
@@ -26,9 +27,11 @@ from tutor_api.knowledge.worker import (
     JobHandler,
     WorkerConfig,
     make_build_index_handler,
+    make_markdown_draft_handler,
     make_parse_document_handler,
     run_worker_forever,
 )
+from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
 
 
 def create_session_factory(settings: Settings) -> sessionmaker[Session]:
@@ -45,6 +48,7 @@ def create_ocr_adapter(settings: Settings) -> OCRAdapter:
         return DisabledOCRAdapter()
     raise RuntimeError("ocr_backend_unsupported")
 
+
 def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]:
     """Build immutable runtime handlers from validated application settings."""
 
@@ -54,6 +58,12 @@ def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]
         dimension=settings.embedding_dimension,
     )
     object_storage = create_object_storage(settings)
+    llm_adapter = FaroOpenAICompatibleAdapter(
+        api_key=settings.faro_api_key.get_secret_value(),
+        base_url=settings.faro_api_base_url,
+        model=settings.faro_model,
+        timeout_seconds=settings.faro_timeout_seconds,
+    )
     return {
         IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
             object_storage,
@@ -65,6 +75,14 @@ def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]
             max_vault_uncompressed_bytes=settings.max_vault_uncompressed_bytes,
         ),
         IngestionJobKind.BUILD_INDEX: make_build_index_handler(adapter),
+        IngestionJobKind.GENERATE_MARKDOWN: make_markdown_draft_handler(
+            llm_adapter,
+            max_chars=max(1, settings.faro_context_window // 2),
+            max_concurrency=settings.faro_max_concurrency,
+            provider="faro",
+            model=settings.faro_model,
+            formula_evidence_provider=WikipediaFormulaEvidenceProvider(),
+        ),
     }
 
 

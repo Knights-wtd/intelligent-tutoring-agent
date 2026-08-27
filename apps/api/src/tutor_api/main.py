@@ -21,6 +21,7 @@ from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
 from tutor_api.llm.ports import TutorChatAdapter
 from tutor_api.providers.router import router as providers_router
 from tutor_api.providers.service import synchronize_provider_profiles
+from tutor_api.question_bank.router import router as question_bank_router
 from tutor_api.spaces.router import router as spaces_router
 from tutor_api.tutor.router import router as tutor_router
 
@@ -96,6 +97,7 @@ def create_app(
     app.include_router(knowledge_router)
     app.include_router(tutor_router)
     app.include_router(providers_router)
+    app.include_router(question_bank_router)
     app.include_router(billing_router)
     app.include_router(admin_router)
 

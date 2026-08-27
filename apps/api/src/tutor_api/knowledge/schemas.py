@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -34,17 +35,14 @@ class KnowledgeBaseResponse(BaseModel):
 class KnowledgeUploadResponse(BaseModel):
     document_id: UUID
     document_version_id: UUID
-    ingestion_job_id: UUID
-    space_id: UUID
-    knowledge_base_id: UUID
     source_name: str
-    version_number: int
-    content_sha256: str
-    content_type: str
-    document_state: str
-    version_state: str
-    job_state: str
     created_at: datetime
+
+
+class KnowledgeDocumentStatusResponse(BaseModel):
+    document_id: UUID
+    document_version_id: UUID
+    processing_state: Literal["processing", "searchable", "failed"]
 
 
 class KnowledgeGraphNodeResponse(BaseModel):
@@ -93,3 +91,60 @@ class KnowledgeSearchResultResponse(BaseModel):
 
 class KnowledgeSearchResponse(BaseModel):
     results: list[KnowledgeSearchResultResponse]
+
+
+class CreateKnowledgeCandidateBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_version_id: UUID
+
+
+class ConfirmKnowledgeCandidateBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    accepted_note_ids: list[UUID]
+    accepted_link_ids: list[UUID]
+
+
+class KnowledgeCandidateNoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    ordinal: int
+    candidate_key: str
+    title: str
+    kind: str
+    parent_key: str | None
+    markdown: str
+    source_pointers: list[str]
+    formula_verification: dict[str, object] | None
+    external_sources: list[dict[str, str]]
+    review_state: str
+
+
+class KnowledgeCandidateLinkResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    ordinal: int
+    kind: str
+    relation: str
+    source_key: str
+    target_key: str
+    source_pointer: str
+    occurrence: str | None
+    context: str
+    review_state: str
+
+
+class KnowledgeCandidateBatchResponse(BaseModel):
+    id: UUID
+    document_id: UUID
+    document_version_id: UUID
+    generation_number: int
+    state: str
+    failure_code: str | None
+    notes: list[KnowledgeCandidateNoteResponse]
+    links: list[KnowledgeCandidateLinkResponse]
+    created_at: datetime
+    updated_at: datetime

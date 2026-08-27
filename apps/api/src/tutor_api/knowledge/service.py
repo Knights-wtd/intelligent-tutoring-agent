@@ -31,10 +31,13 @@ from tutor_api.knowledge.indexing import (
 from tutor_api.knowledge.models import (
     Block,
     BlockKind,
+    Chunk,
     Document,
     DocumentState,
     DocumentVersion,
     DocumentVersionState,
+    IndexVersion,
+    IndexVersionState,
     IngestionJob,
     IngestionJobKind,
     IngestionJobState,
@@ -112,6 +115,70 @@ def get_knowledge_base(
 ) -> KnowledgeBase:
     return get_readable_knowledge_base(session, user, knowledge_base_id)
 
+
+def get_document_processing_state(
+    session: Session,
+    user: User,
+    knowledge_base_id: UUID,
+    document_id: UUID,
+    document_version_id: UUID,
+) -> str:
+    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
+    document = session.scalar(
+        select(Document).where(
+            Document.id == document_id,
+            Document.knowledge_base_id == knowledge_base.id,
+            Document.space_id == knowledge_base.space_id,
+        )
+    )
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
+
+    version = session.scalar(
+        select(DocumentVersion).where(
+            DocumentVersion.id == document_version_id,
+            DocumentVersion.document_id == document.id,
+            DocumentVersion.knowledge_base_id == knowledge_base.id,
+            DocumentVersion.space_id == knowledge_base.space_id,
+        )
+    )
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资料不存在")
+    if version.state == DocumentVersionState.FAILED:
+        return "failed"
+
+    indexed = session.scalar(
+        select(Chunk.id)
+        .join(IndexVersion, Chunk.index_version_id == IndexVersion.id)
+        .where(
+            Chunk.document_version_id == version.id,
+            Chunk.knowledge_base_id == knowledge_base.id,
+            Chunk.space_id == knowledge_base.space_id,
+            IndexVersion.knowledge_base_id == knowledge_base.id,
+            IndexVersion.space_id == knowledge_base.space_id,
+            IndexVersion.state == IndexVersionState.ACTIVE,
+        )
+        .limit(1)
+    )
+    if indexed is not None:
+        return "searchable"
+
+    failed_jobs = session.scalars(
+        select(IngestionJob).where(
+            IngestionJob.knowledge_base_id == knowledge_base.id,
+            IngestionJob.space_id == knowledge_base.space_id,
+            IngestionJob.state == IngestionJobState.FAILED,
+        )
+    )
+    for job in failed_jobs:
+        if job.kind in {IngestionJobKind.PARSE_DOCUMENT, IngestionJobKind.OCR_PAGE}:
+            if job.document_id == document.id and job.document_version_id == version.id:
+                return "failed"
+        elif job.kind == IngestionJobKind.BUILD_INDEX:
+            version_ids = job.checkpoint.get("document_version_ids", [])
+            if str(version.id) in version_ids:
+                return "failed"
+    return "processing"
 
 _UPLOAD_SOURCE_KIND = "upload"
 _UPLOAD_REQUEST_KEY_CONSTRAINT = "uq_knowledge_upload_request_key"

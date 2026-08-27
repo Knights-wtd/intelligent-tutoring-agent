@@ -50,16 +50,7 @@ describe("knowledgeApi", () => {
     const payload = {
       document_id: "doc-1",
       document_version_id: "version-1",
-      ingestion_job_id: "job-1",
-      space_id: "space-1",
-      knowledge_base_id: "kb-1",
       source_name: "chapter.md",
-      version_number: 1,
-      content_sha256: "abc",
-      content_type: "text/markdown",
-      document_state: "PROCESSING",
-      version_state: "UPLOADED",
-      job_state: "PENDING",
       created_at: "2026-08-18T00:00:00Z",
     };
     const fetchMock = vi.fn().mockResolvedValue(
@@ -67,12 +58,13 @@ describe("knowledgeApi", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await knowledgeApi.upload(
+    const upload = await knowledgeApi.upload(
       "kb/1",
       new File(["# chapter"], "chapter.md", { type: "text/markdown" }),
       "upload-key-1",
     );
 
+    expect(upload).toEqual(payload);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/knowledge-bases/kb%2F1/documents");
     expect(init.credentials).toBe("include");
@@ -148,6 +140,7 @@ describe("knowledgeApi", () => {
     expect(String(error)).not.toContain("credentials");
   });
 
+
   it("loads a knowledge graph with an encoded knowledge base id", async () => {
     const graph = {
       knowledge_base_id: "kb/1",
@@ -162,6 +155,67 @@ describe("knowledgeApi", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/knowledge-bases/kb%2F1/graph",
       expect.objectContaining({ credentials: "include" }),
+    );
+  });
+  it("starts, loads, and confirms a review-only candidate batch", async () => {
+    const batch = {
+      id: "batch-1",
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      generation_number: 1,
+      state: "needs_review",
+      failure_code: null,
+      notes: [],
+      links: [],
+      created_at: "2026-08-24T00:00:00Z",
+      updated_at: "2026-08-24T00:00:00Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(batch), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(batch), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...batch, state: "confirmed" }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await knowledgeApi.startCandidateGeneration(
+      "kb/1",
+      "version-1",
+      "candidate-key",
+    );
+    await knowledgeApi.candidateBatch("kb/1", "batch-1");
+    await knowledgeApi.confirmCandidateBatch(
+      "kb/1",
+      "batch-1",
+      ["note-1"],
+      ["link-1"],
+    );
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/knowledge-bases/kb%2F1/candidate-batches",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "Idempotency-Key": "candidate-key" }),
+        body: JSON.stringify({ document_version_id: "version-1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/knowledge-bases/kb%2F1/candidate-batches/batch-1",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/v1/knowledge-bases/kb%2F1/candidate-batches/batch-1/confirm",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          accepted_note_ids: ["note-1"],
+          accepted_link_ids: ["link-1"],
+        }),
+      }),
     );
   });
 });

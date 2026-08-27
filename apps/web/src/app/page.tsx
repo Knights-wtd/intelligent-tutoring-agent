@@ -29,5 +29,17 @@ export default function HomePage() {
 
   if (spaces === null) return null;
   if (spaces.length === 0) return <AuthForm mode="login" />;
-  return <WorkspaceShell spaces={spaces} />;
+  return (
+    <WorkspaceShell
+      spaces={spaces}
+      onClassroomAdded={(classroomSpace) => {
+        setSpaces((current) => {
+          if (current === null || current.some((space) => space.id === classroomSpace.id)) {
+            return current;
+          }
+          return [...current, classroomSpace];
+        });
+      }}
+    />
+  );
 }

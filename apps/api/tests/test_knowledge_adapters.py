@@ -1,4 +1,5 @@
 import math
+import sys
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +22,8 @@ from tutor_api.knowledge.ocr import (
 from tutor_api.knowledge.storage import (
     MemoryObjectStorage,
     ObjectAlreadyExistsError,
+    ObjectNotFoundError,
+    ObjectRangeNotSatisfiableError,
     ObjectSizeLimitError,
     S3ObjectStorage,
     build_document_object_key,
@@ -139,6 +142,8 @@ def test_s3_signed_request_does_not_follow_redirect_or_leak_sensitive_headers() 
         target.server_close()
         source_thread.join(timeout=2)
         target_thread.join(timeout=2)
+        assert not source_thread.is_alive()
+        assert not target_thread.is_alive()
 
 
 def test_s3_http_error_is_closed_before_stable_failure() -> None:
@@ -172,9 +177,16 @@ def test_s3_http_error_is_closed_before_stable_failure() -> None:
 
 
 class _FakeStorageResponse:
-    def __init__(self, chunks: list[bytes], headers: dict[str, str]) -> None:
+    def __init__(
+        self,
+        chunks: list[bytes],
+        headers: dict[str, str],
+        *,
+        status: int = 200,
+    ) -> None:
         self._chunks = iter(chunks)
         self.headers = headers
+        self.status = status
         self.closed = False
         self.read_sizes: list[int] = []
 
@@ -332,6 +344,448 @@ def test_memory_object_storage_allows_exactly_one_concurrent_writer() -> None:
 
     assert sorted(results) == [False, True]
     assert storage.get_object("shared-key").data in {b"first", b"second"}
+
+
+def test_memory_object_storage_returns_a_bounded_range_with_metadata() -> None:
+    storage = MemoryObjectStorage()
+    storage.put_if_absent(
+        "document.pdf",
+        b"abcdef",
+        content_type="application/pdf",
+    )
+
+    stored = storage.get_object_range("document.pdf", start=2, length=3)
+
+    assert stored.data == b"cde"
+    assert stored.content_type == "application/pdf"
+    assert stored.start == 2
+    assert stored.total_size == 6
+
+
+@pytest.mark.parametrize(
+    ("start", "length"),
+    [
+        pytest.param(True, 1, id="boolean-start"),
+        pytest.param(0, True, id="boolean-length"),
+        pytest.param("0", 1, id="string-start"),
+        pytest.param(0, 1.0, id="float-length"),
+        pytest.param(-1, 1, id="negative-start"),
+        pytest.param(0, 0, id="zero-length"),
+        pytest.param(0, -1, id="negative-length"),
+        pytest.param(0, 5, id="length-over-storage-limit"),
+        pytest.param(4, 1, id="start-past-object-end"),
+    ],
+)
+def test_memory_object_storage_range_fails_closed_for_invalid_bounds(
+    start: object,
+    length: object,
+) -> None:
+    storage = MemoryObjectStorage(max_object_bytes=4)
+    storage.put_if_absent("document.pdf", b"data", content_type="application/pdf")
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=start, length=length)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+
+
+def test_memory_object_storage_range_preserves_missing_object_error() -> None:
+    storage = MemoryObjectStorage()
+
+    with pytest.raises(ObjectNotFoundError) as error:
+        storage.get_object_range("missing.pdf", start=0, length=1)
+
+    assert str(error.value) == "object_not_found"
+
+
+def test_s3_range_accepts_a_valid_206_content_range() -> None:
+    received_ranges: list[str | None] = []
+
+    class RangeHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            received_ranges.append(self.headers.get("Range"))
+            self.send_response(206)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Range", "bytes 2-4/6")
+            self.send_header("Content-Length", "3")
+            self.end_headers()
+            self.wfile.write(b"cde")
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RangeHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        storage = S3ObjectStorage(
+            endpoint=f"http://127.0.0.1:{server.server_port}",
+            access_key="access",
+            secret_key="secret",
+            bucket="bucket",
+            max_object_bytes=1024,
+        )
+
+        stored = storage.get_object_range("document.pdf", start=2, length=3)
+
+        assert received_ranges == ["bytes=2-4"]
+        assert stored.data == b"cde"
+        assert stored.content_type == "application/pdf"
+        assert stored.start == 2
+        assert stored.total_size == 6
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+
+
+def test_s3_range_accepts_a_valid_200_fallback_without_content_range() -> None:
+    class FallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", "3")
+            self.end_headers()
+            self.wfile.write(b"abc")
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), FallbackHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        storage = S3ObjectStorage(
+            endpoint=f"http://127.0.0.1:{server.server_port}",
+            access_key="access",
+            secret_key="secret",
+            bucket="bucket",
+            max_object_bytes=1024,
+        )
+
+        stored = storage.get_object_range("document.pdf", start=0, length=3)
+
+        assert stored.data == b"abc"
+        assert stored.start == 0
+        assert stored.total_size == 3
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+@pytest.mark.parametrize(
+    ("status", "headers"),
+    [
+        pytest.param(
+            200,
+            {"Content-Range": "bytes 0-2/3"},
+            id="full-response-with-content-range",
+        ),
+        pytest.param(
+            206,
+            {"Content-Length": "3"},
+            id="partial-response-without-content-range",
+        ),
+    ],
+)
+def test_s3_range_rejects_inconsistent_status_and_content_range_and_closes(
+    status: int,
+    headers: dict[str, str],
+) -> None:
+    response = _FakeStorageResponse([b"abc"], headers, status=status)
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=0, length=3)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert response.read_sizes == []
+    assert response.closed
+
+
+def test_s3_range_rejects_truncated_206_body_and_closes() -> None:
+    response = _FakeStorageResponse(
+        [b"cd"],
+        {
+            "Content-Type": "application/pdf",
+            "Content-Range": "bytes 2-4/6",
+        },
+        status=206,
+    )
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=2, length=3)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert response.closed
+
+
+def test_s3_range_normalizes_oversized_206_body_and_closes() -> None:
+    response = _FakeStorageResponse(
+        [b"abcd"],
+        {
+            "Content-Type": "application/pdf",
+            "Content-Range": "bytes 2-4/6",
+        },
+        status=206,
+    )
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=2, length=3)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert response.closed
+
+
+def test_s3_range_rejects_fallback_body_length_mismatch_and_closes() -> None:
+    response = _FakeStorageResponse(
+        [b"ab"],
+        {
+            "Content-Type": "application/pdf",
+            "Content-Length": "3",
+        },
+    )
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=0, length=3)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert response.closed
+
+
+def test_s3_range_normalizes_oversized_fallback_body_and_closes() -> None:
+    response = _FakeStorageResponse(
+        [b"abcd"],
+        {
+            "Content-Type": "application/pdf",
+            "Content-Length": "3",
+        },
+    )
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=0, length=3)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert response.closed
+
+
+def test_s3_range_rejects_content_range_number_python_cannot_parse() -> None:
+    digit_limit = sys.get_int_max_str_digits()
+    if digit_limit == 0:
+        pytest.skip("Python integer digit limit is disabled")
+    value = "9" * (digit_limit + 1)
+    with pytest.raises(ValueError):
+        int(value)
+
+    response = _FakeStorageResponse(
+        [b"abc"],
+        {
+            "Content-Type": "application/pdf",
+            "Content-Range": f"bytes 0-2/{value}",
+        },
+        status=206,
+    )
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=0, length=3)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert response.closed
+
+
+@pytest.mark.parametrize(
+    ("start", "length", "headers", "status"),
+    [
+        pytest.param(1, 3, {"Content-Length": "3"}, 200, id="missing-content-range"),
+        pytest.param(1, 3, {"Content-Range": "bytes 1-x/5"}, 206, id="malformed-content-range"),
+        pytest.param(1, 3, {"Content-Range": "bytes 0-2/5"}, 206, id="mismatched-content-range"),
+        pytest.param(1, 3, {"Content-Range": "bytes 1-4/5"}, 206, id="overlong-content-range"),
+        pytest.param(1, 3, {"Content-Range": "bytes 1-3/3"}, 206, id="out-of-range-total"),
+        pytest.param(0, 3, {}, 200, id="missing-content-length"),
+        pytest.param(0, 3, {"Content-Length": "not-a-number"}, 200, id="malformed-content-length"),
+        pytest.param(0, 3, {"Content-Length": "4"}, 200, id="content-length-over-range"),
+    ],
+)
+def test_s3_range_rejects_invalid_range_response_metadata(
+    start: int,
+    length: int,
+    headers: dict[str, str],
+    status: int,
+) -> None:
+    response = _FakeStorageResponse([b"abc"], headers, status=status)
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = _FakeStorageOpener(response)
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=start, length=length)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert response.closed
+
+
+@pytest.mark.parametrize(
+    ("start", "length"),
+    [
+        pytest.param(True, 1, id="boolean-start"),
+        pytest.param(0, True, id="boolean-length"),
+        pytest.param("0", 1, id="string-start"),
+        pytest.param(0, 1.0, id="float-length"),
+        pytest.param(-1, 1, id="negative-start"),
+        pytest.param(0, 0, id="zero-length"),
+        pytest.param(0, 9, id="length-over-storage-limit"),
+    ],
+)
+def test_s3_range_fails_closed_before_a_request_for_invalid_bounds(
+    start: object,
+    length: object,
+) -> None:
+    response = _FakeStorageResponse([], {})
+    opener = _FakeStorageOpener(response)
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = opener
+
+    with pytest.raises(ObjectRangeNotSatisfiableError) as error:
+        storage.get_object_range("document.pdf", start=start, length=length)
+
+    assert str(error.value) == "object_range_not_satisfiable"
+    assert opener.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_error", "expected_message"),
+    [
+        pytest.param(404, ObjectNotFoundError, "object_not_found", id="missing-object"),
+        pytest.param(
+            416,
+            ObjectRangeNotSatisfiableError,
+            "object_range_not_satisfiable",
+            id="range-not-satisfiable",
+        ),
+        pytest.param(500, RuntimeError, "object_storage_request_failed", id="provider-failure"),
+    ],
+)
+def test_s3_range_maps_storage_http_errors_to_stable_public_errors(
+    status: int,
+    expected_error: type[RuntimeError],
+    expected_message: str,
+) -> None:
+    provider_detail = "provider diagnostic must not escape"
+    body = BytesIO(provider_detail.encode())
+    error = HTTPError(
+        "http://storage.invalid/bucket/document.pdf",
+        status,
+        provider_detail,
+        {},
+        body,
+    )
+
+    class FailingOpener:
+        def open(self, request: object, timeout: float) -> object:
+            del request, timeout
+            raise error
+
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = FailingOpener()
+
+    with pytest.raises(expected_error) as raised:
+        storage.get_object_range("document.pdf", start=0, length=1)
+
+    assert str(raised.value) == expected_message
+    assert provider_detail not in str(raised.value)
+    assert body.closed
+
+
+def test_s3_range_maps_non_http_storage_failures_to_a_stable_public_error() -> None:
+    provider_detail = "connection refused for internal storage host"
+
+    class FailingOpener:
+        def open(self, request: object, timeout: float) -> object:
+            del request, timeout
+            raise OSError(provider_detail)
+
+    storage = S3ObjectStorage(
+        endpoint="http://storage.invalid",
+        access_key="access",
+        secret_key="secret",
+        bucket="bucket",
+        max_object_bytes=8,
+    )
+    storage._opener = FailingOpener()
+
+    with pytest.raises(RuntimeError) as error:
+        storage.get_object_range("document.pdf", start=0, length=1)
+
+    assert str(error.value) == "object_storage_request_failed"
+    assert provider_detail not in str(error.value)
 
 
 def test_disabled_ocr_uses_a_restricted_public_error_code() -> None:

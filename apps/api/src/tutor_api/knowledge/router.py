@@ -3,6 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, File, Header, HTTPException, Request, Response, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 
@@ -10,8 +11,16 @@ from tutor_api.core.database import session_scope
 from tutor_api.identity.models import User
 from tutor_api.identity.router import CurrentUser, _session_factory
 from tutor_api.knowledge.access import get_writable_knowledge_base
-
+from tutor_api.knowledge.candidate_service import (
+    confirm_candidate_batch,
+    create_candidate_generation,
+)
 from tutor_api.knowledge.graph import load_knowledge_graph
+from tutor_api.knowledge.models import (
+    KnowledgeCandidateBatch,
+    KnowledgeCandidateLink,
+    KnowledgeCandidateNote,
+)
 from tutor_api.knowledge.retrieval import (
     SourcePreview,
     parse_preview_range,
@@ -20,9 +29,15 @@ from tutor_api.knowledge.retrieval import (
     search_knowledge,
 )
 from tutor_api.knowledge.schemas import (
+    ConfirmKnowledgeCandidateBatchRequest,
     CreateKnowledgeBaseRequest,
+    CreateKnowledgeCandidateBatchRequest,
     KnowledgeBaseResponse,
+    KnowledgeCandidateBatchResponse,
+    KnowledgeCandidateLinkResponse,
+    KnowledgeCandidateNoteResponse,
     KnowledgeCitationResponse,
+    KnowledgeDocumentStatusResponse,
     KnowledgeGraphEdgeResponse,
     KnowledgeGraphNodeResponse,
     KnowledgeGraphResponse,
@@ -35,6 +50,7 @@ from tutor_api.knowledge.service import (
     PreparedUpload,
     _prepare_upload,
     create_knowledge_base,
+    get_document_processing_state,
     get_knowledge_base,
     list_knowledge_bases,
     upload_prepared_knowledge_document,
@@ -115,9 +131,7 @@ def _require_upload_access(
     knowledge_base_id: UUID,
 ) -> None:
     with session_factory() as session:
-        get_writable_knowledge_base(
-            session, _load_upload_user(session, user_id), knowledge_base_id
-        )
+        get_writable_knowledge_base(session, _load_upload_user(session, user_id), knowledge_base_id)
 
 
 def _commit_knowledge_upload(
@@ -142,56 +156,12 @@ def _commit_knowledge_upload(
             return KnowledgeUploadResponse(
                 document_id=result.document.id,
                 document_version_id=result.version.id,
-                ingestion_job_id=result.job.id,
-                space_id=result.document.space_id,
-                knowledge_base_id=result.document.knowledge_base_id,
                 source_name=result.document.source_key,
-                version_number=result.version.version_number,
-                content_sha256=result.version.content_sha256,
-                content_type=result.version.content_type,
-                document_state=result.document.state,
-                version_state=result.version.state,
-                job_state=result.job.state,
                 created_at=result.version.created_at,
             )
     finally:
         upload_lease.close_from_worker()
 
-
-@router.get(
-    "/api/v1/knowledge-bases/{knowledge_base_id}/graph",
-    response_model=KnowledgeGraphResponse,
-)
-def get_knowledge_graph(
-    knowledge_base_id: UUID,
-    request: Request,
-    current_user: CurrentUser,
-) -> KnowledgeGraphResponse:
-    with session_scope(_session_factory(request)) as session:
-        graph = load_knowledge_graph(session, current_user, knowledge_base_id)
-    return KnowledgeGraphResponse(
-        knowledge_base_id=graph.knowledge_base_id,
-        nodes=[
-            KnowledgeGraphNodeResponse(
-                id=node.id,
-                title=node.title,
-                kind=node.kind,
-                source_pointers=list(node.source_pointers),
-            )
-            for node in graph.nodes
-        ],
-        edges=[
-            KnowledgeGraphEdgeResponse(
-                id=edge.id,
-                source_id=edge.source_id,
-                target_id=edge.target_id,
-                kind=edge.kind,
-                relation=edge.relation,
-                source_pointer=edge.source_pointer,
-            )
-            for edge in graph.edges
-        ],
-    )
 
 @router.post(
     "/api/v1/spaces/{space_id}/knowledge-bases",
@@ -240,6 +210,41 @@ def get_knowledge_base_detail(
         )
 
 
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/graph",
+    response_model=KnowledgeGraphResponse,
+)
+def get_knowledge_graph(
+    knowledge_base_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeGraphResponse:
+    with session_scope(_session_factory(request)) as session:
+        graph = load_knowledge_graph(session, current_user, knowledge_base_id)
+    return KnowledgeGraphResponse(
+        knowledge_base_id=graph.knowledge_base_id,
+        nodes=[
+            KnowledgeGraphNodeResponse(
+                id=node.id,
+                title=node.title,
+                kind=node.kind,
+                source_pointers=list(node.source_pointers),
+            )
+            for node in graph.nodes
+        ],
+        edges=[
+            KnowledgeGraphEdgeResponse(
+                id=edge.id,
+                source_id=edge.source_id,
+                target_id=edge.target_id,
+                kind=edge.kind,
+                relation=edge.relation,
+                source_pointer=edge.source_pointer,
+            )
+            for edge in graph.edges
+        ],
+    )
+
 @router.post(
     "/api/v1/knowledge-bases/{knowledge_base_id}/search",
     response_model=KnowledgeSearchResponse,
@@ -278,6 +283,33 @@ def post_knowledge_search(
             )
             for hit in hits
         ]
+    )
+
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/versions/"
+    "{document_version_id}/status",
+    response_model=KnowledgeDocumentStatusResponse,
+)
+def get_knowledge_document_status(
+    knowledge_base_id: UUID,
+    document_id: UUID,
+    document_version_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeDocumentStatusResponse:
+    with session_scope(_session_factory(request)) as session:
+        processing_state = get_document_processing_state(
+            session,
+            current_user,
+            knowledge_base_id,
+            document_id,
+            document_version_id,
+        )
+    return KnowledgeDocumentStatusResponse(
+        document_id=document_id,
+        document_version_id=document_version_id,
+        processing_state=processing_state,
     )
 
 
@@ -386,3 +418,112 @@ async def post_knowledge_document(
         elif prepared is not None:
             prepared.temporary_file.close()
         await file.close()
+
+
+def _candidate_batch_response(
+    session: Session,
+    batch: KnowledgeCandidateBatch,
+) -> KnowledgeCandidateBatchResponse:
+    notes = list(
+        session.scalars(
+            select(KnowledgeCandidateNote)
+            .where(KnowledgeCandidateNote.batch_id == batch.id)
+            .order_by(KnowledgeCandidateNote.ordinal)
+        )
+    )
+    links = list(
+        session.scalars(
+            select(KnowledgeCandidateLink)
+            .where(KnowledgeCandidateLink.batch_id == batch.id)
+            .order_by(KnowledgeCandidateLink.ordinal)
+        )
+    )
+    return KnowledgeCandidateBatchResponse(
+        id=batch.id,
+        document_id=batch.document_id,
+        document_version_id=batch.document_version_id,
+        generation_number=batch.generation_number,
+        state=batch.state,
+        failure_code=batch.failure_code,
+        notes=[KnowledgeCandidateNoteResponse.model_validate(note) for note in notes],
+        links=[KnowledgeCandidateLinkResponse.model_validate(link) for link in links],
+        created_at=batch.created_at,
+        updated_at=batch.updated_at,
+    )
+
+
+@router.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/candidate-batches",
+    response_model=KnowledgeCandidateBatchResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def post_knowledge_candidate_batch(
+    knowledge_base_id: UUID,
+    payload: CreateKnowledgeCandidateBatchRequest,
+    request: Request,
+    current_user: CurrentUser,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> KnowledgeCandidateBatchResponse:
+    with session_scope(_session_factory(request)) as session:
+        batch, _ = create_candidate_generation(
+            session,
+            current_user,
+            knowledge_base_id,
+            payload.document_version_id,
+            idempotency_key=idempotency_key,
+        )
+        return _candidate_batch_response(session, batch)
+
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/candidate-batches/{batch_id}",
+    response_model=KnowledgeCandidateBatchResponse,
+)
+def get_knowledge_candidate_batch(
+    knowledge_base_id: UUID,
+    batch_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeCandidateBatchResponse:
+    with session_scope(_session_factory(request)) as session:
+        knowledge_base = get_writable_knowledge_base(
+            session,
+            current_user,
+            knowledge_base_id,
+        )
+        batch = session.scalar(
+            select(KnowledgeCandidateBatch).where(
+                KnowledgeCandidateBatch.id == batch_id,
+                KnowledgeCandidateBatch.knowledge_base_id == knowledge_base.id,
+                KnowledgeCandidateBatch.space_id == knowledge_base.space_id,
+            )
+        )
+        if batch is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="资源不存在",
+            )
+        return _candidate_batch_response(session, batch)
+
+
+@router.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/candidate-batches/{batch_id}/confirm",
+    response_model=KnowledgeCandidateBatchResponse,
+)
+def post_confirm_knowledge_candidate_batch(
+    knowledge_base_id: UUID,
+    batch_id: UUID,
+    payload: ConfirmKnowledgeCandidateBatchRequest,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeCandidateBatchResponse:
+    with session_scope(_session_factory(request)) as session:
+        batch = confirm_candidate_batch(
+            session,
+            current_user,
+            knowledge_base_id,
+            batch_id,
+            accepted_note_ids=set(payload.accepted_note_ids),
+            accepted_link_ids=set(payload.accepted_link_ids),
+        )
+        return _candidate_batch_response(session, batch)

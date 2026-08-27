@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 
 import { api } from "@/lib/api";
 
+import styles from "./auth-form.module.css";
+
 type AuthFormProps = {
   mode: "login" | "register";
 };
@@ -23,6 +25,12 @@ export function AuthForm({ mode }: AuthFormProps) {
     const formData = new FormData(event.currentTarget);
     const email = String(formData.get("email") ?? "");
     const password = String(formData.get("password") ?? "");
+
+    if (isRegistration && password.length < 12) {
+      setError("密码至少需要 12 位。");
+      setIsSubmitting(false);
+      return;
+    }
 
     try {
       if (isRegistration) {
@@ -47,32 +55,39 @@ export function AuthForm({ mode }: AuthFormProps) {
   }
 
   return (
-    <main>
-      <h1>{isRegistration ? "注册" : "登录"}</h1>
-      <p>{isRegistration ? "创建你的学习空间。" : "登录后继续学习。"}</p>
-      <form onSubmit={handleSubmit}>
+    <main className={styles.authPage}>
+      <section className={styles.authCard}>
+        <div className={styles.brandMark}>知</div>
+        <span className={styles.eyebrow}>知学空间 · 教材学习工作台</span>
+        <h1>{isRegistration ? "注册" : "登录"}</h1>
+        <p className={styles.subtitle}>
+          {isRegistration ? "创建你的学习空间，开始一套可追溯的学习流程。" : "欢迎回来，登录后继续学习。"}
+        </p>
+        <form className={styles.form} onSubmit={handleSubmit}>
         {isRegistration ? (
-          <label>
+          <label className={styles.field}>
             用户名
             <input autoComplete="username" name="username" required />
           </label>
         ) : null}
-        <label>
+        <label className={styles.field}>
           邮箱
           <input autoComplete="email" name="email" required type="email" />
         </label>
-        <label>
+        <label className={styles.field}>
           密码
-          <input autoComplete={isRegistration ? "new-password" : "current-password"} name="password" required type="password" />
+          <input aria-label="密码" autoComplete={isRegistration ? "new-password" : "current-password"} name="password" required type="password" />
+          {isRegistration ? <small>至少 12 位</small> : null}
         </label>
-        {error ? <p role="alert">{error}</p> : null}
-        <button disabled={isSubmitting} type="submit">
+        {error ? <p className={styles.error} role="alert">{error}</p> : null}
+        <button className={styles.submitButton} disabled={isSubmitting} type="submit">
           {isSubmitting ? "请稍候…" : isRegistration ? "注册" : "登录"}
         </button>
-      </form>
-      <a href={isRegistration ? "/login" : "/register"}>
-        {isRegistration ? "已有账号？去登录" : "还没有账号？去注册"}
-      </a>
+        </form>
+        <a className={styles.switchLink} href={isRegistration ? "/login" : "/register"}>
+          {isRegistration ? "已有账号？去登录" : "还没有账号？去注册"}
+        </a>
+      </section>
     </main>
   );
 }

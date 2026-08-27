@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import re
+import struct
 import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -30,6 +31,38 @@ from tutor_api.knowledge.models import (
 
 _MAX_CHUNK_CHARS = 100_000
 _TERM = re.compile(r"[^\W_]+", re.UNICODE)
+
+# pgvector stores VECTOR elements as PostgreSQL single-precision (float4) values.
+def _quantize_embedding_values_to_float4(values: list[float]) -> tuple[int, ...] | None:
+    try:
+        quantized: list[int] = []
+        for value in values:
+            if not math.isfinite(value):
+                return None
+            packed = struct.pack("<f", value)
+            quantized_value = struct.unpack("<f", packed)[0]
+            if not math.isfinite(quantized_value):
+                return None
+            quantized.append(struct.unpack("<I", packed)[0])
+    except (OverflowError, struct.error, TypeError, ValueError):
+        return None
+    return tuple(quantized)
+
+
+def _embedding_values_match_with_pgvector_precision(
+    persisted: list[float], expected: list[float]
+) -> bool:
+    """Require persisted and expected values to quantize to the same finite float4 list."""
+
+    if len(persisted) != len(expected):
+        return False
+    persisted_float4 = _quantize_embedding_values_to_float4(persisted)
+    expected_float4 = _quantize_embedding_values_to_float4(expected)
+    return (
+        persisted_float4 is not None
+        and expected_float4 is not None
+        and persisted_float4 == expected_float4
+    )
 
 
 class EmbeddingAdapter(Protocol):
@@ -448,7 +481,9 @@ def _validate_persisted_index(
             or chunk.lexical_terms != prepared.lexical_terms
             or chunk.embedding_dimension != index.embedding_dimension
             or chunk.index_signature != index.index_signature
-            or _validate_embedding(chunk.embedding, index.embedding_dimension) != prepared.embedding
+            or not _embedding_values_match_with_pgvector_precision(
+                _validate_embedding(chunk.embedding, index.embedding_dimension), prepared.embedding
+            )
         ):
             raise IndexingError("index_validation_failed")
 

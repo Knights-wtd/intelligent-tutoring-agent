@@ -2,7 +2,6 @@ import asyncio
 import io
 import threading
 import unicodedata
-from hashlib import sha256
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -41,16 +40,7 @@ from tutor_api.main import create_app
 SAFE_UPLOAD_FIELDS = {
     "document_id",
     "document_version_id",
-    "ingestion_job_id",
-    "space_id",
-    "knowledge_base_id",
     "source_name",
-    "version_number",
-    "content_sha256",
-    "content_type",
-    "document_state",
-    "version_state",
-    "job_state",
     "created_at",
 }
 
@@ -186,7 +176,8 @@ def test_upload_database_and_storage_work_do_not_block_the_event_loop() -> None:
         finally:
             storage.release.set()
         response = await task
-        assert response.knowledge_base_id == knowledge_base_id
+        assert response.document_id is not None
+        assert response.document_version_id is not None
         assert uploaded_file.file.closed
 
     try:
@@ -366,21 +357,15 @@ def test_personal_owner_uploads_pdf_to_immutable_scoped_object() -> None:
     assert response.status_code == 201, response.text
     payload = response.json()
     assert set(payload) == SAFE_UPLOAD_FIELDS
-    assert payload["space_id"] == space_id
-    assert payload["knowledge_base_id"] == knowledge_base["id"]
     assert payload["source_name"] == "lesson.pdf"
-    assert payload["version_number"] == 1
-    assert payload["content_sha256"] == sha256(content).hexdigest()
-    assert payload["content_type"] == "application/pdf"
-    assert payload["document_state"] == "active"
-    assert payload["version_state"] == "uploaded"
-    assert payload["job_state"] == "queued"
     assert storage is not None
 
     with sessionmaker(bind=engine)() as session:
         document = session.get(Document, UUID(payload["document_id"]))
         version = session.get(DocumentVersion, UUID(payload["document_version_id"]))
-        job = session.get(IngestionJob, UUID(payload["ingestion_job_id"]))
+        job = session.scalar(
+            select(IngestionJob).where(IngestionJob.document_version_id == version.id)
+        )
         assert document is not None and version is not None and job is not None
         assert document.owner_user_id == UUID(registration["user"]["id"])
         assert document.created_by_user_id == UUID(registration["user"]["id"])
@@ -432,7 +417,10 @@ def test_supported_extension_mime_and_signature_pairs_upload(
     )
 
     assert response.status_code == 201, response.text
-    assert response.json()["content_type"] == stored_content_type
+    with sessionmaker(bind=engine)() as session:
+        version = session.get(DocumentVersion, UUID(response.json()["document_version_id"]))
+        assert version is not None
+        assert version.content_type == stored_content_type
     engine.dispose()
 
 
@@ -668,11 +656,8 @@ def test_versions_sha_dedupe_and_distinct_source_history() -> None:
     dedupe = dedupe_response.json()
     other = other_response.json()
     assert second["document_id"] == first["document_id"]
-    assert second["version_number"] == 2
     assert dedupe["document_version_id"] == first["document_version_id"]
-    assert dedupe["ingestion_job_id"] == first["ingestion_job_id"]
     assert other["document_id"] != first["document_id"]
-    assert other["content_sha256"] == first["content_sha256"]
     with sessionmaker(bind=engine)() as session:
         assert session.scalar(select(func.count()).select_from(Document)) == 2
         assert session.scalar(select(func.count()).select_from(DocumentVersion)) == 3
@@ -752,6 +737,51 @@ def test_unsafe_idempotency_keys_are_rejected_without_echo(key: str) -> None:
     engine.dispose()
 
 
+
+
+def test_user_can_start_and_inspect_a_review_only_candidate_batch() -> None:
+    client, engine, _ = make_client()
+    registration = register(client, "candidate-api")
+    knowledge_base = create_knowledge_base(
+        client,
+        registration["personal_space"]["id"],
+        "候选知识库",
+    )
+    uploaded_response = upload(
+        client,
+        knowledge_base["id"],
+        name="wireless.md",
+        content="# 无线通信\n\n路径损耗".encode(),
+        content_type="text/markdown",
+        key="candidate-source",
+    )
+    assert uploaded_response.status_code == 201, uploaded_response.text
+    uploaded = uploaded_response.json()
+    with sessionmaker(bind=engine)() as session:
+        version = session.get(DocumentVersion, UUID(uploaded["document_version_id"]))
+        assert version is not None
+        version.state = "ready"
+        session.commit()
+
+    created = client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/candidate-batches",
+        headers={"Idempotency-Key": "wireless-candidates-v1"},
+        json={"document_version_id": uploaded["document_version_id"]},
+    )
+
+    assert created.status_code == 202, created.text
+    payload = created.json()
+    assert payload["state"] == "processing"
+    assert payload["document_version_id"] == uploaded["document_version_id"]
+    assert payload["notes"] == []
+    assert payload["links"] == []
+
+    detail = client.get(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/candidate-batches/{payload['id']}"
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json() == payload
+    engine.dispose()
 def test_missing_idempotency_key_is_rejected() -> None:
     client, engine, _ = make_client()
     registration = register(client, "missing-key")
@@ -841,13 +871,73 @@ def test_uploads_are_isolated_by_space_and_knowledge_base() -> None:
 
     assert first_upload["document_id"] != second_upload["document_id"]
     assert first_upload["document_version_id"] != second_upload["document_version_id"]
-    assert first_upload["space_id"] != second_upload["space_id"]
     assert storage is not None
     with sessionmaker(bind=engine)() as session:
+        first_document = session.get(Document, UUID(first_upload["document_id"]))
+        second_document = session.get(Document, UUID(second_upload["document_id"]))
         first_version = session.get(DocumentVersion, UUID(first_upload["document_version_id"]))
         second_version = session.get(DocumentVersion, UUID(second_upload["document_version_id"]))
+        assert first_document is not None and second_document is not None
         assert first_version is not None and second_version is not None
+        assert first_document.space_id != second_document.space_id
         assert first_version.object_key != second_version.object_key
-        assert first_version.object_key.startswith(f"spaces/{first_upload['space_id']}/")
-        assert second_version.object_key.startswith(f"spaces/{second_upload['space_id']}/")
+        assert first_version.object_key.startswith(f"spaces/{first_document.space_id}/")
+        assert second_version.object_key.startswith(f"spaces/{second_document.space_id}/")
+    engine.dispose()
+
+
+def test_document_status_read_is_scoped_truthful_and_safe() -> None:
+    client, engine, _ = make_client()
+    registration = register(client, "status-owner")
+    knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+    upload_response = upload(
+        client,
+        knowledge_base["id"],
+        name="status.md",
+        content=b"# status",
+        content_type="text/markdown",
+    )
+    assert upload_response.status_code == 201, upload_response.text
+    uploaded = upload_response.json()
+
+    initial = client.get(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents/"
+        f"{uploaded['document_id']}/versions/{uploaded['document_version_id']}/status"
+    )
+
+    assert initial.status_code == 200, initial.text
+    assert set(initial.json()) == {"document_id", "document_version_id", "processing_state"}
+    assert initial.json()["processing_state"] == "processing"
+    assert not {
+        "source_key",
+        "object_key",
+        "content_sha256",
+        "ingestion_job_id",
+        "job_state",
+        "last_error_detail",
+        "checkpoint",
+        "user_id",
+        "space_id",
+    }.intersection(initial.json())
+
+    with sessionmaker(bind=engine)() as session:
+        version = session.get(DocumentVersion, UUID(uploaded["document_version_id"]))
+        assert version is not None
+        version.state = "failed"
+        session.commit()
+
+    failed = client.get(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents/"
+        f"{uploaded['document_id']}/versions/{uploaded['document_version_id']}/status"
+    )
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["processing_state"] == "failed"
+
+    outsider = TestClient(client.app)
+    register(outsider, "status-outsider")
+    denied = outsider.get(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents/"
+        f"{uploaded['document_id']}/versions/{uploaded['document_version_id']}/status"
+    )
+    assert denied.status_code == 404
     engine.dispose()

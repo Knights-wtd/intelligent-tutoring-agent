@@ -421,3 +421,98 @@
 - `pnpm test:web` passed (7 files / 34 tests), `pnpm lint:web` passed, and the production `pnpm build:web` passed when run outside the sandbox that denied `.next\trace` writes. API `ruff check --no-cache src tests` passed; its default cache location was not writable in this environment.
 - Full API coverage was executed with `COVERAGE_FILE` redirected to `%TEMP%` and pytest cache disabled. Result: 590 passed, 3 skipped, 2 failed, total coverage 88.08% versus required 90%. Both failures were `test_tesseract_timeout_kills_descendant_holding_pipes` and `test_tesseract_timeout_kills_descendant_inheriting_only_stdin`, where a Windows helper did not create its PID file within one second. The same OCR module alone passed 49 tests without coverage; this is an observed suite/timing failure, not a product-code fix made during Task 10.
 - Docker CLI/Desktop, `psql`, `pg_isready`, and `initdb` were absent on 2026-08-18. `alembic heads` resolved `0008_embedding_contract (head)`, but no real PostgreSQL/pgvector migration round-trip or Compose register/upload/search/cited-page vertical slice could run. These are completion blockers; do not mark Milestone 3 / Phase 5 complete.
+
+## 2026-08-21 · MVP 主链路收口实现前核对
+
+- 已核对 question-bank 已有安全端点：题目列表、尝试提交、review-items、attempt-history；当前 Web 没有题库 client/panel。
+- 已核对知识库上传响应仅是即时状态，缺少后续受 read 权限保护的 document/version 状态读取。新增 DTO 必须只含 document_id、document_version_id、processing_state。
+- `searchable` 不能根据 `DocumentVersionState.READY` 伪断言；Task 10 在 2026-08-19 的容器验收仍然 failed / results=0。实现将只认可 active index 内含该版本 chunk 的证据，或显示 processing/failed，不修 Docker 根因。
+- WorkspaceShell 仍请求模型目录和余额并渲染不可提交 AI 家教壳；本批将删除这些承诺，保持检索和题库学习定位。
+## 2026-08-21 · MVP 复审窄修复事实
+
+- 上传成功响应的允许集合固定为 `document_id`、`document_version_id`、`source_name`、`created_at`；处理状态不从 upload response 推导，而是读取已经授权并只返回公开状态的 status endpoint。
+- 同一个 `AbortController` 不能安全管理多个资料条目的刷新：取消第二项会使第一项的 `finally` 跳过 loading 清理。按条目 ID 持有 controller，并通过 identity 判断其 `finally`，可同时处理多个刷新且不会由过期请求覆盖新状态。
+- 对答题网络重试，幂等键需要绑定到 `(knowledgeBaseId, questionVersionId, normalizedAnswer)` 生命周期；只有问题、知识库或答案更改时才失效。旧请求在题目/知识库切换时必须同时取消并使 sequence 失效，且边界处立即恢复按钮 loading 状态。
+
+## 2026-08-21 · MVP 幂等键生命周期窄修复
+
+- `submitAttempt` 成功不代表整个 UI 成功流程完成；只有随后 `listReviewItems` 成功，才清空答案和幂等键。
+- review 刷新失败时必须保留原答案/key，并将错误归因于刷新阶段；否则用户重试同一答案会生成新 key，可能造成重复答题记录。
+
+## 2026-08-21 · 工作台视觉接入发现
+
+- 原型 `workspace-c3-space-navigation.html` 是独立的高保真静态 HTML；此前的 React `WorkspaceShell` 只保留了 MVP 功能壳，两者没有真正连接。
+- 视觉迁移应只迁移已承诺的结构与样式；原型中的真实 LLM、模型选择、余额、费用、长期记忆和知识图谱内容不能作为当前产品功能继续展示。
+- 当前 React 实现已经恢复 Obsidian 风格的三栏工作台骨架，并把真实知识库/题库功能保留在中心区域。
+
+## 2026-08-21 · 浏览器预览发现
+
+- `http://localhost:3000/` 未登录时进入 `AuthForm`，不是 `WorkspaceShell`；原先看到的白底裸文字来自认证组件缺少 CSS，并非工作台样式加载失败。
+- 为避免用户在进入工作台前看到原生 HTML，认证入口现在使用独立 CSS module；登录/注册语义和 API 行为保持不变。
+
+## 2026-08-21 · 注册失败根因
+
+- 注册失败不是用户名或密码校验首先触发，而是本地运行时缺少 API 服务且 Web client 未使用已配置的 API origin；浏览器请求记录为 `POST /api/v1/auth/register` 命中 Next.js 并返回 404。
+- 修复后 API 服务运行在 `127.0.0.1:8000`，Web 通过 `NEXT_PUBLIC_API_BASE_URL` 发请求。注册时仍需满足：有效邮箱、用户名 3–32 位且只含字母/数字/下划线/连字符、密码长度至少 12 位。
+
+## 2026-08-21 · 旧 Worker 更新事实
+
+- 旧 Worker 由 Compose 项目 `mvp-phase6-20260821` 管理，配置文件是当前 worktree 的 `compose.yaml`，环境文件是 `.env.identity-test`。
+- 它已运行约 8 小时，使用旧 API 镜像；当前 Worker 命令为 `python -m tutor_api.worker_main`。
+- 使用 Compose build/up 完成镜像重建和容器替换；没有删除任何数据卷。
+
+## 2026-08-21 · 注册失败第二次修复事实
+
+- API 的最近日志只有健康检查，没有 `POST /api/v1/auth/register`，说明页面请求没有发到 API。
+- `mvp-phase6-20260821-web-1` 创建时间明显早于当前配置；重建 Web 后，构建产物中已包含 `localhost:8010`，页面和容器健康检查均正常。
+
+## 2026-08-22 · 注册链路根因
+
+- 后端注册实现和数据库事务本身可用；既有 API 测试通过，真实经同源代理提交后也返回 201。
+- 长期故障点是浏览器端编译期 API origin：它将部署端口固化进静态资源，运行时配置无法修正，旧镜像因此持续请求错误端口。
+- 将跨组件地址留在服务器运行时，并让浏览器只访问同源 `/api/...`，同时消除了旧镜像端口漂移、CORS 和跨端口 Cookie 链路的不稳定性。
+
+## 2026-08-22 · 注册 422 根因
+
+- 该次失败已经穿过 Web 同源代理到达 API，响应码为 422；链路修复有效。
+- 前端此前未公开或预校验后端的密码最小长度 12，导致用户只能看到统一失败提示。
+- 前端规则与后端一致后，短密码不再产生 API 请求，并给出可操作的中文错误。
+
+## 2026-08-22 · 工作台裸控件根因与功能映射
+
+- `KnowledgePanel` 和 `QuestionBankPanel` 共用 `workspace-shell.module.css`。工作台视觉迁移后，组件仍引用的 19 个类均不存在，因此 `className` 解析为空；这不是后端返回缺失，也不是按钮 DOM 缺失。
+- 知识库主链路已连接 API：列表、创建、上传、处理状态、检索和来源预览；题库学习者链路已连接题目列表、答题评估、待复习项和个人历史。
+- 后端 `POST /api/v1/knowledge-bases/{id}/questions` 已存在，但当前 Web 没有教师/作者出题入口。
+- 工作台外壳有 7 个静态原型控件没有 `onClick` 或提交行为；它们不应被算作已交付功能，后续应接真实交互或明确禁用/移除。
+
+## 2026-08-22 · 浅色工作台排版事实
+
+- 浅色模式通过语义 token 集中在 `WorkspaceShell` 的 CSS Module 中，避免在 JSX 中散布颜色逻辑；柔紫和薄荷绿分别承担选择/主操作与健康/连接状态。
+- `react-resizable-panels` 的 `Panel` class 会落在内部 slot，窄屏收起时需结合 `[data-panel]:has(...)` 隐藏其外层 panel，才可真正为中心内容回收宽度。
+- 本地 Windows `npm run build` 受 `.next/trace-build` 文件锁阻塞，但同一代码在干净 Docker build 环境完成了编译、类型检查和静态生成；该锁定是本地生成目录问题，不是应用构建错误。
+
+## 2026-08-22 · LLM Markdown 导入设计事实
+
+- 用户选择 B：Word/PDF/图片全文由 LLM 整理为 Markdown，而不是只做标题/摘要增强。
+- 原始文件、解析块和生成 Markdown 必须分离；生成结果先是草稿，用户确认后才能进入正式知识库。
+- 章节长短不是有效性指标。长文只按 Faro 模型上下文窗口分块；短文也应正常通过。异常检查限制为空响应、明显截断、模型错误文本混入等。
+- Obsidian 双向链接由确定性 `[[笔记名]]` 解析器建立，支持反向链接和未解析链接；LLM 的自动链接建议不直接写入正式关系。
+- Faro 教程只确认 OpenAI 兼容聊天接口和 Gemini 生成接口，未确认 embedding 接口；本计划不假设 Faro 能提供向量模型。
+- 真实 Faro Key 不应写入源码、数据库、日志、计划文件、浏览器或测试输出。
+- 同一验收指标连续三次修复失败后必须暂停并请求用户决定，避免无止境试错。
+
+## 2026-08-23 Markdown data-layer verification pause
+
+Acceptance metric: `apps/api/tests/test_knowledge_markdown_models.py`.
+
+Three targeted repair attempts were made after introducing Markdown note/revision/link models:
+1. Fixed a literal newline escape introduced while rewriting the new test; test collection then advanced.
+2. Added the missing `KnowledgeBase` import; test collection then advanced.
+3. Ran the focused suite; all three cases now fail because the helper's `MarkdownNote` construction still omits required `knowledge_base_id`.
+
+Per the user-approved three-strike rule, stop here before a fourth repair and request direction. No schema or architecture change is proposed; the next repair would only correct the test helper's required scope field.
+## 2026-08-23 Textbook acceptance extension
+
+The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
+
+Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.

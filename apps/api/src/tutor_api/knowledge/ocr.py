@@ -514,7 +514,6 @@ def _run_tesseract_process(
     timeout_seconds: float,
     max_output_bytes: int,
 ) -> bytes:
-    deadline = time.monotonic() + timeout_seconds
     creation_kwargs: dict[str, object] = {}
     if os.name == "nt":
         creation_kwargs["creationflags"] = (
@@ -522,6 +521,17 @@ def _run_tesseract_process(
         )
     else:
         creation_kwargs["start_new_session"] = True
+        deadline = time.monotonic() + timeout_seconds
+
+    child_environment = os.environ.copy()
+    for coverage_variable in (
+        "COV_CORE_SOURCE",
+        "COV_CORE_CONFIG",
+        "COV_CORE_DATAFILE",
+        "COV_CORE_BRANCH",
+        "COVERAGE_PROCESS_START",
+    ):
+        child_environment.pop(coverage_variable, None)
 
     try:
         process = subprocess.Popen(
@@ -530,6 +540,7 @@ def _run_tesseract_process(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             shell=False,
+            env=child_environment,
             **creation_kwargs,
         )
     except Exception:
@@ -551,6 +562,7 @@ def _run_tesseract_process(
                 raise RuntimeError("Windows Job Object assignment failed")
             if not _resume_windows_process(process.pid):
                 raise RuntimeError("Windows process resume failed")
+            deadline = time.monotonic() + timeout_seconds
 
         messages: queue.Queue[tuple[str, bytes | None]] = queue.Queue(maxsize=2)
         stop = threading.Event()

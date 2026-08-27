@@ -1,6 +1,9 @@
 from datetime import UTC, datetime
+from math import inf, nan
+from typing import cast
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -48,6 +51,40 @@ class FixedEmbeddingAdapter:
 
     def embed(self, text: str) -> list[float]:
         return self.vectors.get(text, [1.0] + [0.0] * (self.dimension - 1))
+
+
+class ControlledEmbeddingAdapter(FixedEmbeddingAdapter):
+    def __init__(self, result: object) -> None:
+        super().__init__()
+        self._result = result
+        self.calls = 0
+
+    def embed(self, text: str) -> list[float]:
+        del text
+        self.calls += 1
+        if isinstance(self._result, Exception):
+            raise self._result
+        return cast(list[float], self._result)
+
+
+class FailingPreviewStorage:
+    def __init__(self) -> None:
+        self.read_calls = 0
+
+    def get_object_range(self, key: str, *, start: int, length: int):
+        del start, length
+        self.read_calls += 1
+        raise RuntimeError(f"provider credentials leaked for {key}")
+
+
+class UnexpectedReadStorage:
+    def __init__(self) -> None:
+        self.read_calls = 0
+
+    def get_object_range(self, key: str, *, start: int, length: int):
+        del key, start, length
+        self.read_calls += 1
+        raise AssertionError("citation target must be authorized before object read")
 
 
 def make_client(
@@ -507,6 +544,227 @@ def test_search_finds_lexical_hit_beyond_first_thousand_active_chunks() -> None:
 
         assert response.status_code == 200, response.text
         assert response.json()["results"][0]["excerpt"] == target_content
+    finally:
+        client.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        pytest.param(RuntimeError("provider backend secret"), id="provider-exception"),
+        pytest.param([1.0, 0.0], id="wrong-dimension"),
+        pytest.param([True] + [0.0] * 7, id="bool-component"),
+        pytest.param([nan] + [0.0] * 7, id="nan-component"),
+        pytest.param([inf] + [0.0] * 7, id="positive-infinity"),
+        pytest.param([-inf] + [0.0] * 7, id="negative-infinity"),
+    ],
+)
+def test_search_rejects_invalid_embedding_results_without_unsafe_retrieval(result: object) -> None:
+    adapter = ControlledEmbeddingAdapter(result)
+    client, engine = make_client(adapter)
+    try:
+        registration = register(client, "retrieval-invalid-embedding")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="valid-index.md",
+                content="a lexical result must not bypass invalid query embedding",
+                vector=[1.0] + [0.0] * 7,
+            )
+            session.commit()
+
+        response = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "lexical result"},
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json() == {"detail": "检索服务暂不可用"}
+        assert "provider backend secret" not in response.text
+        assert adapter.calls == 1
+    finally:
+        client.close()
+        engine.dispose()
+
+
+def test_search_without_active_index_skips_embedding_provider() -> None:
+    adapter = ControlledEmbeddingAdapter(RuntimeError("embedding provider must not be called"))
+    client, engine = make_client(adapter)
+    try:
+        registration = register(client, "retrieval-no-active-index")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+
+        response = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "nothing indexed yet"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"results": []}
+        assert adapter.calls == 0
+    finally:
+        client.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize("endpoint", ["source", "page"])
+def test_cited_preview_hides_valid_citation_from_nonmember_before_object_read(
+    endpoint: str,
+) -> None:
+    storage = UnexpectedReadStorage()
+    owner, engine = make_client(object_storage=storage)
+    outsider = TestClient(owner.app)
+    try:
+        registration = register(owner, f"preview-nonmember-owner-{endpoint}")
+        knowledge_base = create_knowledge_base(owner, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            chunk_id = seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name=f"nonmember-{endpoint}.md",
+                content="active cited content",
+                vector=[1.0] + [0.0] * 7,
+            )
+            if endpoint == "page":
+                chunk = session.get(Chunk, chunk_id)
+                assert chunk is not None
+                page = session.get(Page, chunk.page_id)
+                assert page is not None
+                page.text_object_key = "objects/nonmember-page.txt"
+            session.commit()
+
+        search = owner.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "active cited"},
+        )
+        assert search.status_code == 200, search.text
+        citation_id = search.json()["results"][0]["citation"]["id"]
+        register(outsider, f"preview-other-{endpoint}")
+
+        response = outsider.get(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/citations/{citation_id}/{endpoint}"
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json() == {"detail": "\u8d44\u6e90\u4e0d\u5b58\u5728"}
+        assert storage.read_calls == 0
+    finally:
+        outsider.close()
+        owner.close()
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "ineligible_target"),
+    [
+        pytest.param("source", "index", id="retired-index-source"),
+        pytest.param("page", "document", id="archived-document-page"),
+    ],
+)
+def test_cited_preview_rejects_ineligible_targets_before_object_read(
+    endpoint: str, ineligible_target: str
+) -> None:
+    storage = UnexpectedReadStorage()
+    client, engine = make_client(object_storage=storage)
+    try:
+        registration = register(client, f"preview-ineligible-{ineligible_target}")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            chunk_id = seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name=f"{ineligible_target}.md",
+                content="cited content",
+                vector=[1.0] + [0.0] * 7,
+            )
+            session.commit()
+
+        search = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "cited"},
+        )
+        assert search.status_code == 200, search.text
+        citation_id = search.json()["results"][0]["citation"]["id"]
+
+        with sessionmaker(bind=engine)() as session:
+            chunk = session.get(Chunk, chunk_id)
+            assert chunk is not None
+            if ineligible_target == "index":
+                index = session.get(IndexVersion, chunk.index_version_id)
+                assert index is not None
+                index.state = IndexVersionState.RETIRED
+            else:
+                page = session.get(Page, chunk.page_id)
+                assert page is not None
+                page.text_object_key = "objects/archived-document-page.txt"
+                version = session.get(DocumentVersion, chunk.document_version_id)
+                assert version is not None
+                document = session.get(Document, version.document_id)
+                assert document is not None
+                document.state = DocumentState.ARCHIVED
+            session.commit()
+
+        response = client.get(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/citations/{citation_id}/{endpoint}"
+        )
+
+        assert response.status_code == 404, response.text
+        assert response.json() == {"detail": "资源不存在"}
+        assert storage.read_calls == 0
+    finally:
+        client.close()
+        engine.dispose()
+
+
+def test_page_preview_redacts_storage_failures() -> None:
+    storage = FailingPreviewStorage()
+    client, engine = make_client(object_storage=storage)
+    try:
+        registration = register(client, "preview-page-storage-failure")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            chunk_id = seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="page-preview.md",
+                content="page preview content",
+                vector=[1.0] + [0.0] * 7,
+            )
+            chunk = session.get(Chunk, chunk_id)
+            assert chunk is not None
+            page = session.get(Page, chunk.page_id)
+            assert page is not None
+            page.text_object_key = "objects/page-preview.txt"
+            session.commit()
+
+        search = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "page preview"},
+        )
+        assert search.status_code == 200, search.text
+        citation_id = search.json()["results"][0]["citation"]["id"]
+
+        response = client.get(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/citations/{citation_id}/page",
+            headers={"Range": "bytes=0-3"},
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json() == {"detail": "检索服务暂不可用"}
+        assert "provider credentials" not in response.text
+        assert "objects/page-preview.txt" not in response.text
+        assert storage.read_calls == 1
     finally:
         client.close()
         engine.dispose()

@@ -5,12 +5,14 @@ import zlib
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import event, func, select, update
+from sqlalchemy import create_engine, event, func, select, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 import tutor_api.knowledge.worker as worker_module
 from tutor_api.core.database import Base, create_engine_from_url
@@ -39,7 +41,7 @@ from tutor_api.knowledge.service import (
     persist_parsed_document_and_enqueue_build,
     upload_prepared_knowledge_document,
 )
-from tutor_api.knowledge.storage import MemoryObjectStorage
+from tutor_api.knowledge.storage import MemoryObjectStorage, StoredObject
 from tutor_api.knowledge.worker import (
     WorkerConfig,
     claim_job_statement,
@@ -363,10 +365,9 @@ def test_uploaded_parse_job_runs_full_worker_pipeline_idempotently(
         assert session.scalar(select(func.count()).select_from(Chunk)) == chunk_count
 
 
-
-
 def test_parse_worker_fails_closed_when_ocr_is_disabled(factory: sessionmaker[Session]) -> None:
     now = datetime(2026, 8, 17, 12, tzinfo=UTC)
+
     def chunk(kind: bytes, data: bytes) -> bytes:
         return (
             struct.pack(">I", len(data))
@@ -593,7 +594,7 @@ def test_parse_worker_fails_closed_for_completed_empty_ocr_result(
         assert session.scalar(select(func.count()).select_from(Page)) == 0
 
 
-def test_worker_main_registers_parse_and_build_handlers() -> None:
+def test_worker_main_registers_parse_build_and_candidate_handlers() -> None:
     from tutor_api.core.config import Settings
     from tutor_api.worker_main import create_handlers
 
@@ -601,6 +602,7 @@ def test_worker_main_registers_parse_and_build_handlers() -> None:
     assert set(handlers) == {
         IngestionJobKind.PARSE_DOCUMENT,
         IngestionJobKind.BUILD_INDEX,
+        IngestionJobKind.GENERATE_MARKDOWN,
     }
 
 
@@ -752,9 +754,12 @@ def test_terminal_build_failure_fails_target_and_cleans_partial_chunks(
         assert failed_job and failed_job.state is IngestionJobState.FAILED
         assert failed_target and failed_target.state is IndexVersionState.FAILED
         assert active and active.state is IndexVersionState.ACTIVE
-        assert session.scalar(
-            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
-        ) == 0
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
+            )
+            == 0
+        )
 
 
 def test_changed_embedding_contract_requeues_build_without_replacing_active_index(
@@ -805,9 +810,14 @@ def test_changed_embedding_contract_requeues_build_without_replacing_active_inde
         assert completed_old_job.idempotency_key == old_job_key
         assert failed_old_target and failed_old_target.state is IndexVersionState.FAILED
         assert preserved_active and preserved_active.state is IndexVersionState.ACTIVE
-        assert session.scalar(
-            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == old_target_id)
-        ) == 0
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Chunk)
+                .where(Chunk.index_version_id == old_target_id)
+            )
+            == 0
+        )
         assert len(replacements) == 1
         replacement = replacements[0]
         replacement_target = session.get(IndexVersion, replacement.index_version_id)
@@ -830,11 +840,14 @@ def test_changed_embedding_contract_requeues_build_without_replacing_active_inde
         completed_old_job = session.get(IngestionJob, old_job_id)
         assert completed_old_job is not None
         make_build_index_handler(replacement_adapter)(session, completed_old_job)
-        assert session.scalar(
-            select(func.count()).select_from(IngestionJob).where(
-                IngestionJob.kind == IngestionJobKind.BUILD_INDEX
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(IngestionJob)
+                .where(IngestionJob.kind == IngestionJobKind.BUILD_INDEX)
             )
-        ) == 2
+            == 2
+        )
 
     assert run_worker_once(
         factory,
@@ -906,12 +919,15 @@ def test_stale_exhausted_build_fails_only_its_target(
         parse_job_id = parse_job.id
 
     with factory.begin() as session:
-        assert claim_next_job(
-            session,
-            worker_id="replacement",
-            now=now,
-            kinds=(IngestionJobKind.BUILD_INDEX, IngestionJobKind.PARSE_DOCUMENT),
-        ) is None
+        assert (
+            claim_next_job(
+                session,
+                worker_id="replacement",
+                now=now,
+                kinds=(IngestionJobKind.BUILD_INDEX, IngestionJobKind.PARSE_DOCUMENT),
+            )
+            is None
+        )
 
     with factory() as session:
         failed_target = session.get(IndexVersion, target_id)
@@ -922,9 +938,12 @@ def test_stale_exhausted_build_fails_only_its_target(
         assert untouched and untouched.state is IndexVersionState.BUILDING
         assert stale_parse and stale_parse.state is IngestionJobState.FAILED
         assert stale_version and stale_version.state is DocumentVersionState.FAILED
-        assert session.scalar(
-            select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
-        ) == 0
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
+            )
+            == 0
+        )
 
 
 def test_restart_after_commit_does_not_duplicate_side_effect(
@@ -1017,3 +1036,321 @@ def test_completion_refreshes_lease_owner_before_committing(
         persisted = session.get(IngestionJob, job.id)
         assert persisted and persisted.state is IngestionJobState.RUNNING
         assert persisted.lease_owner == "replacement"
+
+
+@pytest.mark.parametrize(
+    ("stored_data", "stored_content_type", "request_key"),
+    (
+        (b"# different immutable bytes\n", "text/markdown", "bytes"),
+        (b"# trusted immutable bytes\n", "application/pdf", "content-type"),
+    ),
+)
+def test_parse_worker_rejects_object_bytes_or_content_type_mismatched_to_version(
+    factory: sessionmaker[Session],
+    stored_data: bytes,
+    stored_content_type: str,
+    request_key: str,
+) -> None:
+    now = datetime(2026, 8, 19, 12, tzinfo=UTC)
+    trusted = b"# trusted immutable bytes\n"
+    upload_storage = MemoryObjectStorage()
+    adapter = HashEmbeddingAdapter(dimension=8)
+
+    with factory.begin() as session:
+        user, kb, _ = target(session, "immutable-object")
+        uploaded = upload_prepared_knowledge_document(
+            session,
+            user,
+            kb.id,
+            PreparedUpload(
+                source_name="immutable.md",
+                content_type="text/markdown",
+                content_sha256=hashlib.sha256(trusted).hexdigest(),
+                temporary_file=BytesIO(trusted),
+            ),
+            f"immutable-object-{request_key}",
+            upload_storage,
+        )
+        uploaded.job.available_at = now
+        uploaded.job.max_attempts = 1
+        job_id = uploaded.job.id
+        version_id = uploaded.version.id
+
+    class MismatchedObjectStorage:
+        def get_object(self, key: str) -> StoredObject:
+            assert key
+            return StoredObject(data=stored_data, content_type=stored_content_type)
+
+    assert run_worker_once(
+        factory,
+        {
+            IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
+                MismatchedObjectStorage(), adapter
+            )
+        },
+        config=WorkerConfig(worker_id="immutable-object-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        job = session.get(IngestionJob, job_id)
+        version = session.get(DocumentVersion, version_id)
+        assert job and job.state is IngestionJobState.FAILED
+        assert job.last_error_code == "object_content_mismatch"
+        assert job.last_error_detail is None
+        assert version and version.state is DocumentVersionState.FAILED
+        assert session.scalar(select(func.count()).select_from(Page)) == 0
+        assert session.scalar(select(func.count()).select_from(Block)) == 0
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(IngestionJob)
+                .where(IngestionJob.kind == IngestionJobKind.BUILD_INDEX)
+            )
+            == 0
+        )
+
+
+def test_build_worker_terminally_rejects_tampered_checkpoint(
+    factory: sessionmaker[Session],
+) -> None:
+    now = datetime(2026, 8, 19, 12, tzinfo=UTC)
+    with factory.begin() as session:
+        adapter, _, build_target, job, _ = real_build_target(
+            session, suffix="tampered-checkpoint", now=now
+        )
+        job.max_attempts = 1
+        job.checkpoint = {"document_version_ids": []}
+        job_id = job.id
+        target_id = build_target.id
+
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.BUILD_INDEX: make_build_index_handler(adapter)},
+        config=WorkerConfig(worker_id="tampered-checkpoint-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        job = session.get(IngestionJob, job_id)
+        target_index = session.get(IndexVersion, target_id)
+        assert job and job.state is IngestionJobState.FAILED
+        assert job.last_error_code == "index_job_checkpoint_invalid"
+        assert job.last_error_detail is None
+        assert target_index and target_index.state is IndexVersionState.FAILED
+        assert (
+            session.scalar(
+                select(func.count()).select_from(Chunk).where(Chunk.index_version_id == target_id)
+            )
+            == 0
+        )
+        assert session.scalar(select(func.count()).select_from(IngestionJob)) == 1
+
+
+def test_parse_worker_terminal_parse_failure_does_not_enqueue_or_retry(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = datetime(2026, 8, 19, 12, tzinfo=UTC)
+    raw = b"# parse failure boundary\n"
+    storage = MemoryObjectStorage()
+    adapter = HashEmbeddingAdapter(dimension=8)
+
+    def fail_parse(*_args: object, **_kwargs: object) -> ParsedDocument:
+        raise worker_module.WorkerPublicError("parse_document_invalid")
+
+    monkeypatch.setattr(worker_module, "_parse_uploaded_document", fail_parse)
+    with factory.begin() as session:
+        user, kb, _ = target(session, "terminal-parse-failure")
+        uploaded = upload_prepared_knowledge_document(
+            session,
+            user,
+            kb.id,
+            PreparedUpload(
+                source_name="broken.md",
+                content_type="text/markdown",
+                content_sha256=hashlib.sha256(raw).hexdigest(),
+                temporary_file=BytesIO(raw),
+            ),
+            "terminal-parse-failure",
+            storage,
+        )
+        uploaded.job.available_at = now
+        uploaded.job.max_attempts = 1
+        job_id = uploaded.job.id
+        version_id = uploaded.version.id
+
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(storage, adapter)},
+        config=WorkerConfig(worker_id="terminal-parse-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        job = session.get(IngestionJob, job_id)
+        version = session.get(DocumentVersion, version_id)
+        assert job and job.state is IngestionJobState.FAILED
+        assert job.attempt_count == 1
+        assert job.last_error_code == "parse_document_invalid"
+        assert job.last_error_detail is None
+        assert version and version.state is DocumentVersionState.FAILED
+        assert session.scalar(select(func.count()).select_from(Page)) == 0
+        assert session.scalar(select(func.count()).select_from(Block)) == 0
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(IngestionJob)
+                .where(IngestionJob.kind == IngestionJobKind.BUILD_INDEX)
+            )
+            == 0
+        )
+
+
+def test_complete_job_lease_loss_preserves_replacement_owner_status_and_result(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "worker-lease-loss.db"
+    engine = create_engine(
+        f"sqlite:///{database_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    event.listen(engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    now = datetime(2026, 8, 19, 12, tzinfo=UTC)
+    replacement_now = now + timedelta(minutes=6)
+    replacement_expiry = replacement_now + timedelta(minutes=10)
+    try:
+        with factory.begin() as session:
+            user, kb, index = target(session, "complete-lease-loss")
+            job = add_job(session, user, kb, index, now=now)
+            claimed = claim_next_job(
+                session,
+                worker_id="original-worker",
+                now=now,
+                lease_duration=timedelta(minutes=5),
+            )
+            assert claimed and claimed.id == job.id
+            job_id = job.id
+
+        with factory.begin() as replacement:
+            claimed = claim_next_job(
+                replacement,
+                worker_id="replacement-worker",
+                now=replacement_now,
+                lease_duration=timedelta(minutes=10),
+            )
+            assert claimed and claimed.id == job_id
+            claimed.checkpoint = {"replacement_result": "preserve"}
+            claimed.completed_at = None
+            claimed.last_error_code = "replacement_error"
+            claimed.last_error_detail = "replacement detail"
+
+        with factory.begin() as stale_worker:
+            with pytest.raises(RuntimeError, match="^worker_lease_lost$"):
+                complete_job(
+                    stale_worker,
+                    job_id=job_id,
+                    worker_id="original-worker",
+                    now=replacement_now,
+                )
+
+        with factory() as session:
+            persisted = session.get(IngestionJob, job_id)
+            assert persisted and persisted.state is IngestionJobState.RUNNING
+            assert persisted.lease_owner == "replacement-worker"
+            assert persisted.lease_expires_at == replacement_expiry.replace(tzinfo=None)
+            assert persisted.completed_at is None
+            assert persisted.last_error_code == "replacement_error"
+            assert persisted.last_error_detail == "replacement detail"
+            assert persisted.checkpoint == {"replacement_result": "preserve"}
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_fail_job_lease_loss_preserves_replacement_owner_status_and_result(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "worker-lease-loss-failure.db"
+    engine = create_engine(
+        f"sqlite:///{database_path}",
+        connect_args={"check_same_thread": False},
+        poolclass=NullPool,
+    )
+    event.listen(engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    now = datetime(2026, 8, 19, 12, tzinfo=UTC)
+    replacement_now = now + timedelta(minutes=6)
+    replacement_expiry = replacement_now + timedelta(minutes=10)
+    try:
+        with factory.begin() as session:
+            user, kb, index = target(session, "failure-lease-loss")
+            job = add_job(session, user, kb, index, now=now)
+            claimed = claim_next_job(
+                session,
+                worker_id="original-worker",
+                now=now,
+                lease_duration=timedelta(minutes=5),
+            )
+            assert claimed and claimed.id == job.id
+            job_id = job.id
+
+        with factory.begin() as replacement:
+            claimed = claim_next_job(
+                replacement,
+                worker_id="replacement-worker",
+                now=replacement_now,
+                lease_duration=timedelta(minutes=10),
+            )
+            assert claimed and claimed.id == job_id
+            claimed.checkpoint = {"replacement_result": "preserve"}
+            claimed.completed_at = None
+            claimed.last_error_code = "replacement_error"
+            claimed.last_error_detail = "replacement detail"
+
+        with factory.begin() as stale_worker:
+            with pytest.raises(RuntimeError, match="^worker_lease_lost$"):
+                fail_job(
+                    stale_worker,
+                    job_id=job_id,
+                    worker_id="original-worker",
+                    error=worker_module.WorkerPublicError("original_worker_failed"),
+                    retry_delay=timedelta(0),
+                    now=replacement_now,
+                )
+
+        with factory() as session:
+            persisted = session.get(IngestionJob, job_id)
+            assert persisted and persisted.state is IngestionJobState.RUNNING
+            assert persisted.lease_owner == "replacement-worker"
+            assert persisted.lease_expires_at == replacement_expiry.replace(tzinfo=None)
+            assert persisted.completed_at is None
+            assert persisted.last_error_code == "replacement_error"
+            assert persisted.last_error_detail == "replacement detail"
+            assert persisted.checkpoint == {"replacement_result": "preserve"}
+    finally:
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_worker_main_injects_real_formula_evidence_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tutor_api.core.config import Settings
+    from tutor_api import worker_main
+
+    sentinel = object()
+    captured: dict[str, object] = {}
+    original = worker_main.make_markdown_draft_handler
+
+    def capture(adapter, **kwargs):
+        captured.update(kwargs)
+        return original(adapter, **kwargs)
+
+    monkeypatch.setattr(worker_main, "WikipediaFormulaEvidenceProvider", lambda: sentinel)
+    monkeypatch.setattr(worker_main, "make_markdown_draft_handler", capture)
+
+    worker_main.create_handlers(Settings(app_env="test", embedding_dimension=8))
+
+    assert captured["formula_evidence_provider"] is sentinel

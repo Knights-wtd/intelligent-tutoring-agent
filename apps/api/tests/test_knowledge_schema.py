@@ -1295,6 +1295,8 @@ def test_ingestion_job_accepts_only_the_targets_for_its_kind(
             "page": page,
         },
         IngestionJobKind.BUILD_INDEX: {"index": index},
+        IngestionJobKind.GENERATE_MARKDOWN: {"document": document, "version": version},
+        IngestionJobKind.INDEX_MARKDOWN_LINKS: {"document": document, "version": version},
     }
     session.add(
         _make_job(

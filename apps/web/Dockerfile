@@ -17,9 +17,6 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 COPY apps/web ./apps/web
 
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
-ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
-
 RUN pnpm --dir apps/web build
 
 FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS runtime

@@ -6,6 +6,7 @@ import hashlib
 import re
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -23,7 +24,19 @@ from tutor_api.knowledge.indexing import (
     make_pipeline_signature,
     prepare_index_build,
 )
+from tutor_api.knowledge.markdown import (
+    MarkdownSourceBlock,
+    build_knowledge_candidates_prompt,
+    build_structure_candidates_prompt,
+    merge_knowledge_candidates,
+    merge_structure_candidates,
+    parse_knowledge_candidates,
+    parse_structure_candidates,
+    split_for_context,
+)
 from tutor_api.knowledge.models import (
+    Block,
+    CandidateBatchState,
     Chunk,
     Document,
     DocumentVersion,
@@ -33,6 +46,10 @@ from tutor_api.knowledge.models import (
     IngestionJob,
     IngestionJobKind,
     IngestionJobState,
+    KnowledgeCandidateBatch,
+    KnowledgeCandidateLink,
+    KnowledgeCandidateNote,
+    Page,
 )
 from tutor_api.knowledge.ocr import (
     DisabledOCRAdapter,
@@ -58,10 +75,14 @@ from tutor_api.knowledge.service import (
     persist_parsed_document_and_enqueue_build,
 )
 from tutor_api.knowledge.storage import ObjectStorage
+from tutor_api.llm.ports import MarkdownLlmAdapter
 
 JobHandler = Callable[[Session, IngestionJob], None]
 _SAFE_ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,99}$")
 
+
+class FormulaEvidenceProvider(Protocol):
+    def collect(self, source_text: str) -> tuple[dict[str, str], ...]: ...
 
 class CodedWorkerError(Protocol):
     code: object
@@ -93,9 +114,7 @@ class WorkerConfig:
             raise ValueError("idle_sleep_seconds must not be negative")
 
 
-def claim_job_statement(
-    now: datetime, kinds: tuple[IngestionJobKind, ...] | None = None
-):
+def claim_job_statement(now: datetime, kinds: tuple[IngestionJobKind, ...] | None = None):
     runnable = and_(
         IngestionJob.state.in_((IngestionJobState.QUEUED, IngestionJobState.RETRY_WAIT)),
         IngestionJob.available_at <= now,
@@ -133,9 +152,9 @@ def _terminally_fail_parse_target(session: Session, job: IngestionJob) -> None:
     )
     if version is not None:
         version.state = DocumentVersionState.FAILED
-def _terminally_fail_build_target(
-    session: Session, job: IngestionJob, now: datetime
-) -> None:
+
+
+def _terminally_fail_build_target(session: Session, job: IngestionJob, now: datetime) -> None:
     if job.kind is not IngestionJobKind.BUILD_INDEX or job.index_version_id is None:
         return
     index = session.scalar(
@@ -154,6 +173,32 @@ def _terminally_fail_build_target(
     index.state = IndexVersionState.FAILED
     index.completed_at = now
     index.activated_at = None
+
+
+def _record_candidate_failure(
+    session: Session,
+    job: IngestionJob,
+    *,
+    terminal: bool,
+) -> None:
+    if job.kind is not IngestionJobKind.GENERATE_MARKDOWN:
+        return
+    raw_batch_id = job.checkpoint.get("candidate_batch_id")
+    try:
+        batch_id = UUID(raw_batch_id)
+    except (TypeError, ValueError, AttributeError):
+        return
+    batch = session.scalar(
+        select(KnowledgeCandidateBatch)
+        .where(KnowledgeCandidateBatch.id == batch_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if batch is None:
+        return
+    batch.failure_code = job.last_error_code
+    if terminal:
+        batch.state = CandidateBatchState.FAILED
 
 
 def _fail_exhausted_stale_jobs(
@@ -284,11 +329,13 @@ def fail_job(
         job.state = IngestionJobState.RETRY_WAIT
         job.available_at = timestamp + retry_delay
         job.completed_at = None
+        _record_candidate_failure(session, job, terminal=False)
     else:
         job.state = IngestionJobState.FAILED
         job.completed_at = timestamp
         _terminally_fail_build_target(session, job, timestamp)
         _terminally_fail_parse_target(session, job)
+        _record_candidate_failure(session, job, terminal=True)
     session.flush()
     return job
 
@@ -338,6 +385,7 @@ def _component_signature_config(component: object) -> dict[str, object]:
             if isinstance(value, (str, int, float, bool)) or value is None:
                 result[item.name] = value
     return result
+
 
 def make_parse_document_handler(
     object_storage: ObjectStorage,
@@ -440,6 +488,216 @@ def make_parse_document_handler(
             object_storage=object_storage,
         )
         job.checkpoint["build_job_id"] = str(build_job.id)
+
+    return handle
+
+
+def make_markdown_draft_handler(
+    adapter: MarkdownLlmAdapter,
+    *,
+    max_chars: int = 60_000,
+    max_concurrency: int = 1,
+    provider: str = "faro",
+    model: str | None = None,
+    formula_evidence_provider: FormulaEvidenceProvider | None = None,
+) -> JobHandler:
+    """Generate review-only knowledge candidates from persisted parsed blocks."""
+
+    if max_chars < 1:
+        raise ValueError("max_chars must be positive")
+    if max_concurrency < 1:
+        raise ValueError("max_concurrency must be positive")
+
+    def handle(session: Session, job: IngestionJob) -> None:
+        if (
+            job.kind is not IngestionJobKind.GENERATE_MARKDOWN
+            or job.document_id is None
+            or job.document_version_id is None
+        ):
+            raise WorkerPublicError("candidate_job_target_invalid")
+        raw_batch_id = job.checkpoint.get("candidate_batch_id")
+        try:
+            batch_id = UUID(raw_batch_id)
+        except (TypeError, ValueError, AttributeError):
+            raise WorkerPublicError("candidate_job_checkpoint_invalid") from None
+        batch = session.get(KnowledgeCandidateBatch, batch_id)
+        if (
+            batch is None
+            or batch.space_id != job.space_id
+            or batch.knowledge_base_id != job.knowledge_base_id
+            or batch.document_id != job.document_id
+            or batch.document_version_id != job.document_version_id
+        ):
+            raise WorkerPublicError("candidate_job_target_invalid")
+        if batch.state is CandidateBatchState.NEEDS_REVIEW:
+            return
+        if batch.state is not CandidateBatchState.PROCESSING:
+            raise WorkerPublicError("candidate_batch_not_processing")
+        if adapter is None:
+            raise WorkerPublicError("llm_provider_unavailable")
+
+        rows = session.execute(
+            select(Block, Page.page_number)
+            .join(Page, Block.page_id == Page.id)
+            .where(
+                Page.document_version_id == job.document_version_id,
+                Block.text.is_not(None),
+            )
+            .order_by(Page.page_number, Block.ordinal, Block.id)
+        ).all()
+        source_blocks = tuple(
+            MarkdownSourceBlock(
+                source_pointer=block.source_pointer,
+                page_number=page_number,
+                text=block.text or "",
+            )
+            for block, page_number in rows
+        )
+        chunks = split_for_context(source_blocks, max_chars=max_chars)
+        if not chunks:
+            raise WorkerPublicError("candidate_source_empty")
+
+        structure_prompts = tuple(
+            build_structure_candidates_prompt(chunk.source_text) for chunk in chunks
+        )
+        with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+            structure_completions = tuple(
+                executor.map(adapter.complete_markdown, structure_prompts)
+            )
+        structure_groups = [
+            parse_structure_candidates(completion.text) for completion in structure_completions
+        ]
+        last_request_id = None
+        for completion in structure_completions:
+            last_request_id = completion.request_id or last_request_id
+        structures = merge_structure_candidates(tuple(structure_groups))
+
+        if formula_evidence_provider is None:
+            evidence_groups: tuple[tuple[dict[str, str], ...], ...] = tuple(() for _ in chunks)
+        else:
+            with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+                evidence_groups = tuple(
+                    executor.map(
+                        formula_evidence_provider.collect,
+                        (chunk.source_text for chunk in chunks),
+                    )
+                )
+        candidate_prompts = tuple(
+            build_knowledge_candidates_prompt(
+                chunk.source_text,
+                structures=structures,
+                external_formula_evidence=evidence,
+            )
+            for chunk, evidence in zip(chunks, evidence_groups, strict=True)
+        )
+        with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+            candidate_completions = tuple(
+                executor.map(adapter.complete_markdown, candidate_prompts)
+            )
+        candidate_groups = [
+            parse_knowledge_candidates(completion.text) for completion in candidate_completions
+        ]
+        for completion in candidate_completions:
+            last_request_id = completion.request_id or last_request_id
+        candidates = merge_knowledge_candidates(tuple(candidate_groups))
+
+        session.execute(
+            delete(KnowledgeCandidateLink).where(KnowledgeCandidateLink.batch_id == batch.id)
+        )
+        session.execute(
+            delete(KnowledgeCandidateNote).where(KnowledgeCandidateNote.batch_id == batch.id)
+        )
+        pending = {note.key: note for note in candidates.notes}
+        ordered_notes = []
+        persisted_keys: set[str] = set()
+        while pending:
+            ready = [
+                note
+                for note in pending.values()
+                if note.parent_key is None or note.parent_key in persisted_keys
+            ]
+            if not ready:
+                raise WorkerPublicError("candidate_parent_order_invalid")
+            for note in ready:
+                ordered_notes.append(note)
+                persisted_keys.add(note.key)
+                pending.pop(note.key)
+
+        for ordinal, note in enumerate(ordered_notes):
+            verification = note.formula_verification
+            verification_payload = (
+                {
+                    "status": verification.status.value,
+                    "textbook_expression": verification.textbook_expression,
+                    "normalized_expression": verification.normalized_expression,
+                    "variable_mapping": [
+                        {
+                            "textbook_symbol": mapping.textbook_symbol,
+                            "external_symbol": mapping.external_symbol,
+                            "meaning": mapping.meaning,
+                            "unit": mapping.unit,
+                        }
+                        for mapping in verification.variable_mapping
+                    ],
+                }
+                if verification is not None
+                else None
+            )
+            external_source_payload = [
+                {
+                    "title": source.title,
+                    "url": source.url,
+                    "source_type": source.source_type,
+                    "excerpt": source.excerpt,
+                }
+                for source in note.external_sources
+            ]
+            session.add(
+                KnowledgeCandidateNote(
+                    space_id=batch.space_id,
+                    knowledge_base_id=batch.knowledge_base_id,
+                    batch_id=batch.id,
+                    ordinal=ordinal,
+                    candidate_key=note.key,
+                    title=note.title,
+                    normalized_title=" ".join(note.title.casefold().split()),
+                    kind=note.kind,
+                    parent_key=note.parent_key,
+                    markdown=note.markdown,
+                    source_pointers=list(note.source_pointers),
+                    formula_verification=verification_payload,
+                    external_sources=external_source_payload,
+                )
+            )
+        session.flush()
+        for ordinal, link in enumerate(candidates.links):
+            session.add(
+                KnowledgeCandidateLink(
+                    space_id=batch.space_id,
+                    knowledge_base_id=batch.knowledge_base_id,
+                    batch_id=batch.id,
+                    ordinal=ordinal,
+                    kind=link.kind,
+                    relation=link.relation,
+                    source_key=link.source_key,
+                    target_key=link.target_key,
+                    source_pointer=link.source_pointer,
+                    occurrence=link.occurrence,
+                    context=link.context,
+                )
+            )
+
+        batch.state = CandidateBatchState.NEEDS_REVIEW
+        batch.generation_provider = provider
+        batch.generation_model = model
+        batch.generation_request_id = last_request_id
+        batch.failure_code = None
+        job.checkpoint["candidate_note_count"] = len(candidates.notes)
+        job.checkpoint["candidate_link_count"] = len(candidates.links)
+        job.checkpoint["structure_count"] = len(structures)
+        job.checkpoint["external_formula_source_count"] = sum(
+            len(group) for group in evidence_groups
+        )
 
     return handle
 

@@ -126,6 +126,13 @@ Phase 5：知识与 Agent 能力实现
 - 所有外部网页、源码和截图研究只写入 `findings.md`，视为不可信资料数据。
 - 正式设计获批前不进入业务代码实现。
 
+## 2026-08-22 · LLM Markdown 知识库扩展
+
+- **设计状态：** 用户已批准 LLM 全文重写、草稿确认发布、上下文窗口分块和确定性双向链接方案。
+- **设计文档：** `docs/superpowers/specs/2026-08-22-llm-markdown-knowledge-design.md`。
+- **实施计划：** `docs/superpowers/plans/2026-08-22-llm-markdown-knowledge-plan.md`。
+- **执行护栏：** 同一指标三次定向修复仍失败后暂停，向用户报告证据并等待继续决定；不使用真实 Key 做未经确认的付费调用。
+
 ## 2026-08-16 Phase 5 交付记录
 
 - [x] 已创建详细实施计划：`docs/superpowers/plans/2026-08-16-versioned-knowledge-import-plan.md`。
@@ -271,3 +278,86 @@ Phase 5：知识与 Agent 能力实现
 - **Blocked gates:** Docker CLI/Desktop and local PostgreSQL tools were absent, so no isolated PostgreSQL/pgvector migration round-trip or Compose register → KB → Markdown/PDF upload → READY → search → cited-page slice was run.
 - **Limits/provider posture:** 100 MiB knowledge upload, 5,000 Vault members, 500 MiB uncompressed Vault data, disabled-only OCR, and deterministic `hash / feature-hash-v1 / 384` embeddings. No remote OCR or embedding provider is configured, and there are no real model-invocation credentials or enabled remote model calls; DeepTutor remains research-only.
 - **Next:** obtain a usable container/pgvector runtime and resolve the full API coverage/test gate before final Task 10 delivery. See `docs/superpowers/handoffs/2026-08-18-task10-verification-blocked.md`.
+
+## 2026-08-21 · MVP 主链路收口实现批次
+
+- **Status:** in_progress
+- **范围：** 诚实移除未实现的 AI Tutor/模型/余额/费用界面；接入最小题库学习者 UI；新增仅含公开处理状态的资料状态读取并在知识库面板提供刷新。
+- **约束：** 仅 feature worktree；不启动 Docker/Compose/Alembic、全量测试、coverage、真实外部 API/LLM；不 stage/commit/reset/stash/checkout；API 测试仅使用 `apps/api/.venv/Scripts/python.exe -B` 及 `PYTHONDONTWRITEBYTECODE=1`。
+- **验证计划：** 新增/紧邻 API 上传测试、三项工作台 focused Vitest、targeted Ruff/ESLint/tsc；完成后再一次性进行 SPEC 与 QUALITY/SECURITY 审查。
+
+## 2026-08-21 · Obsidian 风格工作台接入
+
+- **Status:** implementation complete; focused Web verification passed; production build remains environment-blocked by `.next/trace-build` permission denial.
+- **范围：** 将 `.superpowers/brainstorm/platform-design/content/workspace-c3-space-navigation.html` 的视觉骨架迁移到 Next.js `WorkspaceShell`，保留现有知识库和题库面板，不恢复未实现的 AI Tutor/模型/费用承诺。
+- **验证：** Web 8 files / 35 tests passed；ESLint passed；TypeScript non-incremental check passed。
+- **待处理：** 需要在可写的 Next.js 构建目录中重新执行 production build；本次未改动 API、未执行 Docker/Alembic/full API suite。
+
+## 2026-08-21 · 登录入口视觉收口
+
+- **Status:** complete; browser preview confirmed styled login page; Web tests pass.
+- **范围：** 为匿名登录/注册入口补齐与工作台一致的深色卡片视觉，保留原有登录/注册语义和接口行为。
+- **验证：** Web 8 files / 35 tests passed；ESLint and TypeScript passed。浏览器预览确认 CSS 已生效。
+
+## 2026-08-21 · 注册链路故障修复
+
+- **Status:** complete.
+- **根因：** FastAPI 未运行；同时 Web API client 忽略了 `NEXT_PUBLIC_API_BASE_URL`，相对路径错误地请求到 3000 端口。
+- **修复/验证：** API client 改为读取配置 origin；FastAPI 8000 健康检查 200；Web 8 files / 36 tests、ESLint、TypeScript 均通过。
+
+## 2026-08-21 · 旧 Worker 更新
+
+- **Status:** complete; the stale Compose Worker was rebuilt and recreated from the current worktree.
+- **目标：** 更新 `mvp-phase6-20260821-worker-1`，不删除数据库、Redis 或对象存储数据卷。
+- **验证：** current API image rebuilt; Worker container recreated and started successfully; container exit code is 0 and recent logs contain no error output。
+
+## 2026-08-21 · 注册失败第二次修复
+
+- **Status:** complete; rebuilt the stale Web image with `NEXT_PUBLIC_API_BASE_URL=http://localhost:8010` and recreated only the Web container.
+- **根因：** API 日志没有任何注册请求；Web 容器仍是旧镜像，未加载当前 Compose 环境中的 API 端口。
+- **验证：** Web build passed; `/register` returns 200; Web container is running and healthy。
+
+## 2026-08-22 · 注册链路永久修复
+
+- **Status:** complete; browser API calls are now same-origin and proxied by Web at runtime.
+- **根因：** `NEXT_PUBLIC_API_BASE_URL` 被编译进浏览器包；API 端口变化或 Web 镜像未重建时，注册请求会静默发往旧地址，API 完全收不到请求。
+- **修复：** 新增动态 `/api/[...path]` 代理；浏览器只请求 Web 同源地址；Compose 通过运行时 `API_INTERNAL_URL=http://api:${API_PORT}` 连接 API。
+- **验证：** Web 9 files / 37 tests、ESLint、TypeScript、production build 均通过；Compose 全栈重建后，真实注册 201，随后 `/auth/me` 200。
+
+## 2026-08-22 · 注册 422 提示修复
+
+- **Status:** complete; the reported request reached API and failed validation because the password was shorter than 12 characters.
+- **修复：** 注册页常驻展示“至少 12 位”，短密码提交时明确提示“密码至少需要 12 位”，且不发送无效请求。
+- **验证：** TDD regression passed; Web 9 files / 38 tests、ESLint、TypeScript and Docker production build passed；Web container recreated。
+
+## 2026-08-22 · 工作台功能面板样式恢复与对接核查
+
+- **Status:** complete; Web verification and local browser smoke passed.
+- **根因：** Obsidian 工作台视觉迁移替换了共享 CSS Module，却遗漏 `KnowledgePanel` / `QuestionBankPanel` 仍引用的 19 个样式类；功能 DOM 与 API 调用存在，但退化为原生文字和控件。
+- **修复：** 补回知识库、上传、搜索、预览、题库、答题和复习状态的完整样式，并增加 CSS Module 合同回归测试。
+- **联调：** 本地登录后已验证创建知识库、空库搜索、题库切换与空状态。外壳上的创建班级、全局/空间搜索、更多、空间设置和展开按钮仍为原型占位；后端题目创建端点尚无前端出题入口，记录为后续功能缺口。
+- **最终验证：** Web 10 files / 39 tests、ESLint、TypeScript、Docker production build 均通过；Web/API/PostgreSQL/Redis 健康，Worker 与 MinIO 正常运行。
+
+## 2026-08-22 · 浅色工作台排版优化
+
+- **Status:** complete; focused visual and full Web verification passed.
+- **范围：** 保留三栏和现有功能流，将工作台调整为暖白、浅灰、柔紫与薄荷绿；移除 emoji、字符图标、简单装饰图形及无功能原型按钮。
+- **响应式：** 移除固定工作区最小宽度；1023px 以下收起右侧说明，767px 以下再收起内容树，中心区优先展示表单和学习内容。
+- **回归：** 新增纯文字导航/原型控件清理测试与浅色 CSS token/响应式合同测试。
+- **最终验证：** Web 10 files / 41 tests、ESLint、TypeScript 和 Docker production build 通过；341px 浏览器无页面级横向溢出，内容树/说明栏折叠且知识库/题库切换正常；Web、API、PostgreSQL、Redis healthy。
+
+## 2026-08-23 Markdown data-layer verification pause
+
+Acceptance metric: `apps/api/tests/test_knowledge_markdown_models.py`.
+
+Three targeted repair attempts were made after introducing Markdown note/revision/link models:
+1. Fixed a literal newline escape introduced while rewriting the new test; test collection then advanced.
+2. Added the missing `KnowledgeBase` import; test collection then advanced.
+3. Ran the focused suite; all three cases now fail because the helper's `MarkdownNote` construction still omits required `knowledge_base_id`.
+
+Per the user-approved three-strike rule, stop here before a fourth repair and request direction. No schema or architecture change is proposed; the next repair would only correct the test helper's required scope field.
+## 2026-08-23 Textbook acceptance extension
+
+The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
+
+Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.

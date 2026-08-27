@@ -447,3 +447,107 @@
 - **Format evidence / limits:** Tests use deterministic in-memory PDF, DOCX, Markdown, JPEG, PNG, and Obsidian ZIP inputs; upload tests cover all accepted suffixes including `.jpg` and `.jpeg`, but no binary fixtures are checked in. Safe defaults are 100 MiB upload, 5,000 Vault files, 500 MiB decompressed Vault data, disabled-only OCR, and `hash / feature-hash-v1 / 384` embeddings; no remote provider is configured.
 - **Next blocker:** provide a usable Docker Desktop/Compose runtime (or an isolated real PostgreSQL/pgvector environment) and stabilize or otherwise resolve the two full-suite OCR timing failures plus the 90% coverage gate before rerunning Task 10. See `docs/superpowers/handoffs/2026-08-18-task10-verification-blocked.md`.
 - **Documentation self-review:** corrected the Compose wording to the actual knowledge-override mapping behavior and distinguished the OCR_LANGUAGES default from the runtime OCR helper allowlist; completion state is unchanged.
+
+## 2026-08-21 · MVP 主链路收口实现批次
+
+- **Status:** in_progress
+- **范围：** 诚实移除未实现的 AI Tutor/模型/余额/费用界面；接入最小题库学习者 UI；新增仅含公开处理状态的资料状态读取并在知识库面板提供刷新。
+- **约束：** 仅 feature worktree；不启动 Docker/Compose/Alembic、全量测试、coverage、真实外部 API/LLM；不 stage/commit/reset/stash/checkout；API 测试仅使用 `apps/api/.venv/Scripts/python.exe -B` 及 `PYTHONDONTWRITEBYTECODE=1`。
+- **验证计划：** 新增/紧邻 API 上传测试、三项工作台 focused Vitest、targeted Ruff/ESLint/tsc；完成后再一次性进行 SPEC 与 QUALITY/SECURITY 审查。
+## 2026-08-21 · MVP 复审窄修复
+
+- **Status:** implementation and focused verification complete; no Docker/Compose/Alembic/full-suite run.
+- **Upload response boundary:** `KnowledgeUploadResponse` and upload route expose only `document_id`, `document_version_id`, `source_name`, and `created_at`. The learner-facing processing state stays behind the authorised document-status endpoint; the Web DTO and focused API/Web tests no longer use internal job/hash/space/knowledge-base/state fields.
+- **Question-bank races:** active submit/history requests are aborted and sequence-invalidated before a question or knowledge-base change; both loading flags reset at that boundary. The client retains one idempotency key for the same knowledge-base/question/trimmed answer retry, and invalidates it when the question, knowledge base, or answer changes.
+- **Knowledge status refresh:** refresh controllers are now tracked per upload entry. Different files refresh concurrently; replacing one entry refresh cannot clear or strand the other entry's loading state. A context change aborts and clears all visible refresh flags safely.
+- **Focused verification:** API upload tests `61 passed`; targeted Ruff PASS; Web focused Vitest `3 files / 22 tests` PASS; target ESLint PASS; TypeScript `tsc --noEmit --incremental false` PASS; `git diff --check` PASS. The only test-run note was Vite's existing future config-loader warning.
+- **Git hygiene:** no `git add`, `commit`, `reset`, `stash`, checkout, Docker, Alembic, external API, coverage, or full test suite was run. Existing unrelated worktree changes remain preserved.
+
+## 2026-08-21 · MVP 复审最后窄修复
+
+- 修复题库答题成功后 `review-items` 刷新失败会提前清空幂等键的问题：答案与 `(knowledge_base_id, question_version_id, normalized_answer)` 对应的 key 会保留到 review 刷新成功；用户在未修改答案时重试会复用原 key。
+- 提交成功但 review 刷新失败时，界面保留成功评估和答案，并显示准确提示“答案已提交，但待复习列表刷新失败，请稍后重试。”；不再误报为提交失败。
+- focused regression 覆盖“提交成功 → review-items 失败 → 再次提交复用同一 key”。
+- 验证：question-bank-panel focused 4 passed；目标 ESLint PASS；TypeScript 非增量检查 PASS。未运行 Docker、Alembic 或全量测试。
+
+## 2026-08-21 · Obsidian 风格工作台接入
+
+- 将高保真 C3 原型的品牌侧栏、空间列表、顶部栏、内容树、三栏可调布局、上下文面板和底部状态栏接入 `apps/web/src/components/workspace/workspace-shell.tsx` 与对应 CSS。
+- 中间区域继续复用现有 `KnowledgePanel` 和 `QuestionBankPanel`；右侧改为诚实的 MVP 上下文说明，没有重新引入未实现的 AI Tutor、模型余额或费用承诺。
+- 初次 focused 测试因 Tab 增加副标题导致可访问名称变化；通过显式 `aria-label` 修复，最终 Web 8 files / 35 tests、ESLint、TypeScript 均通过。
+- 生产构建失败：Next.js 无法写入 `apps/web/.next/trace-build`，错误为 Windows `EPERM`；这是当前生成目录权限问题，尚未删除目录或改变权限。
+
+## 2026-08-21 · 登录入口样式修复
+
+- 浏览器预览确认实际页面处于匿名状态，`AuthForm` 原先没有任何样式，因此显示为浏览器默认 HTML；为其新增 `auth-form.module.css`，接入与工作台一致的深色登录卡片。
+- 初次视觉改造将标题改为“欢迎回来”，导致既有匿名页测试无法找到“登录”标题；已恢复“登录/注册”语义标题，并保留欢迎说明作为副标题。
+- 最终 Web 全量验证：8 个测试文件、35 个测试通过；ESLint、TypeScript 通过；浏览器刷新后 CSS 正常显示。
+
+## 2026-08-21 · 注册链路故障修复
+
+- 诊断确认 `127.0.0.1:8000` 未运行，且 Web `api.ts` 使用相对 `/api/v1/...` 路径，导致请求落到 Next.js 3000 端口并返回 404。
+- 已让 API client 读取 `NEXT_PUBLIC_API_BASE_URL`，并以 `http://127.0.0.1:8000` 启动本地 Web；FastAPI health 200、Web 200。
+- 最终 Web 验证：8 个文件 / 36 个测试通过；ESLint、TypeScript 通过。
+
+## 2026-08-21 · 旧 Worker 更新
+
+- 发现 `mvp-phase6-20260821-worker-1` 使用旧的 `textbook-tutor-api:local` 镜像，已依据该 Compose 项目配置从当前 worktree 重建镜像并仅重建 Worker。
+- 更新后容器已启动，状态为 `Up`，新镜像摘要以 `sha256:e3af3a...` 开头，退出码为 0；最近 90 秒无错误日志。
+
+## 2026-08-21 · 注册失败第二次修复
+
+- API 日志确认用户点击注册时没有到达注册端点；旧 Web 容器使用了过期构建，未把 API 地址编译为 `http://localhost:8010`。
+- 已根据 `.env.identity-test` 重建并替换 Web 容器；构建通过，注册页返回 200，Web 容器状态为 healthy。
+
+## 2026-08-22 · 注册链路永久修复
+
+- 以失败测试复现“浏览器依赖构建期 API 地址”的缺口，再实现 Web 运行时同源代理；会话 `Set-Cookie` 通过代理保持完整。
+- 删除 Web 镜像中的 `NEXT_PUBLIC_API_BASE_URL` 构建参数，Compose 改为运行时内部服务地址，避免端口变化和旧前端镜像再次破坏注册。
+- 验收账号 `codex_reg_0822121130` 在本地 identity-test 数据库注册成功（201），同会话读取当前用户成功（200）。
+
+## 2026-08-22 · 注册 422 提示修复
+
+- 用户截图对应请求已在 API 日志中定位为 `POST /api/v1/auth/register 422`；不是代理失败，也不是账号重复（409）。
+- 用户名 `wtd` 和邮箱 `wtd00005@163.com` 满足规则；密码不足后端要求的 12 位。
+- 先添加失败回归测试，再实现短密码前端拦截和可见规则提示；重建 Web 容器后生效。
+
+## 2026-08-22 · 工作台面板样式与功能核查
+
+- 新增回归测试，自动核对三个工作台组件引用的 CSS Module 类均有定义；测试先以 19 个缺失类失败，补齐后通过。
+- 重建 Web 容器并在真实登录会话中确认：知识库表单和按钮恢复卡片化样式；创建知识库成功；空库搜索返回正确空状态；题库标签与空状态正常。
+- 核查前后端映射：知识库列表/创建/上传/状态/搜索/来源预览、题库列表/答题/复习项/历史均已有调用；后端创建题目尚无前端入口。
+- 发现工作台外壳的创建班级、全局搜索、更多操作、空间内搜索、空间设置、上传快捷入口和展开工作区仍是无事件处理的视觉占位。
+- 最终验证：Web 10 files / 39 tests、ESLint、TypeScript、Docker production build 均通过；Compose 六项服务均运行，Web/API/PostgreSQL/Redis 报告 healthy。
+
+## 2026-08-22 · 浅色工作台排版优化
+
+- 采用确认的“暖白 + 柔紫”方案：白色中心内容、浅灰紫侧栏、柔紫选中/主操作、薄荷绿服务与连接状态。
+- 移除工作台的 emoji、字符图标和无事件处理的原型按钮；保留知识库、上传、搜索和题库的真实控件。
+- 移除 `.panelGroup` 固定最小宽度；341px 浏览器实测无页面级横向溢出，内容树和说明栏会收起，题库/知识库切换仍通过。
+- TDD：图标清理测试和 CSS 合同测试均先失败再通过；Web 全量 10 files / 41 tests、ESLint、TypeScript 通过，Docker production build 通过。
+
+## 2026-08-22 · LLM Markdown 知识库设计
+
+- 用户确认采用 LLM 全文重写导入模式：Word/PDF/图片/Vault 先由现有解析器/OCR 提取，再由 Faro Gemini 生成 Markdown 草稿。
+- 用户确认草稿必须预览、编辑并确认后发布；原始文件永不覆盖。
+- 用户要求章节长度不作为严格失败条件；后续只按上下文窗口分块，异常检查仅识别空响应、明显截断和模型错误文本。
+- 用户要求多次修复失败时暂停：同一指标最多三次定向修复，第三次仍失败必须交由用户决定是否继续。
+- 已完成设计文档：`docs/superpowers/specs/2026-08-22-llm-markdown-knowledge-design.md`。
+- 已完成实施计划：`docs/superpowers/plans/2026-08-22-llm-markdown-knowledge-plan.md`。
+- 本阶段尚未修改业务代码、未使用真实 Faro Key、未调用外部付费模型。
+
+## 2026-08-23 Markdown data-layer verification pause
+
+Acceptance metric: `apps/api/tests/test_knowledge_markdown_models.py`.
+
+Three targeted repair attempts were made after introducing Markdown note/revision/link models:
+1. Fixed a literal newline escape introduced while rewriting the new test; test collection then advanced.
+2. Added the missing `KnowledgeBase` import; test collection then advanced.
+3. Ran the focused suite; all three cases now fail because the helper's `MarkdownNote` construction still omits required `knowledge_base_id`.
+
+Per the user-approved three-strike rule, stop here before a fourth repair and request direction. No schema or architecture change is proposed; the next repair would only correct the test helper's required scope field.
+## 2026-08-23 Textbook acceptance extension
+
+The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
+
+Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.

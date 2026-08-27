@@ -250,6 +250,32 @@ def test_docx_preserves_heading_paragraph_table_order() -> None:
     assert dict(parsed.blocks[2].metadata) == {"columns": 2, "rows": 2}
 
 
+def test_docx_preserves_omml_fraction_with_textbook_variable_names() -> None:
+    document_xml = b'''<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">
+  <w:body>
+    <m:oMathPara><m:oMath>
+      <m:r><m:t>P_r(d)=</m:t></m:r>
+      <m:f><m:num><m:r><m:t>P_tG_tG_r</m:t></m:r></m:num>
+      <m:den><m:r><m:t>L(d)</m:t></m:r></m:den></m:f>
+    </m:oMath></m:oMathPara>
+  </w:body>
+</w:document>'''
+
+    parsed = parse_docx(make_docx_from_xml(document_xml), source_name="wireless.docx")
+
+    assert len(parsed.blocks) == 1
+    assert parsed.blocks[0].kind is ParsedBlockKind.FORMULA
+    assert parsed.blocks[0].text == "P_r(d)=(P_tG_tG_r)/(L(d))"
+
+
+def test_formula_evidence_provider_module_is_available() -> None:
+    module = __import__("tutor_api.knowledge.formula_evidence", fromlist=["*"])
+
+    assert hasattr(module, "WikipediaFormulaEvidenceProvider")
+
+
 def test_docx_rejects_dtd_without_leaking_parser_details() -> None:
     with pytest.raises(ParseError) as raised:
         parse_docx(make_docx(dangerous_xml=True), source_name="danger.docx")

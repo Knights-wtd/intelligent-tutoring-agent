@@ -104,9 +104,7 @@ class EmbeddingVector(TypeDecorator[list[float]]):
             normalized.append(normalized_component)
         return normalized
 
-    def process_bind_param(
-        self, value: list[float] | None, dialect: Dialect
-    ) -> list[float] | str:
+    def process_bind_param(self, value: list[float] | None, dialect: Dialect) -> list[float] | str:
         normalized = self._normalize(value)
         if dialect.name != "postgresql":
             return normalized
@@ -175,6 +173,8 @@ class IngestionJobKind(StrEnum):
     PARSE_DOCUMENT = "parse_document"
     OCR_PAGE = "ocr_page"
     BUILD_INDEX = "build_index"
+    GENERATE_MARKDOWN = "generate_markdown"
+    INDEX_MARKDOWN_LINKS = "index_markdown_links"
 
 
 class IngestionJobState(StrEnum):
@@ -386,6 +386,200 @@ class Block(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     text: Mapped[str | None] = mapped_column(Text)
     bounding_box: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MarkdownNoteState(StrEnum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    ARCHIVED = "archived"
+
+
+class MarkdownRevisionState(StrEnum):
+    PROCESSING = "processing"
+    DRAFT = "draft"
+    NEEDS_REVIEW = "needs_review"
+    PUBLISHED = "published"
+    FAILED = "failed"
+
+
+class MarkdownNote(Base):
+    __tablename__ = "markdown_notes"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_markdown_note_id_space"),
+        UniqueConstraint(
+            "id", "knowledge_base_id", "space_id", name="uq_markdown_note_id_kb_space"
+        ),
+        UniqueConstraint(
+            "knowledge_base_id", "normalized_title", name="uq_markdown_note_title_in_kb"
+        ),
+        ForeignKeyConstraint(
+            ["knowledge_base_id", "space_id"],
+            ["knowledge_bases.id", "knowledge_bases.space_id"],
+            name="fk_markdown_note_knowledge_base_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["source_document_id", "knowledge_base_id", "space_id"],
+            ["documents.id", "documents.knowledge_base_id", "documents.space_id"],
+            name="fk_markdown_note_source_document_kb_space",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    source_document_id: Mapped[UUID | None] = mapped_column(index=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    normalized_title: Mapped[str] = mapped_column(String(500), nullable=False)
+    state: Mapped[MarkdownNoteState] = mapped_column(
+        _enum(MarkdownNoteState, "markdown_note_state"),
+        nullable=False,
+        default=MarkdownNoteState.DRAFT,
+        server_default=MarkdownNoteState.DRAFT.value,
+        index=True,
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MarkdownRevision(Base):
+    __tablename__ = "markdown_revisions"
+    __table_args__ = (
+        UniqueConstraint("id", "space_id", name="uq_markdown_revision_id_space"),
+        UniqueConstraint(
+            "id",
+            "note_id",
+            "knowledge_base_id",
+            "space_id",
+            name="uq_markdown_revision_id_note_kb_space",
+        ),
+        UniqueConstraint("note_id", "revision_number", name="uq_markdown_revision_number"),
+        CheckConstraint("revision_number > 0", name="ck_markdown_revision_number_positive"),
+        CheckConstraint(
+            "content_sha256 IS NULL OR " + _sha256_check("content_sha256"),
+            name="ck_markdown_revision_sha256",
+        ),
+        ForeignKeyConstraint(
+            ["note_id", "knowledge_base_id", "space_id"],
+            ["markdown_notes.id", "markdown_notes.knowledge_base_id", "markdown_notes.space_id"],
+            name="fk_markdown_revision_note_kb_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["source_document_version_id", "source_document_id", "knowledge_base_id", "space_id"],
+            [
+                "document_versions.id",
+                "document_versions.document_id",
+                "document_versions.knowledge_base_id",
+                "document_versions.space_id",
+            ],
+            name="fk_markdown_revision_source_version_document_kb_space",
+        ),
+        Index(
+            "uq_published_markdown_revision_per_note",
+            "note_id",
+            unique=True,
+            postgresql_where=text("state = 'published'"),
+            sqlite_where=text("state = 'published'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    note_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    source_document_id: Mapped[UUID | None] = mapped_column(index=True)
+    source_document_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[MarkdownRevisionState] = mapped_column(
+        _enum(MarkdownRevisionState, "markdown_revision_state"),
+        nullable=False,
+        default=MarkdownRevisionState.PROCESSING,
+        server_default=MarkdownRevisionState.PROCESSING.value,
+        index=True,
+    )
+    markdown: Mapped[str | None] = mapped_column(Text)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_markers: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+    generation_provider: Mapped[str | None] = mapped_column(String(100))
+    generation_model: Mapped[str | None] = mapped_column(String(255))
+    generation_request_id: Mapped[str | None] = mapped_column(String(255))
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MarkdownLink(Base):
+    __tablename__ = "markdown_links"
+    __table_args__ = (
+        UniqueConstraint("source_revision_id", "ordinal", name="uq_markdown_link_revision_ordinal"),
+        CheckConstraint("ordinal >= 0", name="ck_markdown_link_ordinal_nonnegative"),
+        CheckConstraint("length(target_title) > 0", name="ck_markdown_link_target_title"),
+        ForeignKeyConstraint(
+            ["source_note_id", "knowledge_base_id", "space_id"],
+            ["markdown_notes.id", "markdown_notes.knowledge_base_id", "markdown_notes.space_id"],
+            name="fk_markdown_link_source_note_kb_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["source_revision_id", "source_note_id", "knowledge_base_id", "space_id"],
+            [
+                "markdown_revisions.id",
+                "markdown_revisions.note_id",
+                "markdown_revisions.knowledge_base_id",
+                "markdown_revisions.space_id",
+            ],
+            name="fk_markdown_link_source_revision_note_kb_space",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["target_note_id", "knowledge_base_id", "space_id"],
+            ["markdown_notes.id", "markdown_notes.knowledge_base_id", "markdown_notes.space_id"],
+            name="fk_markdown_link_target_note_kb_space",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    space_id: Mapped[UUID] = mapped_column(
+        ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    source_note_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    source_revision_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_note_id: Mapped[UUID | None] = mapped_column(index=True)
+    target_title: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    target_heading: Mapped[str | None] = mapped_column(String(500))
+    alias: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -838,7 +1032,10 @@ class IngestionJob(Base):
             "AND index_version_id IS NULL) OR "
             "(kind = 'build_index' AND document_id IS NULL "
             "AND document_version_id IS NULL AND page_id IS NULL "
-            "AND index_version_id IS NOT NULL)",
+            "AND index_version_id IS NOT NULL) OR "
+            "(kind IN ('generate_markdown', 'index_markdown_links') AND document_id IS NOT NULL "
+            "AND document_version_id IS NOT NULL AND page_id IS NULL "
+            "AND index_version_id IS NULL)",
             name="ck_ingestion_target_matches_kind",
         ),
         CheckConstraint(

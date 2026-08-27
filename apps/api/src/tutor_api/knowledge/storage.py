@@ -389,11 +389,12 @@ class S3ObjectStorage:
         end = start + length - 1
         with self._request("GET", key, range_header=f"bytes={start}-{end}") as response:
             raw_content_range = response.headers.get("Content-Range")
+            status = response.status
             content_type = _normalize_content_type(
                 response.headers.get("Content-Type", "application/octet-stream")
             )
             if raw_content_range is None:
-                if start != 0:
+                if status != 200 or start != 0:
                     raise ObjectRangeNotSatisfiableError
                 raw_length = response.headers.get("Content-Length")
                 try:
@@ -402,16 +403,29 @@ class S3ObjectStorage:
                     total_size = None
                 if total_size is None or total_size > length:
                     raise ObjectRangeNotSatisfiableError
+                try:
+                    data = _read_bounded(response, length)
+                except ObjectSizeLimitError:
+                    raise ObjectRangeNotSatisfiableError from None
+                if len(data) != total_size:
+                    raise ObjectRangeNotSatisfiableError
                 return StoredObjectRange(
-                    data=_read_bounded(response, length),
+                    data=data,
                     content_type=content_type,
                     start=0,
                     total_size=total_size,
                 )
+            if status != 206:
+                raise ObjectRangeNotSatisfiableError
             match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", raw_content_range.strip())
             if match is None:
                 raise ObjectRangeNotSatisfiableError
-            actual_start, actual_end, total_size = (int(value) for value in match.groups())
+            try:
+                actual_start, actual_end, total_size = (
+                    int(value) for value in match.groups()
+                )
+            except (TypeError, ValueError):
+                raise ObjectRangeNotSatisfiableError from None
             if (
                 actual_start != start
                 or actual_end < actual_start
@@ -419,8 +433,14 @@ class S3ObjectStorage:
                 or total_size <= actual_end
             ):
                 raise ObjectRangeNotSatisfiableError
+            try:
+                data = _read_bounded(response, length)
+            except ObjectSizeLimitError:
+                raise ObjectRangeNotSatisfiableError from None
+            if len(data) != actual_end - actual_start + 1:
+                raise ObjectRangeNotSatisfiableError
             return StoredObjectRange(
-                data=_read_bounded(response, length),
+                data=data,
                 content_type=content_type,
                 start=actual_start,
                 total_size=total_size,

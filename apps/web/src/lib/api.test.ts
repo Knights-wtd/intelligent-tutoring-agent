@@ -16,4 +16,18 @@ describe("api", () => {
       expect.objectContaining({ credentials: "include" }),
     );
   });
+
+  it("keeps the configured API origin separate from the web origin", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([]), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.spaces();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/spaces",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
 });

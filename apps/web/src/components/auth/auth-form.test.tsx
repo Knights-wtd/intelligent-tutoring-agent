@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AuthForm } from "./auth-form";
 
-const mockApi = vi.hoisted(() => ({ login: vi.fn() }));
+const mockApi = vi.hoisted(() => ({ login: vi.fn(), register: vi.fn() }));
 
 vi.mock("@/lib/api", () => ({ api: mockApi }));
 
@@ -19,5 +19,18 @@ describe("AuthForm", () => {
     await user.click(screen.getByRole("button", { name: "登录" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("登录未成功，请检查邮箱和密码后重试。");
+  });
+
+  it("explains the password requirement before submitting registration", async () => {
+    const user = userEvent.setup();
+    render(<AuthForm mode="register" />);
+
+    await user.type(screen.getByLabelText("用户名"), "wtd");
+    await user.type(screen.getByLabelText("邮箱"), "wtd00005@163.com");
+    await user.type(screen.getByLabelText("密码"), "short-pass");
+    await user.click(screen.getByRole("button", { name: "注册" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("密码至少需要 12 位。");
+    expect(mockApi.register).not.toHaveBeenCalled();
   });
 });

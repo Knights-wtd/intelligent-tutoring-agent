@@ -16,17 +16,61 @@ export type KnowledgeBase = {
 export type KnowledgeUpload = {
   document_id: string;
   document_version_id: string;
-  ingestion_job_id: string;
-  space_id: string;
-  knowledge_base_id: string;
   source_name: string;
-  version_number: number;
-  content_sha256: string;
-  content_type: string;
-  document_state: string;
-  version_state: string;
-  job_state: string;
   created_at: string;
+};
+
+export type KnowledgeDocumentStatus = {
+  document_id: string;
+  document_version_id: string;
+  processing_state: "processing" | "searchable" | "failed";
+};
+
+
+export type KnowledgeCandidateNote = {
+  id: string;
+  ordinal: number;
+  candidate_key: string;
+  title: string;
+  kind:
+    | "chapter"
+    | "section"
+    | "subsection"
+    | "concept"
+    | "property"
+    | "formula"
+    | "method"
+    | "example";
+  parent_key: string | null;
+  markdown: string;
+  source_pointers: string[];
+  review_state: "pending" | "accepted" | "rejected";
+};
+
+export type KnowledgeCandidateLink = {
+  id: string;
+  ordinal: number;
+  kind: "structure" | "term";
+  relation: string;
+  source_key: string;
+  target_key: string;
+  source_pointer: string;
+  occurrence: string | null;
+  context: string;
+  review_state: "pending" | "accepted" | "rejected";
+};
+
+export type KnowledgeCandidateBatch = {
+  id: string;
+  document_id: string;
+  document_version_id: string;
+  generation_number: number;
+  state: "processing" | "needs_review" | "confirmed" | "rejected" | "failed";
+  failure_code: string | null;
+  notes: KnowledgeCandidateNote[];
+  links: KnowledgeCandidateLink[];
+  created_at: string;
+  updated_at: string;
 };
 export type KnowledgeGraphNode = {
   id: string;
@@ -49,8 +93,6 @@ export type KnowledgeGraph = {
   nodes: KnowledgeGraphNode[];
   edges: KnowledgeGraphEdge[];
 };
-
-
 export type KnowledgeCitation = {
   id: string;
   source_name: string;
@@ -132,10 +174,69 @@ export const knowledgeApi = {
     if (!response.ok) throw new KnowledgeApiError(response.status);
     return response.json() as Promise<KnowledgeUpload>;
   },
+
   graph(knowledgeBaseId: string, signal?: AbortSignal): Promise<KnowledgeGraph> {
     return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/graph`, { signal });
   },
+  documentStatus(
+    knowledgeBaseId: string,
+    documentId: string,
 
+    documentVersionId: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeDocumentStatus> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/documents/${resource(documentId)}/versions/${resource(documentVersionId)}/status`,
+      { signal },
+    );
+  },
+  startCandidateGeneration(
+    knowledgeBaseId: string,
+    documentVersionId: string,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeCandidateBatch> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/candidate-batches`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ document_version_id: documentVersionId }),
+        signal,
+      },
+    );
+  },
+
+  candidateBatch(
+    knowledgeBaseId: string,
+    batchId: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeCandidateBatch> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/candidate-batches/${resource(batchId)}`,
+      { signal },
+    );
+  },
+
+  confirmCandidateBatch(
+    knowledgeBaseId: string,
+    batchId: string,
+    acceptedNoteIds: string[],
+    acceptedLinkIds: string[],
+    signal?: AbortSignal,
+  ): Promise<KnowledgeCandidateBatch> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/candidate-batches/${resource(batchId)}/confirm`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          accepted_note_ids: acceptedNoteIds,
+          accepted_link_ids: acceptedLinkIds,
+        }),
+        signal,
+      },
+    );
+  },
 
   search(
     knowledgeBaseId: string,

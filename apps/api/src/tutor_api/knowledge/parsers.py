@@ -30,14 +30,17 @@ _INLINE_TAG = re.compile(r"(?<![\w/])#([\w-]+)", re.UNICODE)
 _DOCX_HEADING_STYLE = re.compile(r"^heading\s*([1-6])$", re.IGNORECASE)
 _WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _WORD = f"{{{_WORD_NAMESPACE}}}"
+_MATH_NAMESPACE = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+_MATH = f"{{{_MATH_NAMESPACE}}}"
 _MAX_FRONTMATTER_BYTES = 64 * 1024
 _MAX_FRONTMATTER_NODES = 10_000
 _MAX_FRONTMATTER_DEPTH = 32
 _DEFAULT_MAX_COMPRESSION_RATIO = 100.0
 _DEFAULT_MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
-_DOCX_MAX_FILES = 2_048
-_DOCX_MAX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
-_DOCX_MAX_MEMBER_BYTES = 8 * 1024 * 1024
+_DOCX_MAX_FILES = 4_096
+_DOCX_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+_DOCX_MAX_MEMBER_BYTES = 32 * 1024 * 1024
+_DOCX_MAX_XML_BYTES = 32 * 1024 * 1024
 _ARCHIVE_READ_CHUNK_BYTES = 64 * 1024
 _MAX_PNG_DECOMPRESSED_BYTES = 64 * 1024 * 1024
 _PNG_CHANNELS = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}
@@ -101,6 +104,7 @@ class ParsedBlockKind(StrEnum):
 
     HEADING = "heading"
     PARAGRAPH = "paragraph"
+    FORMULA = "formula"
     TABLE = "table"
 
 
@@ -619,7 +623,7 @@ def _contains_dangerous_xml_declaration(data: bytes) -> bool:
 
 
 def _parse_xml(data: bytes) -> ElementTree.Element:
-    if len(data) > _DOCX_MAX_MEMBER_BYTES or _contains_dangerous_xml_declaration(data):
+    if len(data) > _DOCX_MAX_XML_BYTES or _contains_dangerous_xml_declaration(data):
         _raise(ParseErrorCode.UNSAFE_XML)
     try:
         return ElementTree.fromstring(data)
@@ -627,17 +631,73 @@ def _parse_xml(data: bytes) -> ElementTree.Element:
         _raise(ParseErrorCode.INVALID_FORMAT)
 
 
+def _omml_named_child_text(element: ElementTree.Element, name: str) -> str:
+    child = element.find(f"{_MATH}{name}")
+    return _omml_text(child) if child is not None else ""
+
+
+def _omml_text(element: ElementTree.Element) -> str:
+    local_name = element.tag.removeprefix(_MATH)
+    if local_name == "t":
+        return element.text or ""
+    if local_name == "f":
+        numerator = _omml_named_child_text(element, "num")
+        denominator = _omml_named_child_text(element, "den")
+        return f"({numerator})/({denominator})"
+    if local_name == "sSub":
+        base = _omml_named_child_text(element, "e")
+        subscript = _omml_named_child_text(element, "sub")
+        return f"{base}_{{{subscript}}}"
+    if local_name == "sSup":
+        base = _omml_named_child_text(element, "e")
+        superscript = _omml_named_child_text(element, "sup")
+        return f"{base}^{{{superscript}}}"
+    if local_name == "sSubSup":
+        base = _omml_named_child_text(element, "e")
+        subscript = _omml_named_child_text(element, "sub")
+        superscript = _omml_named_child_text(element, "sup")
+        return f"{base}_{{{subscript}}}^{{{superscript}}}"
+    if local_name == "rad":
+        degree = _omml_named_child_text(element, "deg")
+        expression = _omml_named_child_text(element, "e")
+        return f"root[{degree}]({expression})" if degree else f"sqrt({expression})"
+    if local_name == "d":
+        return f"({_omml_named_child_text(element, 'e')})"
+    if local_name == "func":
+        return f"{_omml_named_child_text(element, 'fName')}({_omml_named_child_text(element, 'e')})"
+    if local_name == "nary":
+        character = element.find(f"{_MATH}naryPr/{_MATH}chr")
+        operator = character.get(f"{_MATH}val", "sum") if character is not None else "sum"
+        lower = _omml_named_child_text(element, "sub")
+        upper = _omml_named_child_text(element, "sup")
+        expression = _omml_named_child_text(element, "e")
+        bounds = f"_{{{lower}}}" if lower else ""
+        bounds += f"^{{{upper}}}" if upper else ""
+        return f"{operator}{bounds} {expression}".strip()
+    return "".join(_omml_text(child) for child in element)
+
+
 def _docx_paragraph_text(paragraph: ElementTree.Element) -> str:
     parts: list[str] = []
-    for element in paragraph.iter():
+
+    def visit(element: ElementTree.Element) -> None:
         if element.tag == f"{_WORD}t" and element.text:
             parts.append(element.text)
-        elif element.tag == f"{_WORD}tab":
+            return
+        if element.tag == f"{_WORD}tab":
             parts.append("\t")
-        elif element.tag in {f"{_WORD}br", f"{_WORD}cr"}:
+            return
+        if element.tag in {f"{_WORD}br", f"{_WORD}cr"}:
             parts.append("\n")
-    return "".join(parts).strip()
+            return
+        if element.tag in {f"{_MATH}oMath", f"{_MATH}oMathPara"}:
+            parts.append(_omml_text(element))
+            return
+        for child in element:
+            visit(child)
 
+    visit(paragraph)
+    return "".join(parts).strip()
 
 def _docx_heading_level(paragraph: ElementTree.Element) -> int | None:
     style = paragraph.find(f"{_WORD}pPr/{_WORD}pStyle")
@@ -696,13 +756,37 @@ def parse_docx(data: bytes, *, source_name: str = "document.docx") -> ParsedDocu
                 continue
             heading_level = _docx_heading_level(child)
             order = len(blocks)
+            has_formula = child.find(f".//{_MATH}oMath") is not None
+            has_plain_text = any(
+                (node.text or "").strip() for node in child.findall(f".//{_WORD}t")
+            )
+            block_kind = (
+                ParsedBlockKind.HEADING
+                if heading_level
+                else ParsedBlockKind.FORMULA
+                if has_formula and not has_plain_text
+                else ParsedBlockKind.PARAGRAPH
+            )
             blocks.append(
                 ParsedBlock(
-                    kind=ParsedBlockKind.HEADING if heading_level else ParsedBlockKind.PARAGRAPH,
+                    kind=block_kind,
                     text=text,
                     order=order,
                     source_pointer=f"{source_name}#block={order + 1}",
                     heading_level=heading_level,
+                )
+            )
+        elif child.tag == f"{_MATH}oMathPara":
+            text = _omml_text(child).strip()
+            if not text:
+                continue
+            order = len(blocks)
+            blocks.append(
+                ParsedBlock(
+                    kind=ParsedBlockKind.FORMULA,
+                    text=text,
+                    order=order,
+                    source_pointer=f"{source_name}#block={order + 1}",
                 )
             )
         elif child.tag == f"{_WORD}tbl":

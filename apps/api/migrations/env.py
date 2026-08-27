@@ -10,6 +10,7 @@ import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.identity.models  # noqa: F401
 import tutor_api.knowledge.models  # noqa: F401
 import tutor_api.providers.models  # noqa: F401
+import tutor_api.question_bank.models  # noqa: F401
 import tutor_api.spaces.models  # noqa: F401
 import tutor_api.tutor.models  # noqa: F401
 from tutor_api.core.database import Base

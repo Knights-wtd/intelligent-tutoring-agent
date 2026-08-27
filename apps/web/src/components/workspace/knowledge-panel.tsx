@@ -9,6 +9,7 @@ import {
   knowledgeApi,
   type KnowledgeBase,
   type KnowledgeSearchResult,
+  type KnowledgeCandidateBatch,
   type KnowledgeUpload,
 } from "@/lib/knowledge-api";
 
@@ -40,6 +41,9 @@ type UploadEntry = {
   idempotencyKey: string;
   status: "uploading" | "failed" | "accepted";
   response?: KnowledgeUpload;
+  processingState?: "processing" | "searchable" | "failed";
+  isRefreshing?: boolean;
+  statusRefreshFailed?: boolean;
 };
 
 type PreviewState =
@@ -63,6 +67,12 @@ function KnowledgePanelForKnowledgeBase({
     Record<string, UploadEntry[]>
   >({});
   const [query, setQuery] = useState("");
+  const [candidateBatch, setCandidateBatch] = useState<KnowledgeCandidateBatch | null>(null);
+  const [acceptedCandidateNotes, setAcceptedCandidateNotes] = useState<string[]>([]);
+  const [acceptedCandidateLinks, setAcceptedCandidateLinks] = useState<string[]>([]);
+  const [candidateMessage, setCandidateMessage] = useState("");
+  const [isGeneratingCandidates, setIsGeneratingCandidates] = useState(false);
+  const [isConfirmingCandidates, setIsConfirmingCandidates] = useState(false);
   const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
   const [searchMessage, setSearchMessage] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -76,6 +86,7 @@ function KnowledgePanelForKnowledgeBase({
   const previewUrlRef = useRef<string | null>(null);
   const searchControllerRef = useRef<AbortController | null>(null);
   const previewControllerRef = useRef<AbortController | null>(null);
+  const statusControllersRef = useRef(new Map<string, AbortController>());
   const activeUploadRef = useRef<
     | { entry: UploadEntry; knowledgeBaseId: string; controller: AbortController }
     | null
@@ -90,6 +101,21 @@ function KnowledgePanelForKnowledgeBase({
     }
   }, []);
 
+  const abortStatusRefresh = useCallback(() => {
+    const controllers = statusControllersRef.current;
+    if (controllers.size === 0) return;
+    controllers.forEach((controller) => controller.abort());
+    controllers.clear();
+    if (!mountedRef.current) return;
+    setUploadsByKnowledgeBase((current) =>
+      Object.fromEntries(
+        Object.entries(current).map(([knowledgeBaseId, entries]) => [
+          knowledgeBaseId,
+          entries.map((entry) => ({ ...entry, isRefreshing: false })),
+        ]),
+      ),
+    );
+  }, []);
   const abortSearchRequest = useCallback(() => {
     const controller = searchControllerRef.current;
     if (controller !== null) {
@@ -120,11 +146,12 @@ function KnowledgePanelForKnowledgeBase({
     return () => {
       mountedRef.current = false;
       activeUploadRef.current?.controller.abort();
+      abortStatusRefresh();
       abortSearchRequest();
       abortPreviewRequest();
       disposePreviewUrl();
     };
-  }, [abortPreviewRequest, abortSearchRequest, disposePreviewUrl]);
+  }, [abortPreviewRequest, abortSearchRequest, abortStatusRefresh, disposePreviewUrl]);
 
   const selectedKnowledgeBase = knowledgeBase;
   const selectedKnowledgeBaseId = knowledgeBase.id;
@@ -184,6 +211,8 @@ function KnowledgePanelForKnowledgeBase({
           ...entry,
           status: "accepted",
           response,
+          processingState: "processing",
+          statusRefreshFailed: false,
         }),
       }));
       setSelectedFile((current) => (current === entry.file ? null : current));
@@ -209,6 +238,150 @@ function KnowledgePanelForKnowledgeBase({
       }
     }
   }
+
+  async function refreshUploadStatus(
+    entry: UploadEntry,
+    knowledgeBaseId: string,
+    contextSequence: number,
+  ) {
+    if (!entry.response) return;
+    statusControllersRef.current.get(entry.id)?.abort();
+    const controller = new AbortController();
+    statusControllersRef.current.set(entry.id, controller);
+    setUploadsByKnowledgeBase((current) => ({
+      ...current,
+      [knowledgeBaseId]: replaceUpload(current[knowledgeBaseId] ?? [], {
+        ...entry,
+        isRefreshing: true,
+        statusRefreshFailed: false,
+      }),
+    }));
+    try {
+      const status = await knowledgeApi.documentStatus(
+        knowledgeBaseId,
+        entry.response.document_id,
+        entry.response.document_version_id,
+        controller.signal,
+      );
+      if (
+        controller.signal.aborted ||
+        !mountedRef.current ||
+        contextSequence !== contextSequenceRef.current
+      ) {
+        return;
+      }
+      setUploadsByKnowledgeBase((current) => ({
+        ...current,
+        [knowledgeBaseId]: (current[knowledgeBaseId] ?? []).map((item) =>
+          item.id === entry.id
+            ? { ...item, processingState: status.processing_state, statusRefreshFailed: false }
+            : item,
+        ),
+      }));
+    } catch {
+      if (
+        !controller.signal.aborted &&
+        mountedRef.current &&
+        contextSequence === contextSequenceRef.current
+      ) {
+        setUploadsByKnowledgeBase((current) => ({
+          ...current,
+          [knowledgeBaseId]: (current[knowledgeBaseId] ?? []).map((item) =>
+            item.id === entry.id ? { ...item, statusRefreshFailed: true } : item,
+          ),
+        }));
+      }
+    } finally {
+      if (statusControllersRef.current.get(entry.id) === controller) {
+        statusControllersRef.current.delete(entry.id);
+        if (mountedRef.current && contextSequence === contextSequenceRef.current) {
+          setUploadsByKnowledgeBase((current) => ({
+            ...current,
+            [knowledgeBaseId]: (current[knowledgeBaseId] ?? []).map((item) =>
+              item.id === entry.id ? { ...item, isRefreshing: false } : item,
+            ),
+          }));
+        }
+      }
+    }
+  }
+  function showCandidateBatch(batch: KnowledgeCandidateBatch) {
+    setCandidateBatch(batch);
+    setAcceptedCandidateNotes(batch.notes.map((note) => note.id));
+    setAcceptedCandidateLinks(batch.links.map((link) => link.id));
+    setCandidateMessage("");
+  }
+
+  async function startCandidateGeneration(entry: UploadEntry) {
+    if (!entry.response || !selectedKnowledgeBaseId || isGeneratingCandidates) return;
+    setIsGeneratingCandidates(true);
+    setCandidateMessage("");
+    try {
+      const batch = await knowledgeApi.startCandidateGeneration(
+        selectedKnowledgeBaseId,
+        entry.response.document_version_id,
+        `candidate-${entry.response.document_version_id}`,
+      );
+      showCandidateBatch(batch);
+    } catch {
+      setCandidateMessage("知识候选暂时无法生成，请稍后重试。");
+    } finally {
+      setIsGeneratingCandidates(false);
+    }
+  }
+
+  async function refreshCandidateBatch() {
+    if (!candidateBatch || !selectedKnowledgeBaseId || isGeneratingCandidates) return;
+    setIsGeneratingCandidates(true);
+    setCandidateMessage("");
+    try {
+      showCandidateBatch(
+        await knowledgeApi.candidateBatch(selectedKnowledgeBaseId, candidateBatch.id),
+      );
+    } catch {
+      setCandidateMessage("候选状态暂时无法刷新，请重试。");
+    } finally {
+      setIsGeneratingCandidates(false);
+    }
+  }
+
+  function toggleCandidate(
+    id: string,
+    selected: string[],
+    setSelected: (value: string[]) => void,
+  ) {
+    setSelected(
+      selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id],
+    );
+  }
+
+  async function confirmCandidates() {
+    if (
+      !candidateBatch ||
+      !selectedKnowledgeBaseId ||
+      isConfirmingCandidates ||
+      acceptedCandidateNotes.length === 0
+    ) {
+      return;
+    }
+    setIsConfirmingCandidates(true);
+    setCandidateMessage("");
+    try {
+      const confirmed = await knowledgeApi.confirmCandidateBatch(
+        selectedKnowledgeBaseId,
+        candidateBatch.id,
+        acceptedCandidateNotes,
+        acceptedCandidateLinks,
+      );
+      setCandidateBatch(confirmed);
+      setCandidateMessage("");
+    } catch {
+      setCandidateMessage("确认失败，候选内容尚未写入，请重试。");
+    } finally {
+      setIsConfirmingCandidates(false);
+    }
+  }
+
 
   function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -426,12 +599,158 @@ function KnowledgePanelForKnowledgeBase({
                     </>
                   ) : null}
                   {entry.status === "accepted" ? (
-                    <span>{learnerUploadState(entry.response)}</span>
+                    <>
+                      <span>{learnerUploadState(entry)}</span>
+                      <button
+                        disabled={entry.isRefreshing}
+                        type="button"
+                        onClick={() =>
+                          void refreshUploadStatus(
+                            entry,
+                            selectedKnowledgeBaseId,
+                            contextSequenceRef.current,
+                          )
+                        }
+                      >
+                        {entry.isRefreshing ? "刷新中…" : "刷新处理状态"}
+                      </button>
+                      {entry.processingState === "searchable" ? (
+                        <button
+                          disabled={isGeneratingCandidates}
+                          onClick={() => void startCandidateGeneration(entry)}
+                          type="button"
+                        >
+                          {isGeneratingCandidates ? "生成中…" : "生成知识候选"}
+                        </button>
+                      ) : null}
+                      {entry.statusRefreshFailed ? (
+                        <span role="alert">暂时无法刷新状态，请重试。</span>
+                      ) : null}
+                    </>
                   ) : null}
                 </div>
               ))}
             </div>
           </div>
+
+          {candidateMessage ? <p role="alert">{candidateMessage}</p> : null}
+          {candidateBatch ? (
+            <section aria-label="知识候选审核">
+              {candidateBatch.state === "processing" ? (
+                <>
+                  <p role="status">正在识别章、节、小节并生成候选…</p>
+                  <button
+                    disabled={isGeneratingCandidates}
+                    onClick={() => void refreshCandidateBatch()}
+                    type="button"
+                  >
+                    刷新候选状态
+                  </button>
+                </>
+              ) : null}
+              {candidateBatch.state === "failed" ? (
+                <p role="alert">候选生成失败，请重新发起生成。</p>
+              ) : null}
+              {candidateBatch.state === "confirmed" ? <p>已写入正式知识库</p> : null}
+              {candidateBatch.state === "needs_review" ? (
+                <>
+                  <h3>结构候选</h3>
+                  {candidateBatch.notes
+                    .filter((note) =>
+                      ["chapter", "section", "subsection"].includes(note.kind),
+                    )
+                    .map((note) => (
+                      <label key={note.id}>
+                        <input
+                          checked={acceptedCandidateNotes.includes(note.id)}
+                          onChange={() =>
+                            toggleCandidate(
+                              note.id,
+                              acceptedCandidateNotes,
+                              setAcceptedCandidateNotes,
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>{note.title}</span>
+                      </label>
+                    ))}
+                  <h3>知识笔记候选</h3>
+                  {candidateBatch.notes
+                    .filter(
+                      (note) =>
+                        !["chapter", "section", "subsection"].includes(note.kind),
+                    )
+                    .map((note) => (
+                      <label key={note.id}>
+                        <input
+                          checked={acceptedCandidateNotes.includes(note.id)}
+                          onChange={() =>
+                            toggleCandidate(
+                              note.id,
+                              acceptedCandidateNotes,
+                              setAcceptedCandidateNotes,
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>{note.title}</span>
+                      </label>
+                    ))}
+                  <h3>结构链接</h3>
+                  {candidateBatch.links
+                    .filter((link) => link.kind === "structure")
+                    .map((link) => (
+                      <label key={link.id}>
+                        <input
+                          checked={acceptedCandidateLinks.includes(link.id)}
+                          onChange={() =>
+                            toggleCandidate(
+                              link.id,
+                              acceptedCandidateLinks,
+                              setAcceptedCandidateLinks,
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>{link.context}</span>
+                      </label>
+                    ))}
+                  <h3>重复术语链接</h3>
+                  {candidateBatch.links
+                    .filter((link) => link.kind === "term")
+                    .map((link) => (
+                      <label key={link.id}>
+                        <input
+                          checked={acceptedCandidateLinks.includes(link.id)}
+                          onChange={() =>
+                            toggleCandidate(
+                              link.id,
+                              acceptedCandidateLinks,
+                              setAcceptedCandidateLinks,
+                            )
+                          }
+                          type="checkbox"
+                        />
+                        <span>{link.context}</span>
+                      </label>
+                    ))}
+                  <button
+                    disabled={
+                      isConfirmingCandidates || acceptedCandidateNotes.length === 0
+                    }
+                    onClick={() => void confirmCandidates()}
+                    type="button"
+                  >
+                    {isConfirmingCandidates
+                      ? "正在写入…"
+                      : "确认并生成层级知识库"}
+                  </button>
+                </>
+              ) : null}
+            </section>
+          ) : null}
+
 
           <form className={styles.inlineForm} onSubmit={submitUpload}>
             <label>
@@ -526,15 +845,9 @@ function newUploadKey(): string {
   return `web-${value}`;
 }
 
-function learnerUploadState(response?: KnowledgeUpload): string {
-  if (!response) return "处理中";
-  const states = [response.document_state, response.version_state, response.job_state].map((state) =>
-    state.toUpperCase(),
-  );
-  if (states.some((state) => state === "FAILED")) return "处理失败";
-  if (response.version_state.toUpperCase() === "READY" && response.job_state.toUpperCase() === "COMPLETED") {
-    return "可搜索";
-  }
+function learnerUploadState(entry: UploadEntry): string {
+  if (entry.processingState === "failed") return "处理失败";
+  if (entry.processingState === "searchable") return "可搜索";
   return "处理中";
 }
 
