@@ -1,3 +1,4 @@
+import { apiUrl } from "@/lib/api-base";
 export const MAX_KNOWLEDGE_BASE_NAME_CHARACTERS = 120;
 export const MAX_KNOWLEDGE_QUERY_CHARACTERS = 500;
 export const MAX_KNOWLEDGE_RESULTS = 20;
@@ -128,7 +129,7 @@ function resource(value: string): string {
 }
 
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     ...init,
     credentials: "include",
     headers: {
@@ -162,7 +163,7 @@ export const knowledgeApi = {
     const body = new FormData();
     body.append("file", file, file.name);
     const response = await fetch(
-      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/documents`,
+      apiUrl(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/documents`),
       {
         method: "POST",
         credentials: "include",
@@ -258,7 +259,7 @@ export const knowledgeApi = {
     signal?: AbortSignal,
   ): Promise<KnowledgePreview> {
     const response = await fetch(
-      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/citations/${resource(citationId)}/page`,
+      apiUrl(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/citations/${resource(citationId)}/page`),
       {
         credentials: "include",
         headers: { Range: "bytes=0-65535" },

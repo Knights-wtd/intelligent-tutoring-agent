@@ -1,3 +1,5 @@
+import { apiUrl } from "@/lib/api-base";
+
 export type SpaceSummary = {
   id: string;
   kind: "personal" | "classroom";
@@ -35,16 +37,18 @@ export type BillingSummary = {
 };
 
 type Credentials = {
-  email: string;
+  identifier: string;
   password: string;
 };
 
-type Registration = Credentials & {
+type Registration = {
+  email: string;
   username: string;
+  password: string;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     ...init,
     credentials: "include",
     headers: {
@@ -62,7 +66,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   async me(): Promise<CurrentUser | null> {
-    const response = await fetch("/api/v1/auth/me", { credentials: "include" });
+    const response = await fetch(apiUrl("/api/v1/auth/me"), { credentials: "include" });
     if (response.status === 401) {
       return null;
     }

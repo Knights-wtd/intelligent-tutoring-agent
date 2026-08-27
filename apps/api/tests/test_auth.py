@@ -11,6 +11,7 @@ import tutor_api.spaces.models  # noqa: F401
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import UserSession
+from tutor_api.identity.rate_limit import LoginRateLimiter
 from tutor_api.main import create_app
 
 VALID_REGISTRATION = {
@@ -215,4 +216,175 @@ def test_session_cookie_is_secure_only_in_production() -> None:
 
     assert response.status_code == 201
     assert "Secure" in response.headers["set-cookie"]
+    engine.dispose()
+
+
+def test_login_accepts_username_identifier_and_normalizes_case() -> None:
+    client, engine = make_client()
+    client.post("/api/v1/auth/register", json=VALID_REGISTRATION)
+
+    by_username = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "learner", "password": VALID_REGISTRATION["password"]},
+    )
+    by_legacy_email = client.post(
+        "/api/v1/auth/login",
+        json={"email": VALID_REGISTRATION["email"], "password": VALID_REGISTRATION["password"]},
+    )
+    by_uppercase_username = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "LEARNER", "password": VALID_REGISTRATION["password"]},
+    )
+
+    assert by_username.status_code == 200
+    assert by_legacy_email.status_code == 200
+    assert by_uppercase_username.status_code == 200
+    assert by_username.json()["user"]["username"] == "learner"
+    engine.dispose()
+
+
+def test_login_rejects_identifiers_that_are_neither_email_nor_username() -> None:
+    client, engine = make_client()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "not valid!", "password": "some password 123"},
+    )
+
+    assert response.status_code == 422
+    engine.dispose()
+
+
+def test_registration_casefolds_username_and_rejects_confusing_duplicates() -> None:
+    client, engine = make_client()
+    first = client.post(
+        "/api/v1/auth/register",
+        json={**VALID_REGISTRATION, "username": "Learner"},
+    )
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "other.person@example.com",
+            "username": "LEARNER",
+            "password": "Another correct horse staple 7",
+        },
+    )
+
+    assert first.status_code == 201
+    assert first.json()["user"]["username"] == "learner"
+    assert duplicate.status_code == 409
+    engine.dispose()
+
+
+def test_login_locks_out_after_repeated_failures_and_unlocks_after_window() -> None:
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    settings = Settings(app_env="test", login_max_attempts=3, login_lockout_seconds=60)
+    app = create_app(settings, sessionmaker(bind=engine))
+    clock = {"now": 0.0}
+    app.state.login_rate_limiter = LoginRateLimiter(
+        max_attempts=3, lockout_seconds=60, clock=lambda: clock["now"]
+    )
+    client = TestClient(app)
+    client.post("/api/v1/auth/register", json=VALID_REGISTRATION)
+    wrong = {"password": "not the right password"}
+
+    for _ in range(3):
+        assert (
+            client.post("/api/v1/auth/login", json={"identifier": "learner", **wrong}).status_code
+            == 401
+        )
+
+    locked = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "learner", "password": VALID_REGISTRATION["password"]},
+    )
+    assert locked.status_code == 429
+    assert int(locked.headers["Retry-After"]) >= 1
+    assert client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "learner@example.com", "password": "x" * 16},
+    ).status_code == 429
+
+    clock["now"] = 61.0
+    recovered = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "learner", "password": VALID_REGISTRATION["password"]},
+    )
+    assert recovered.status_code == 200
+    engine.dispose()
+
+
+def test_successful_login_resets_the_failure_counter() -> None:
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    app = create_app(
+        Settings(app_env="test", login_max_attempts=3, login_lockout_seconds=60),
+        sessionmaker(bind=engine),
+    )
+    client = TestClient(app)
+    client.post("/api/v1/auth/register", json=VALID_REGISTRATION)
+
+    for _ in range(2):
+        client.post(
+            "/api/v1/auth/login",
+            json={"identifier": "learner", "password": "not the right password"},
+        )
+    assert (
+        client.post(
+            "/api/v1/auth/login",
+            json={"identifier": "learner", "password": VALID_REGISTRATION["password"]},
+        ).status_code
+        == 200
+    )
+    for _ in range(2):
+        assert (
+            client.post(
+                "/api/v1/auth/login",
+                json={"identifier": "learner", "password": "not the right password"},
+            ).status_code
+            == 401
+        )
+    assert (
+        client.post(
+            "/api/v1/auth/login",
+            json={"identifier": "learner", "password": VALID_REGISTRATION["password"]},
+        ).status_code
+        == 200
+    )
+    engine.dispose()
+
+
+def test_login_purges_expired_and_revoked_sessions() -> None:
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    app = create_app(
+        Settings(app_env="test", session_purge_probability=1.0), sessionmaker(bind=engine)
+    )
+    client = TestClient(app)
+    client.post("/api/v1/auth/register", json=VALID_REGISTRATION)
+    stale_token = client.cookies.get("session")
+    factory = sessionmaker(bind=engine)
+    with factory() as session:
+        stale = session.scalar(
+            select(UserSession).where(
+                UserSession.token_digest == hashlib.sha256(stale_token.encode()).hexdigest()
+            )
+        )
+        assert stale is not None
+        stale.expires_at = datetime.now(UTC) - timedelta(days=30)
+        session.commit()
+
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "learner", "password": VALID_REGISTRATION["password"]},
+    )
+
+    assert response.status_code == 200
+    fresh_token = client.cookies.get("session")
+    with factory() as session:
+        remaining = session.scalars(select(UserSession)).all()
+        assert [row.token_digest for row in remaining] == [
+            hashlib.sha256(fresh_token.encode()).hexdigest()
+        ]
     engine.dispose()

@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     faro_max_concurrency: int = 2
     session_cookie_name: str = "session"
     session_ttl_seconds: int = 604800
+    login_max_attempts: int = 5
+    login_lockout_seconds: int = 900
+    session_purge_probability: float = 0.05
     provider_profiles: Annotated[tuple[ProviderProfileConfig, ...], NoDecode] = Field(
         default=(),
         validation_alias=AliasChoices("PROVIDER_PROFILES_JSON", "provider_profiles_json"),
@@ -295,6 +298,27 @@ class Settings(BaseSettings):
     def validate_session_ttl_seconds(cls, value: int) -> int:
         if not 3600 <= value <= 2_592_000:
             raise ValueError("SESSION_TTL_SECONDS must be between 3600 and 2592000")
+        return value
+
+    @field_validator("login_max_attempts")
+    @classmethod
+    def validate_login_max_attempts(cls, value: int) -> int:
+        if not 1 <= value <= 100:
+            raise ValueError("LOGIN_MAX_ATTEMPTS must be between 1 and 100")
+        return value
+
+    @field_validator("login_lockout_seconds")
+    @classmethod
+    def validate_login_lockout_seconds(cls, value: int) -> int:
+        if not 1 <= value <= 86_400:
+            raise ValueError("LOGIN_LOCKOUT_SECONDS must be between 1 and 86400")
+        return value
+
+    @field_validator("session_purge_probability")
+    @classmethod
+    def validate_session_purge_probability(cls, value: float) -> float:
+        if not 0.0 <= value <= 1.0:
+            raise ValueError("SESSION_PURGE_PROBABILITY must be between 0.0 and 1.0")
         return value
 
     @field_validator("web_origin")

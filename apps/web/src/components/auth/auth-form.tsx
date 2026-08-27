@@ -23,7 +23,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
-    const email = String(formData.get("email") ?? "");
+    const identifier = String(formData.get("identifier") ?? "");
     const password = String(formData.get("password") ?? "");
 
     if (isRegistration && password.length < 12) {
@@ -35,19 +35,19 @@ export function AuthForm({ mode }: AuthFormProps) {
     try {
       if (isRegistration) {
         await api.register({
-          email,
+          email: String(formData.get("email") ?? ""),
           password,
           username: String(formData.get("username") ?? ""),
         });
       } else {
-        await api.login({ email, password });
+        await api.login({ identifier, password });
       }
       router.push("/");
     } catch {
       setError(
         isRegistration
           ? "注册未成功，请检查填写内容后重试。"
-          : "登录未成功，请检查邮箱和密码后重试。",
+          : "登录未成功，请检查邮箱/用户名和密码后重试。",
       );
     } finally {
       setIsSubmitting(false);
@@ -70,10 +70,17 @@ export function AuthForm({ mode }: AuthFormProps) {
             <input autoComplete="username" name="username" required />
           </label>
         ) : null}
-        <label className={styles.field}>
-          邮箱
-          <input autoComplete="email" name="email" required type="email" />
-        </label>
+        {isRegistration ? (
+          <label className={styles.field}>
+            邮箱
+            <input autoComplete="email" name="email" required type="email" />
+          </label>
+        ) : (
+          <label className={styles.field}>
+            邮箱或用户名
+            <input autoComplete="username" name="identifier" required type="text" />
+          </label>
+        )}
         <label className={styles.field}>
           密码
           <input aria-label="密码" autoComplete={isRegistration ? "new-password" : "current-password"} name="password" required type="password" />

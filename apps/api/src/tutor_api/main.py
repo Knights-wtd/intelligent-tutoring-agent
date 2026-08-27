@@ -13,6 +13,7 @@ from tutor_api.billing.router import router as billing_router
 from tutor_api.classrooms.router import router as classrooms_router
 from tutor_api.core.config import Settings, get_settings
 from tutor_api.core.database import create_engine_from_url
+from tutor_api.identity.rate_limit import LoginRateLimiter
 from tutor_api.identity.router import router as identity_router
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.router import router as knowledge_router
@@ -45,6 +46,10 @@ def create_app(
 
     app = FastAPI(title="Textbook Tutor API", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings
+    app.state.login_rate_limiter = LoginRateLimiter(
+        max_attempts=active_settings.login_max_attempts,
+        lockout_seconds=active_settings.login_lockout_seconds,
+    )
     app.state.tutor_adapter = tutor_adapter or FaroOpenAICompatibleAdapter(
         api_key=active_settings.faro_api_key.get_secret_value(),
         base_url=active_settings.faro_api_base_url,

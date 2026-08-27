@@ -2,7 +2,9 @@
 FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS build
 
 ENV PNPM_HOME=/pnpm \
-    PATH=/pnpm:$PATH
+    PATH=/pnpm:$PATH \
+    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+    COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 
 RUN corepack enable \
     && corepack prepare pnpm@11.19.0 --activate
@@ -24,7 +26,9 @@ FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PNPM_HOME=/pnpm \
-    PATH=/pnpm:$PATH
+    PATH=/pnpm:$PATH \
+    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
+    COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
 
 RUN corepack enable \
     && corepack prepare pnpm@11.19.0 --activate

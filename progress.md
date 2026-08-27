@@ -1,5 +1,39 @@
 # Progress Log
 
+## Session: 2026-08-27 · Auth Fixes, Rate Limiting & Web API Base Repair
+
+- **Status:** complete
+- Actions taken:
+  - 实现需求缺口「用户名或邮箱登录」：`LoginRequest` 改为 `identifier` 字段（`AliasChoices` 兼容旧 `email` 字段与前端存量调用），含邮箱 casefold 与用户名格式校验。
+  - 修复用户名仿冒缺陷：注册时用户名统一 casefold，`TEACHER-E2E` 与 `teacher-e2e` 现在冲突返回 409。
+  - 新增登录失败限流 `identity/rate_limit.py`（进程内滑动窗口）：已知账号按 user_id 计数（邮箱/用户名变体无法重置计数），未知标识符按 identifier@IP；默认 5 次失败锁 15 分钟，返回 429 + Retry-After；成功登录清零计数。配置项 `LOGIN_MAX_ATTEMPTS`/`LOGIN_LOCKOUT_SECONDS` 可调，fail-open 防止内存表膨胀影响可用性。
+  - 新增过期/撤销会话清理：登录时以 `SESSION_PURGE_PROBABILITY`（默认 5%）概率清除过期会话与撤销超 7 天的会话。
+  - 修复部署级缺陷：前端所有 fetch 使用相对路径但 Next 无转发配置，`NEXT_PUBLIC_API_BASE_URL` 构建变量从未被使用，浏览器端所有 API 请求 404。新增 `lib/api-base.ts` 统一前缀，5 个 lib 文件全部接入。
+  - 修复 Web CI 失败根因：`workspace-shell.tsx` 引用的 `@/lib/classrooms-api` 在 `2d30f6f` 中被引用但文件从未提交；按 `knowledge-api.ts` 模式补建（create/join + 类型对齐 `SpaceSummary`）。
+  - lint 清零：ruff 16 项错误清零（部分由远端 `2d30f6f` 修复，剩余 import 排序自动修复，自引 B905 手工修复）。
+  - 测试：`test_auth.py` 新增 6 个场景（用户名登录/大小写归一、非法标识符、锁定与解锁、成功清零计数、会话清理），17/17 通过；前端新增 identifier 用例，111/111 通过；全量后端 655 passed（4 个预存失败：2 Windows OCR + 2 迁移漂移，与本次无关）。
+  - 已验证运行栈：用户名/大写用户名/旧字段登录均 200；限流 429 + Retry-After 生效且账号级封锁无法用邮箱变体绕过；Web 镜像重建后登录页渲染「邮箱或用户名」字段。
+  - 部署注意：后端 CORS 仅允许 `WEB_ORIGIN`（默认 `http://localhost:3000`），用 `127.0.0.1:3000` 访问会被浏览器 CORS 拦截。
+- Files created/modified:
+  - `apps/api/src/tutor_api/identity/schemas.py` `router.py` `rate_limit.py`（新）
+  - `apps/api/src/tutor_api/core/config.py` `apps/api/src/tutor_api/main.py`
+  - `apps/api/tests/test_auth.py`
+  - `apps/web/src/lib/api-base.ts`（新）`api.ts` `classrooms-api.ts`（新）`knowledge-api.ts` `tutor-api.ts` `question-bank-api.ts`
+  - `apps/web/src/components/auth/auth-form.tsx` `auth-form.test.tsx`
+  - `progress.md`
+
+## Session: 2026-08-27 · Compose E2E Acceptance & pgvector Index Fix
+
+- **Status:** complete
+- Actions taken:
+  - 对运行中的 Compose 栈执行端到端验收：注册/登录（HttpOnly Cookie）、个人空间、班级创建、受限邀请码（有效期/次数）、学生加入、知识库创建、PDF 与 Markdown 上传（需 `Idempotency-Key` 头）、异步入库、带引用检索、引用令牌原页/源文件预览（206）、越权访问返回 404、模型目录与账单读取，全部通过。
+  - 发现并修复阻塞级缺陷：pgvector `vector` 列以 float32 存储，`HashEmbeddingAdapter` 输出 float64，`_validate_persisted_index` 用 `!=` 严格比较回读向量，128/128 个非零分量必然失配，导致 `build_index` 任务重试 3 次后 `index_validation_failed`、事务回滚、chunks 为 0、检索永远返回空。修复为按 float32 精度（`math.isclose`，abs_tol=1e-6）比较（`apps/api/src/tutor_api/knowledge/indexing.py`）。
+  - 修复后重新排队失败任务：两个 `build_index` 完成、索引版本 active、5 个分块入库、检索按相关度正确返回 PDF 首位结果。`tests/test_knowledge_indexing.py` 20/20 通过。
+  - 已知限制（与 README 一致）：tutor 会话返回 `tutor_provider_unavailable`（`/api/v1/tutor/status` 显示 `configured: false`，未配置真实 LLM 凭据）；知识图谱端点返回空（测试数据无跨文档链接）；Markdown 上传要求客户端显式发送 `text/markdown` 内容类型，curl 默认 `application/octet-stream` 会被拒绝；Worker 容器无任何日志输出，失败原因只能查库（`last_error_detail` 为空），可观测性待改进。
+- Files created/modified:
+  - `apps/api/src/tutor_api/knowledge/indexing.py`
+  - `progress.md`
+
 ## Session: 2026-08-14 · Provider and Wallet Planning
 
 - **Status:** complete

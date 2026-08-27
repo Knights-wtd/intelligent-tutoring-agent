@@ -1,3 +1,4 @@
+import { apiUrl } from "@/lib/api-base";
 export type TutorStatus = {
   configured: boolean;
   model: string;
@@ -41,7 +42,7 @@ function resource(value: string): string {
 }
 
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     ...init,
     credentials: "include",
     headers: {

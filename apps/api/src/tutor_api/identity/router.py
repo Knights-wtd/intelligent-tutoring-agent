@@ -1,15 +1,17 @@
 import hashlib
+import random
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from tutor_api.core.database import session_scope
 from tutor_api.core.security import hash_password, verify_password
 from tutor_api.identity.models import User, UserSession
+from tutor_api.identity.rate_limit import LoginRateLimiter
 from tutor_api.identity.schemas import (
     CurrentUserResponse,
     LoginRequest,
@@ -56,6 +58,30 @@ def _create_session(user_id, session, session_ttl_seconds: int) -> str:
 
 def _unauthorized() -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证失败")
+
+
+def _login_rate_limiter(request: Request) -> LoginRateLimiter:
+    limiter: LoginRateLimiter | None = getattr(request.app.state, "login_rate_limiter", None)
+    if limiter is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return limiter
+
+
+def _rate_limit_key(request: Request, identifier: str) -> str:
+    client_host = request.client.host if request.client is not None else "unknown"
+    return f"{identifier}@{client_host}"
+
+
+def _purge_stale_sessions(session) -> None:
+    now = datetime.now(UTC)
+    session.execute(
+        delete(UserSession).where(
+            or_(
+                UserSession.expires_at < now,
+                UserSession.revoked_at < now - timedelta(days=7),
+            )
+        )
+    )
 
 
 def get_current_user(
@@ -130,11 +156,33 @@ def register(
 
 @router.post("/login", response_model=LoginResponse)
 def login(payload: LoginRequest, request: Request, response: Response) -> LoginResponse:
+    settings = request.app.state.settings
+    limiter = _login_rate_limiter(request)
     with session_scope(_session_factory(request)) as session:
-        user = session.scalar(select(User).where(User.email == payload.email))
+        user = session.scalar(
+            select(User).where(
+                or_(User.email == payload.identifier, User.username == payload.identifier)
+            )
+        )
+        # Known accounts share one key so email/username variants cannot reset the
+        # counter; unknown identifiers fall back to identifier@ip, which keeps the
+        # lockout behavior identical for existing and missing accounts.
+        rate_limit_key = (
+            f"user:{user.id}" if user is not None else _rate_limit_key(request, payload.identifier)
+        )
+        if limiter.is_locked(rate_limit_key):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="尝试次数过多，请稍后再试",
+                headers={"Retry-After": str(limiter.seconds_until_unlock(rate_limit_key))},
+            )
         if user is None or not verify_password(payload.password, user.password_hash):
+            limiter.record_failure(rate_limit_key)
             raise _unauthorized()
-        token = _create_session(user.id, session, request.app.state.settings.session_ttl_seconds)
+        limiter.record_success(rate_limit_key)
+        if random.random() < settings.session_purge_probability:
+            _purge_stale_sessions(session)
+        token = _create_session(user.id, session, settings.session_ttl_seconds)
         result = LoginResponse(
             user=UserSummary(id=user.id, email=user.email, username=user.username)
         )

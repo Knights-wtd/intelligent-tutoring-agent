@@ -14,11 +14,30 @@ describe("AuthForm", () => {
     mockApi.login.mockRejectedValue(new Error("rejected"));
     render(<AuthForm mode="login" />);
 
-    await user.type(screen.getByLabelText("邮箱"), "learner@example.com");
+    await user.type(screen.getByLabelText("邮箱或用户名"), "learner@example.com");
     await user.type(screen.getByLabelText("密码"), "incorrect password");
     await user.click(screen.getByRole("button", { name: "登录" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("登录未成功，请检查邮箱和密码后重试。");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "登录未成功，请检查邮箱/用户名和密码后重试。",
+    );
+  });
+
+  it("submits the identifier so login accepts a username too", async () => {
+    const user = userEvent.setup();
+    mockApi.login.mockResolvedValue(undefined);
+    render(<AuthForm mode="login" />);
+
+    await user.type(screen.getByLabelText("邮箱或用户名"), "learner");
+    await user.type(screen.getByLabelText("密码"), "correct horse battery staple 9");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+
+    await vi.waitFor(() =>
+      expect(mockApi.login).toHaveBeenCalledWith({
+        identifier: "learner",
+        password: "correct horse battery staple 9",
+      }),
+    );
   });
 
   it("explains the password requirement before submitting registration", async () => {
