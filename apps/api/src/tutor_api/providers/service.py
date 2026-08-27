@@ -30,7 +30,11 @@ def synchronize_provider_profiles(
     for configured in profiles:
         profile = existing_by_key[configured.id]
         if profile.provider != configured.provider or profile.model != configured.model:
-            # A price snapshot belongs to this exact provider/model identity.  Never relabel it.
+            # A price snapshot belongs to this exact provider/model identity.  Never
+            # relabel it; keep the mismatched identity disabled but refresh its
+            # presentation metadata so the catalog never shows stale descriptors.
+            profile.display_name = configured.display_name
+            profile.supports_usage = configured.supports_usage
             profile.enabled = False
             continue
         profile.display_name = configured.display_name

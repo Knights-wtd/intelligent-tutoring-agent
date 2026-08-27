@@ -76,10 +76,33 @@ def test_api_receives_only_non_secret_provider_runtime_configuration() -> None:
     assert environment["ANTHROPIC_API_KEY"] == ""
     assert "PROVIDER_PROFILES_JSON:" in api
     assert "PLATFORM_ADMIN_EMAILS:" in api
-    assert "API_KEY" not in api
+    # FARO_API_KEY is the single sanctioned server-side provider credential (tutor).
+    # Generic OpenAI/Anthropic keys must never reach compose, and no credential may
+    # leak into the web service.
+    assert "OPENAI_API_KEY" not in api
+    assert "ANTHROPIC_API_KEY" not in api
+    assert "FARO_API_KEY:" in api
     assert "PROVIDER_BASE_URL" not in api
     assert "PROVIDER_PROFILES_JSON" not in web
     assert "PLATFORM_ADMIN_EMAILS" not in web
+    assert "FARO_API_KEY" not in web
+
+
+def test_citation_hmac_secret_reaches_api_and_worker_but_never_web() -> None:
+    environment = _environment_example()
+    compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    api = _service_block(compose, "api", "web")
+    worker = _service_block(compose, "worker", "web")
+    web = _service_block(compose, "web", "volumes")
+
+    assert (
+        environment["CITATION_HMAC_SECRET"] == "replace-with-long-random-citation-hmac-secret"
+    )
+    # api/worker environments stay identical by convention; the browser-facing web
+    # service must never see the signing key.
+    assert "CITATION_HMAC_SECRET:" in api
+    assert "CITATION_HMAC_SECRET:" in worker
+    assert "CITATION_HMAC_SECRET" not in web
 
 
 def test_api_image_includes_and_applies_database_migrations_before_starting() -> None:

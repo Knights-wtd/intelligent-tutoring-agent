@@ -315,6 +315,36 @@ def test_login_locks_out_after_repeated_failures_and_unlocks_after_window() -> N
     engine.dispose()
 
 
+def test_register_locks_out_bulk_creation_and_successes_do_not_reset_the_window() -> None:
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    settings = Settings(app_env="test", register_max_attempts=2, register_lockout_seconds=600)
+    app = create_app(settings, sessionmaker(bind=engine))
+    clock = {"now": 0.0}
+    app.state.register_rate_limiter = LoginRateLimiter(
+        max_attempts=2, lockout_seconds=600, clock=lambda: clock["now"]
+    )
+    client = TestClient(app)
+
+    def registration(index: int) -> dict[str, object]:
+        return {
+            "email": f"bulk-{index}@example.com",
+            "username": f"bulk-{index}",
+            "password": VALID_REGISTRATION["password"],
+        }
+
+    assert client.post("/api/v1/auth/register", json=registration(1)).status_code == 201
+    assert client.post("/api/v1/auth/register", json=registration(2)).status_code == 201
+
+    locked = client.post("/api/v1/auth/register", json=registration(3))
+    assert locked.status_code == 429
+    assert int(locked.headers["Retry-After"]) >= 1
+
+    clock["now"] = 601.0
+    assert client.post("/api/v1/auth/register", json=registration(3)).status_code == 201
+    engine.dispose()
+
+
 def test_successful_login_resets_the_failure_counter() -> None:
     engine = create_engine_from_url("sqlite://", app_env="test")
     Base.metadata.create_all(engine)

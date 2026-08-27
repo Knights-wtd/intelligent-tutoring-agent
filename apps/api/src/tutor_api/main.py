@@ -51,6 +51,12 @@ def create_app(
         max_attempts=active_settings.login_max_attempts,
         lockout_seconds=active_settings.login_lockout_seconds,
     )
+    # Counts every registration attempt per client IP; successes do not reset the
+    # window so bulk account creation cannot slide past the cap.
+    app.state.register_rate_limiter = LoginRateLimiter(
+        max_attempts=active_settings.register_max_attempts,
+        lockout_seconds=active_settings.register_lockout_seconds,
+    )
     app.state.tutor_adapter = tutor_adapter or FaroOpenAICompatibleAdapter(
         api_key=active_settings.faro_api_key.get_secret_value(),
         base_url=active_settings.faro_api_base_url,

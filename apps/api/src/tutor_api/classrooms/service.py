@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from tutor_api.classrooms.models import (
@@ -94,7 +95,14 @@ def join_classroom(
     membership = ClassroomMembership(
         classroom_id=classroom.id, user_id=user.id, role=invite.role
     )
-    session.add(membership)
+    try:
+        # The pre-check above is not concurrency-safe; a duplicate join racing the
+        # same invite hits uq_classroom_membership and must surface as 409.
+        with session.begin_nested():
+            session.add(membership)
+            session.flush()
+    except IntegrityError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="已加入该班级") from None
     invite.use_count += 1
     session.flush()
     return classroom, space, membership

@@ -11,6 +11,7 @@ dependencies = [
   "argon2-cffi>=25.1,<26",
   "fastapi>=0.116,<1",
   "httpx>=0.28,<1",
+  "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
   "python-multipart>=0.0.20,<1",
   "psycopg[binary]>=3.2,<4",
@@ -19,6 +20,7 @@ dependencies = [
   "PyYAML>=6.0.3,<7",
   "redis>=6,<7",
   "sqlalchemy>=2.0,<3",
+  "starlette>=1.6,<2",
   "uvicorn[standard]>=0.35,<1"
 ]
 

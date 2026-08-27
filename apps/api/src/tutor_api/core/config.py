@@ -126,6 +126,16 @@ class Settings(BaseSettings):
     login_max_attempts: int = 5
     login_lockout_seconds: int = 900
     session_purge_probability: float = 0.05
+    register_max_attempts: int = 30
+    register_lockout_seconds: int = 3600
+    # Explicit key for tutor citation tokens. When unset the object-storage secret is
+    # used so pre-existing deployments keep working; new deployments receive the
+    # variable through compose (`:?` required) and should rotate it independently.
+    citation_hmac_secret: SecretStr | None = Field(default=None, repr=False)
+
+    @property
+    def effective_citation_hmac_secret(self) -> str:
+        return (self.citation_hmac_secret or self.object_storage_secret_key).get_secret_value()
     provider_profiles: Annotated[tuple[ProviderProfileConfig, ...], NoDecode] = Field(
         default=(),
         validation_alias=AliasChoices("PROVIDER_PROFILES_JSON", "provider_profiles_json"),
@@ -319,6 +329,30 @@ class Settings(BaseSettings):
     def validate_session_purge_probability(cls, value: float) -> float:
         if not 0.0 <= value <= 1.0:
             raise ValueError("SESSION_PURGE_PROBABILITY must be between 0.0 and 1.0")
+        return value
+
+    @field_validator("register_max_attempts")
+    @classmethod
+    def validate_register_max_attempts(cls, value: int) -> int:
+        if not 1 <= value <= 1000:
+            raise ValueError("REGISTER_MAX_ATTEMPTS must be between 1 and 1000")
+        return value
+
+    @field_validator("register_lockout_seconds")
+    @classmethod
+    def validate_register_lockout_seconds(cls, value: int) -> int:
+        if not 1 <= value <= 86_400:
+            raise ValueError("REGISTER_LOCKOUT_SECONDS must be between 1 and 86400")
+        return value
+
+    @field_validator("citation_hmac_secret")
+    @classmethod
+    def validate_citation_hmac_secret(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        raw = value.get_secret_value()
+        if raw != raw.strip() or len(raw) < 32:
+            raise ValueError("CITATION_HMAC_SECRET must be a trimmed 32+ character value")
         return value
 
     @field_validator("web_origin")

@@ -1,3 +1,13 @@
+"""Wallet ledger primitives: reserve/settle/release plus manual recharge and reversal.
+
+DELIBERATE FREEZE (2026-08-27): ``reserve``/``settle``/``release`` are intentionally
+NOT reachable from any HTTP route. Tutor conversations currently cost nothing, and
+settlement would price reservations at the latest snapshot at settle time instead of
+locking a quote at reserve time. Wiring metering into the tutor path is a product
+decision that must land together with quote locking; do not expose these functions
+from routers until that decision is made.
+"""
+
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID

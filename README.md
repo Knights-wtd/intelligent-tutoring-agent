@@ -20,6 +20,7 @@ Copy-Item .env.example .env
 - `OBJECT_STORAGE_SECRET_KEY` 是应用身份的密钥；初始化器和 API 使用的是同一个环境变量，因此两处会自动保持一致。
 - `OBJECT_STORAGE_SECRET_KEY` 绝不能等于管理员身份的 `MINIO_ROOT_PASSWORD`。
 - 应用访问键 `OBJECT_STORAGE_ACCESS_KEY` 必须不同于管理员用户名 `MINIO_ROOT_USER`。
+- `CITATION_HMAC_SECRET` 用于签署 AI 家教引用的不透明令牌；必须与 `OBJECT_STORAGE_SECRET_KEY` 不同，轮换它会使旧引用令牌失效。
 
 每个密码或密钥都应使用英文字母、数字、下划线（`_`）和连字符（`-`）生成独立的长随机值。这样可以避免 Docker Compose 变量插值和 URL 内密码编码产生不一致。不要在这里使用需要额外转义或百分号编码的任意特殊字符，也不要让 PostgreSQL、Redis、MinIO 管理员和对象存储应用身份共享密钥。不要提交或分享真实密码；`.env` 已被 Git 忽略，只保留在本机。
 
@@ -57,7 +58,7 @@ docker compose --env-file .env logs --tail 200
 docker compose --env-file .env down
 ```
 
-`NEXT_PUBLIC_API_BASE_URL` 是构建 Web 镜像时写入浏览器端的值。修改它以后必须重新构建 Web，例如：
+浏览器默认通过同源的 `/api` 服务端代理访问后端（代理目标由 Web 容器的 `API_INTERNAL_URL` 决定），因此不需要设置任何浏览器端变量。`.env.example` 中的 `NEXT_PUBLIC_API_BASE_URL` 仅作为可选覆盖：把它设置为可公开访问的后端地址并重建 Web 后，浏览器会直连该地址而不是走代理。无论哪种方式，修改它以后都必须重建 Web：
 
 ```powershell
 docker compose --env-file .env up --build -d web
@@ -106,7 +107,7 @@ pnpm dev:web
 
 确定性测试使用内存构造的有效 PDF、DOCX、Markdown、JPEG、PNG 和 Vault ZIP 输入；上传验证还逐一覆盖 `.jpg` 与 `.jpeg` 扩展名。仓库没有提交二进制教材样本。容器验收仍应使用可重复的 Markdown 和 PDF 样本完成“注册 → 创建知识库 → 上传 → 等待 READY → 搜索 → 打开引用页”流程；不要把仅通过单元测试视为 PostgreSQL/pgvector、Redis、MinIO、worker 和浏览器垂直切片已经通过。
 
-**2026-08-18 验证状态：** Web 全量测试（34 项）、lint 和生产构建已通过；API Ruff 在禁用不可写缓存后通过。完整 API 覆盖率命令本次得到 590 passed、3 skipped、2 failed，覆盖率 88.08%，未达到配置的 90% 门槛；两项失败均为 Windows 下 OCR 超时后辅助进程 PID 文件未在 1 秒内出现的测试。Docker、`psql`、`pg_isready` 和 `initdb` 均不可用，故真实 PostgreSQL/pgvector migration round-trip 与 Compose 垂直切片均未执行，也没有完成 Milestone 3 / Phase 5 的验收。
+**2026-08-27 验证状态：** 知识候选生成管线（GENERATE_MARKDOWN）与 worker 入口已恢复可导入，此前收集失败的 6 个测试文件全部恢复；中文开放题判分与中文词法检索已修复并有回归测试覆盖。Web 全量测试（117 用例）通过；API Ruff 全仓 0 错误；唯一遗留失败是 compose 安全测试中与 `FARO_API_KEY` 相关的旧断言，已在同批改动中按新密钥策略更新。Docker 引擎可用，但真实 PostgreSQL/pgvector 迁移回环与 Compose 垂直切片仍未执行；覆盖率门槛（90%）需在恢复全量绿色后重新确认。
 ## 账号与班级的本地验证
 
 先应用数据库迁移，再启动 API：

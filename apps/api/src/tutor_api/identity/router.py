@@ -119,12 +119,36 @@ def require_platform_admin(request: Request, current_user: CurrentUser) -> User:
 PlatformAdmin = Annotated[User, Depends(require_platform_admin)]
 
 
+def _register_rate_limiter(request: Request) -> LoginRateLimiter:
+    limiter: LoginRateLimiter | None = getattr(
+        request.app.state, "register_rate_limiter", None
+    )
+    if limiter is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return limiter
+
+
 @router.post(
     "/register", response_model=RegistrationResponse, status_code=status.HTTP_201_CREATED
 )
 def register(
     payload: RegistrationRequest, request: Request, response: Response
 ) -> RegistrationResponse:
+    # Every attempt counts toward the per-IP window (success or failure), so bulk
+    # account creation cannot slide past the cap by alternating outcomes.
+    register_limiter = _register_rate_limiter(request)
+    register_key = (
+        f"register:{request.client.host if request.client is not None else 'unknown'}"
+    )
+    if register_limiter.is_locked(register_key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="注册尝试次数过多，请稍后再试",
+            headers={
+                "Retry-After": str(register_limiter.seconds_until_unlock(register_key))
+            },
+        )
+    register_limiter.record_failure(register_key)
     try:
         with session_scope(_session_factory(request)) as session:
             user = User(

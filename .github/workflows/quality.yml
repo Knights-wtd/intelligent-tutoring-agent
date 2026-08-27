@@ -87,3 +87,24 @@ jobs:
 
       - name: Build web
         run: pnpm build:web
+
+  docker-smoke:
+    name: Docker build smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build API image
+        run: docker build --file apps/api/Dockerfile --tag textbook-tutor-api:ci .
+
+      - name: Import the worker entrypoint inside the API image
+        run: |
+          docker run --rm --entrypoint python textbook-tutor-api:ci \
+            -c "import tutor_api.worker_main; import tutor_api.main"
+
+      - name: Build web image
+        run: docker build --file apps/web/Dockerfile --tag textbook-tutor-web:ci .

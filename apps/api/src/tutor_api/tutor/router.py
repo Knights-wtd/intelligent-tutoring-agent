@@ -108,7 +108,8 @@ def _conversation_for_read(
 
 
 @router.get("/api/v1/tutor/status", response_model=TutorStatusResponse)
-def get_tutor_status(request: Request) -> TutorStatusResponse:
+def get_tutor_status(request: Request, current_user: CurrentUser) -> TutorStatusResponse:
+    del current_user
     settings = request.app.state.settings
     return TutorStatusResponse(configured=_configured(request), model=settings.faro_model)
 
@@ -135,7 +136,7 @@ def post_tutor_conversation(
                 conversation_id=None,
                 adapter=request.app.state.tutor_adapter,
                 embedding_adapter=request.app.state.embedding_adapter,
-                citation_secret=request.app.state.settings.object_storage_secret_key.get_secret_value(),
+                citation_secret=request.app.state.settings.effective_citation_hmac_secret,
                 concurrency_semaphore=request.app.state.tutor_semaphore,
             )
         except TutorServiceError as error:
@@ -182,7 +183,7 @@ def post_tutor_message(
                 conversation_id=conversation_id,
                 adapter=request.app.state.tutor_adapter,
                 embedding_adapter=request.app.state.embedding_adapter,
-                citation_secret=request.app.state.settings.object_storage_secret_key.get_secret_value(),
+                citation_secret=request.app.state.settings.effective_citation_hmac_secret,
                 concurrency_semaphore=request.app.state.tutor_semaphore,
             )
         except TutorServiceError as error:
