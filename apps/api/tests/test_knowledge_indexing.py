@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
-from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
+from tutor_api.knowledge.embeddings import HashEmbeddingAdapter, is_embedding_blank
 from tutor_api.knowledge.indexing import (
     ChunkingConfig,
     IndexBuildRequest,
@@ -1017,3 +1017,60 @@ def test_build_bounds_long_source_pointer_without_losing_immutable_identity(
     expected_pointer = f"document-version:{version.id}:sha256:{content_sha256(raw_pointer)}"
     assert chunk.source_pointer == expected_pointer
     assert len(chunk.source_pointer) <= 980
+
+def test_punctuation_only_blocks_do_not_break_index_build(session: Session) -> None:
+    user, space, kb = graph(session, "punct")
+    version = add_version(
+        session,
+        user,
+        space,
+        kb,
+        "punct-doc",
+        (
+            (BlockKind.TITLE, "第一章 概述"),
+            (BlockKind.PARAGRAPH, "} }]"),
+            (BlockKind.PARAGRAPH, "真实正文介绍智能体的规划与记忆模块。"),
+            (BlockKind.PARAGRAPH, "{"),
+            (BlockKind.PARAGRAPH, "]},"),
+            (BlockKind.TITLE, "]}"),
+        ),
+    )
+
+    result = build_index(
+        session,
+        request(user, space, kb, (version.id,)),
+        HashEmbeddingAdapter(dimension=8),
+    )
+    session.commit()
+
+    index = session.get(IndexVersion, result.index_version_id)
+    assert index is not None and index.state is IndexVersionState.ACTIVE
+    chunks = list(
+        session.scalars(select(Chunk).where(Chunk.index_version_id == index.id))
+    )
+    assert chunks
+    assert all(not is_embedding_blank(chunk.content) for chunk in chunks)
+
+
+def test_document_without_embeddable_text_fails_with_stable_code(session: Session) -> None:
+    user, space, kb = graph(session, "blank-doc")
+    version = add_version(
+        session,
+        user,
+        space,
+        kb,
+        "blank-doc",
+        (
+            (BlockKind.PARAGRAPH, "} }]"),
+            (BlockKind.PARAGRAPH, "***"),
+        ),
+    )
+
+    with pytest.raises(IndexingError) as raised:
+        build_index(
+            session,
+            request(user, space, kb, (version.id,)),
+            HashEmbeddingAdapter(dimension=8),
+        )
+    assert raised.value.code == "index_source_empty"
+

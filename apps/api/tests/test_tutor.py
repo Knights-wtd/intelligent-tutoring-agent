@@ -241,6 +241,108 @@ def test_send_message_retrieves_sources_and_persists_both_roles(session: Session
     assert session.scalar(select(func.count()).select_from(TutorMessage)) == 2
 
 
+def test_provider_call_is_bounded_by_concurrency_semaphore(session: Session) -> None:
+    import threading
+
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+    entered = threading.Event()
+    release = threading.Event()
+    completion = LlmCompletion(text="ok", request_id="r", usage=LlmUsage(1, 1, 2))
+
+    class BlockingTutorAdapter:
+        def complete_tutor(self, messages: Sequence[TutorChatMessage]) -> LlmCompletion:
+            del messages
+            entered.set()
+            assert release.wait(timeout=10), "adapter was never released"
+            return completion
+
+    semaphore = threading.Semaphore(1)
+    failures: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            send_tutor_message(
+                session,
+                owner,
+                knowledge_base.id,
+                prompt="path loss",
+                conversation_id=None,
+                adapter=BlockingTutorAdapter(),
+                embedding_adapter=FixedEmbeddingAdapter(),
+                citation_secret="test-secret",
+                concurrency_semaphore=semaphore,
+            )
+        except BaseException as error:  # noqa: BLE001 - re-raised for the test
+            failures.append(error)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    assert entered.wait(timeout=10), "provider call never started"
+    # While the provider call is in flight the semaphore must be held, so a
+    # second concurrent call would queue instead of hitting the provider.
+    assert not semaphore.acquire(blocking=False), "semaphore not held during provider call"
+    release.set()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+    assert failures == []
+    # ...and released once the call returns.
+    assert semaphore.acquire(blocking=False)
+    semaphore.release()
+
+
+def test_provider_call_runs_after_read_transaction_is_committed(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+    commit_seen = threading.Event()
+    completion = LlmCompletion(text="ok", request_id="r", usage=LlmUsage(1, 1, 2))
+    original_commit = session.commit
+
+    def recording_commit() -> None:
+        original_commit()
+        commit_seen.set()
+
+    monkeypatch.setattr(session, "commit", recording_commit)
+
+    class OrderingAdapter:
+        def complete_tutor(self, messages: Sequence[TutorChatMessage]) -> LlmCompletion:
+            del messages
+            assert commit_seen.wait(timeout=5), (
+                "provider call started before the read transaction was committed"
+            )
+            return completion
+
+    result = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="path loss",
+        conversation_id=None,
+        adapter=OrderingAdapter(),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+
+    assert commit_seen.is_set()
+    assert len(result.messages) == 2
+    assert session.scalar(select(func.count()).select_from(TutorMessage)) == 2
+
+
+def test_app_state_exposes_tutor_semaphore_from_settings() -> None:
+    import threading
+
+    active_client, _, engine, _ = make_tutor_client(False)
+    try:
+        semaphore = active_client.app.state.tutor_semaphore
+        assert isinstance(semaphore, threading.Semaphore)
+        assert semaphore._value == Settings(app_env="test").faro_max_concurrency
+    finally:
+        active_client.close()
+        engine.dispose()
+
+
 def test_existing_conversation_requires_exact_scope_and_authorizes_first(
     session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

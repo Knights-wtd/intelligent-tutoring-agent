@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -129,7 +130,20 @@ def send_tutor_message(
     adapter: TutorChatAdapter,
     embedding_adapter: EmbeddingAdapter,
     citation_secret: str,
+    concurrency_semaphore: threading.Semaphore | None = None,
 ) -> TutorConversationResult:
+    """Ground and answer a tutor prompt, persisting the exchange.
+
+    The provider call is intentionally executed AFTER the read-only part of the
+    transaction is committed (``session.commit()`` below) so the potentially
+    long-running LLM request never holds a database transaction or connection;
+    messages are written afterwards in a fresh transaction.
+
+    `concurrency_semaphore` bounds concurrent provider calls; the production
+    router always passes the per-app semaphore built from
+    ``Settings.faro_max_concurrency``. Callers that omit it (legacy test
+    callers) run without a bound.
+    """
     normalized_prompt = _normalized_prompt(prompt)
     knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
     conversation = (
@@ -161,10 +175,20 @@ def send_tutor_message(
     adapter_messages = tuple(
         TutorChatMessage(role=message.role.value, content=message.content) for message in history
     ) + (TutorChatMessage(role="user", content=_grounded_prompt(normalized_prompt, hits)),)
+    # End the read-only transaction before the provider call: the LLM request
+    # may take faro_timeout_seconds (default 60s) and must not hold a DB
+    # connection or lock for that duration. Nothing has been written yet, so
+    # committing here is a no-op persist-wise; writes happen below.
+    session.commit()
+    if concurrency_semaphore is not None:
+        concurrency_semaphore.acquire()
     try:
         completion = adapter.complete_tutor(adapter_messages)
     except LlmProviderError as error:
         raise TutorServiceError(_provider_service_code(error.code)) from None
+    finally:
+        if concurrency_semaphore is not None:
+            concurrency_semaphore.release()
 
     user_created_at, assistant_created_at = _message_timestamps(history)
     with session.begin_nested():

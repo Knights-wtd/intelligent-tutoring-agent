@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 import time
+import traceback
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, is_dataclass
@@ -820,6 +822,15 @@ def run_worker_once(
                 now=datetime.now(UTC),
             )
     except Exception as error:
+        # The database keeps only sanitized public error codes; the full cause is
+        # surfaced here so operators can recover it from container logs.
+        print(
+            f"[tutor-worker] job {job_id} kind={kind.value} failed: "
+            f"{type(error).__name__}: {error}",
+            file=sys.stderr,
+            flush=True,
+        )
+        traceback.print_exc(file=sys.stderr)
         with session_factory.begin() as session:
             try:
                 fail_job(

@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from threading import Semaphore
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -56,6 +57,9 @@ def create_app(
         model=active_settings.faro_model,
         timeout_seconds=active_settings.faro_timeout_seconds,
     )
+    # Bounds concurrent tutor provider calls (chat path). Guards the LLM
+    # endpoint against unbounded fan-out when many learners chat at once.
+    app.state.tutor_semaphore = Semaphore(active_settings.faro_max_concurrency)
     app.state.embedding_adapter = HashEmbeddingAdapter(
         backend=active_settings.embedding_backend,
         model=active_settings.embedding_model,

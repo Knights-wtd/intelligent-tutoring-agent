@@ -136,6 +136,7 @@ def post_tutor_conversation(
                 adapter=request.app.state.tutor_adapter,
                 embedding_adapter=request.app.state.embedding_adapter,
                 citation_secret=request.app.state.settings.object_storage_secret_key.get_secret_value(),
+                concurrency_semaphore=request.app.state.tutor_semaphore,
             )
         except TutorServiceError as error:
             raise _service_error(error) from None
@@ -182,6 +183,7 @@ def post_tutor_message(
                 adapter=request.app.state.tutor_adapter,
                 embedding_adapter=request.app.state.embedding_adapter,
                 citation_secret=request.app.state.settings.object_storage_secret_key.get_secret_value(),
+                concurrency_semaphore=request.app.state.tutor_semaphore,
             )
         except TutorServiceError as error:
             raise _service_error(error) from None

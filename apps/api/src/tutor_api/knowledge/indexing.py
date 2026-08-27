@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
+from tutor_api.knowledge.embeddings import is_embedding_blank
 from tutor_api.knowledge.models import (
     Block,
     BlockKind,
@@ -357,9 +358,14 @@ def _load_blocks(session: Session, request: IndexBuildRequest) -> list[_LoadedBl
         )
         for block, page in rows
     ]
-    if not loaded:
+    # PDF/DOCX parsers can emit fragments built purely from punctuation or
+    # separators (e.g. brace soup from code listings); the embedder rejects such
+    # text as blank, so drop those blocks before chunking instead of failing the
+    # whole index build.
+    embeddable = [block for block in loaded if not is_embedding_blank(block.text)]
+    if not embeddable:
         raise IndexingError("index_source_empty")
-    return loaded
+    return embeddable
 
 
 def _validate_embedding(vector: object, dimension: int) -> list[float]:

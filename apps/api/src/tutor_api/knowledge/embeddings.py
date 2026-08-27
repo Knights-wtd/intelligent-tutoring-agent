@@ -80,18 +80,26 @@ def validate_embedding_configuration(
     )
 
 
-def _normalize_text(text: str) -> str:
-    if not isinstance(text, str):
-        raise ValueError("text must not be blank")
+def _strip_punctuation_and_separators(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).casefold()
-    normalized = "".join(
+    return "".join(
         " " if unicodedata.category(character).startswith(("P", "Z")) else character
         for character in normalized
     )
-    normalized = " ".join(normalized.split())
-    if not normalized:
+
+
+def is_embedding_blank(text: object) -> bool:
+    """True when text yields no embedding features after NFKC and P/Z stripping."""
+
+    if not isinstance(text, str):
+        return True
+    return not _strip_punctuation_and_separators(text).split()
+
+
+def _normalize_text(text: str) -> str:
+    if not isinstance(text, str) or is_embedding_blank(text):
         raise ValueError("text must not be blank")
-    return normalized
+    return " ".join(_strip_punctuation_and_separators(text).split())
 
 
 def _iter_weighted_features(text: str) -> Iterator[tuple[str, float]]:
