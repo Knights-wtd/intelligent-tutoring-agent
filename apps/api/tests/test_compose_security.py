@@ -88,6 +88,27 @@ def test_api_receives_only_non_secret_provider_runtime_configuration() -> None:
     assert "FARO_API_KEY" not in web
 
 
+def test_faro_uses_the_restricted_connect_proxy_without_a_dns_override() -> None:
+    environment = _environment_example()
+    compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    api = _service_block(compose, "api", "worker")
+    worker = _service_block(compose, "worker", "web")
+
+    assert environment["FARO_PROXY_URL"] == ""
+    for service in (api, worker):
+        assert "FARO_PROXY_URL:" in service
+        assert "extra_hosts:" not in service
+
+
+def test_web_host_port_can_be_changed_without_changing_the_container_port() -> None:
+    environment = _environment_example()
+    compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    web = _service_block(compose, "web", "volumes")
+
+    assert environment["WEB_PORT"] == "3000"
+    assert '"127.0.0.1:${WEB_PORT:-3000}:3000"' in web
+
+
 def test_citation_hmac_secret_reaches_api_and_worker_but_never_web() -> None:
     environment = _environment_example()
     compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
@@ -95,9 +116,7 @@ def test_citation_hmac_secret_reaches_api_and_worker_but_never_web() -> None:
     worker = _service_block(compose, "worker", "web")
     web = _service_block(compose, "web", "volumes")
 
-    assert (
-        environment["CITATION_HMAC_SECRET"] == "replace-with-long-random-citation-hmac-secret"
-    )
+    assert environment["CITATION_HMAC_SECRET"] == "replace-with-long-random-citation-hmac-secret"
     # api/worker environments stay identical by convention; the browser-facing web
     # service must never see the signing key.
     assert "CITATION_HMAC_SECRET:" in api
@@ -150,9 +169,9 @@ def test_faro_http_client_is_pinned_in_production_lock() -> None:
 
 
 def test_migrations_use_the_runtime_database_url_when_it_is_provided() -> None:
-    migration_environment = (
-        REPOSITORY_ROOT / "apps" / "api" / "migrations" / "env.py"
-    ).read_text(encoding="utf-8")
+    migration_environment = (REPOSITORY_ROOT / "apps" / "api" / "migrations" / "env.py").read_text(
+        encoding="utf-8"
+    )
 
     assert 'os.environ.get("DATABASE_URL")' in migration_environment
     assert 'config.set_main_option("sqlalchemy.url", database_url)' in migration_environment

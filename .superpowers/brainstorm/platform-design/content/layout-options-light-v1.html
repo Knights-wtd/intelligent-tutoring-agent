@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>知学空间 · 浅色排版方向</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;background:#eef0f4;color:#20232b;font-family:Inter,"Microsoft YaHei",system-ui,sans-serif}
+    main{max-width:1480px;margin:auto;padding:34px} h1{margin:0;font-size:28px} .lead{margin:8px 0 26px;color:#666b77}
+    .choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.choice{border:2px solid transparent;border-radius:18px;background:#fff;box-shadow:0 12px 36px #29304218;overflow:hidden;cursor:pointer;transition:.18s ease}.choice:hover{transform:translateY(-3px);box-shadow:0 18px 46px #29304224}.choice.selected{border-color:#7569d8;box-shadow:0 0 0 4px #7569d81c,0 18px 46px #29304224}
+    .preview{height:390px;padding:12px}.shell{height:100%;display:grid;grid-template-columns:72px 118px minmax(0,1fr);grid-template-rows:38px 1fr 22px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg);font-size:9px;color:var(--text)}
+    .rail{grid-row:1/4;padding:12px 8px;background:var(--rail);border-right:1px solid var(--line)}.brand{font-size:16px;font-weight:800;color:var(--accent);margin-bottom:22px}.nav{padding:8px 7px;border-radius:6px;margin:5px 0}.nav.on{background:var(--accent-soft);color:var(--accent);font-weight:700}.top{grid-column:2/4;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--top)}.status{margin-left:auto;padding:4px 7px;border-radius:10px;background:var(--ok-soft);color:var(--ok)}
+    .tree{padding:12px 9px;border-right:1px solid var(--line);background:var(--side)}.tree strong{display:block;margin-bottom:12px}.tree div{padding:6px;border-radius:5px;color:var(--muted)}.tree .active{background:var(--accent-soft);color:var(--accent);font-weight:700}.work{display:flex;min-width:0;flex-direction:column}.tabs{display:flex;gap:14px;padding:11px 14px 8px;border-bottom:1px solid var(--line)}.tabs b{color:var(--accent)}.meta{padding:8px 14px;background:var(--tint);color:var(--muted)}.content{padding:14px;overflow:hidden}.title{font-size:17px;font-weight:760;margin:5px 0 13px}.chips{display:flex;gap:6px;margin-bottom:12px}.chip{padding:5px 8px;border:1px solid var(--line);border-radius:7px}.chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}.form{display:grid;grid-template-columns:1fr 72px;gap:7px;margin:8px 0 12px}.input,.button{height:30px;border:1px solid var(--line);border-radius:7px;background:var(--field)}.button{display:grid;place-items:center;background:var(--button);color:var(--button-text);font-weight:700}.card{padding:11px;border:1px solid var(--line);border-radius:9px;background:var(--card);margin-top:9px}.rows{display:grid;grid-template-columns:1fr 1.4fr;gap:8px;color:var(--muted)}.foot{grid-column:2/4;padding:5px 10px;border-top:1px solid var(--line);color:var(--muted);background:var(--top)}
+    .a{--bg:#fbfbfd;--rail:#f2f1f7;--top:#fff;--side:#f7f7fa;--line:#e2e1e8;--text:#282733;--muted:#74727f;--accent:#6558c9;--accent-soft:#eeeafe;--ok:#167c59;--ok-soft:#e5f6ef;--tint:#f6f4fd;--field:#fff;--button:#6659c8;--button-text:#fff;--card:#fff}
+    .b{--bg:#fffdf8;--rail:#f4efe5;--top:#fffdf9;--side:#faf6ed;--line:#e7dfd1;--text:#252525;--muted:#736d63;--accent:#1f4b72;--accent-soft:#e8f0f6;--ok:#287653;--ok-soft:#e8f4ec;--tint:#f4f0e8;--field:#fff;--button:#1f4b72;--button-text:#fff;--card:#fffefb}
+    .c{--bg:#f8fafc;--rail:#edf3f7;--top:#fff;--side:#f3f7fa;--line:#dbe4ea;--text:#1f2933;--muted:#697783;--accent:#2764c5;--accent-soft:#e8f0ff;--ok:#087f74;--ok-soft:#ddf5f1;--tint:#edf6f7;--field:#fff;--button:#2764c5;--button-text:#fff;--card:#fff}
+    .body{padding:18px 19px 21px}.tag{display:inline-block;padding:4px 8px;border-radius:10px;background:#f0eefb;color:#6255c3;font-size:11px;font-weight:700}.body h2{font-size:17px;margin:11px 0 6px}.body p{font-size:13px;line-height:1.55;color:#696e79;margin:0}.recommended{float:right;color:#6558c9;font-size:11px;font-weight:700}
+    .note{margin-top:22px;padding:16px 18px;border-radius:13px;background:#fff;color:#5d626d;font-size:13px}.note b{color:#242731}@media(max-width:980px){.choices{grid-template-columns:1fr}.preview{height:430px}}
+  </style>
+</head>
+<body>
+<main>
+  <h1>选择浅色工作台的视觉方向</h1>
+  <p class="lead">三种方案都保留现有三栏结构，并彻底移除 emoji、字符图标与简单 SVG；差异主要在色温、层级和信息密度。</p>
+  <div class="choices">
+    <article class="choice selected" onclick="select(this)">
+      <div class="preview a"><div class="shell">
+        <aside class="rail"><div class="brand">知学空间</div><div class="nav on">我的空间</div><div class="nav">班级空间</div><div class="nav">账户设置</div></aside>
+        <header class="top"><strong>我的空间</strong><span>学习工作台 / 资料检索</span><span class="status">服务正常</span></header>
+        <aside class="tree"><strong>当前空间</strong><div>教材与练习</div><div>资料文件</div><div class="active">资料检索</div><div>题库练习</div><div>最近打开</div></aside>
+        <section class="work"><div class="tabs"><b>知识库</b><span>题库练习</span></div><div class="meta">已连接　管理教材与练习，并检索资料来源</div><div class="content"><div class="title">知识库</div><div class="chips"><span class="chip on">QA 功能检查</span></div><div class="form"><div class="input"></div><div class="button">创建</div></div><div class="card"><strong>当前知识库</strong><div class="rows"><span>教材 / 练习</span><span>尚未上传文件</span></div></div><div class="form"><div class="input"></div><div class="button">搜索</div></div></div></section>
+        <footer class="foot">服务正常　 当前视图：知识库</footer>
+      </div></div><div class="body"><span class="recommended">推荐</span><span class="tag">A</span><h2>暖白 + 柔紫</h2><p>最接近现有品牌。用暖白、浅灰和低饱和紫色建立层级，薄荷绿只用于正常状态，舒适但不寡淡。</p></div>
+    </article>
+    <article class="choice" onclick="select(this)">
+      <div class="preview b"><div class="shell">
+        <aside class="rail"><div class="brand">知学空间</div><div class="nav on">我的空间</div><div class="nav">班级空间</div><div class="nav">账户设置</div></aside><header class="top"><strong>我的空间</strong><span>学习工作台 / 资料检索</span><span class="status">服务正常</span></header><aside class="tree"><strong>当前空间</strong><div>教材与练习</div><div>资料文件</div><div class="active">资料检索</div><div>题库练习</div><div>最近打开</div></aside><section class="work"><div class="tabs"><b>知识库</b><span>题库练习</span></div><div class="meta">已连接　管理教材与练习，并检索资料来源</div><div class="content"><div class="title">知识库</div><div class="chips"><span class="chip on">QA 功能检查</span></div><div class="form"><div class="input"></div><div class="button">创建</div></div><div class="card"><strong>当前知识库</strong><div class="rows"><span>教材 / 练习</span><span>尚未上传文件</span></div></div><div class="form"><div class="input"></div><div class="button">搜索</div></div></div></section><footer class="foot">服务正常　 当前视图：知识库</footer>
+      </div></div><div class="body"><span class="tag">B</span><h2>纸张米白 + 墨蓝</h2><p>更像教材与阅读工具，沉稳、编辑感更强；缺点是与现在的紫色品牌连续性较弱。</p></div>
+    </article>
+    <article class="choice" onclick="select(this)">
+      <div class="preview c"><div class="shell">
+        <aside class="rail"><div class="brand">知学空间</div><div class="nav on">我的空间</div><div class="nav">班级空间</div><div class="nav">账户设置</div></aside><header class="top"><strong>我的空间</strong><span>学习工作台 / 资料检索</span><span class="status">服务正常</span></header><aside class="tree"><strong>当前空间</strong><div>教材与练习</div><div>资料文件</div><div class="active">资料检索</div><div>题库练习</div><div>最近打开</div></aside><section class="work"><div class="tabs"><b>知识库</b><span>题库练习</span></div><div class="meta">已连接　管理教材与练习，并检索资料来源</div><div class="content"><div class="title">知识库</div><div class="chips"><span class="chip on">QA 功能检查</span></div><div class="form"><div class="input"></div><div class="button">创建</div></div><div class="card"><strong>当前知识库</strong><div class="rows"><span>教材 / 练习</span><span>尚未上传文件</span></div></div><div class="form"><div class="input"></div><div class="button">搜索</div></div></div></section><footer class="foot">服务正常　 当前视图：知识库</footer>
+      </div></div><div class="body"><span class="tag">C</span><h2>冷白 + 蓝青</h2><p>更像现代管理后台，状态辨识清晰、效率感强；整体会比知识工具更偏企业软件。</p></div>
+    </article>
+  </div>
+  <div class="note"><b>共同排版调整：</b>放大正文和表单字号、缩短顶部两层导航、统一 8/12/16 像素间距、提高按钮高度、取消固定 900px 最小宽度，并在窄窗口自动收起说明栏。</div>
+</main>
+<script>function select(el){document.querySelectorAll('.choice').forEach(x=>x.classList.remove('selected'));el.classList.add('selected')}</script>
+</body>
+</html>

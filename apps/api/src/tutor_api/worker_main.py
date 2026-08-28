@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from datetime import timedelta
 from uuid import uuid4
 
-import httpx
 from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.core.config import Settings, get_settings
@@ -34,6 +33,7 @@ from tutor_api.knowledge.worker import (
     run_worker_forever,
 )
 from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
+from tutor_api.llm.http_client import create_faro_http_client
 
 
 def create_session_factory(settings: Settings) -> sessionmaker[Session]:
@@ -60,17 +60,9 @@ def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]
         dimension=settings.embedding_dimension,
     )
     object_storage = create_object_storage(settings)
-    if settings.faro_proxy_url:
-        transport = httpx.HTTPTransport(
-            proxy=settings.faro_proxy_url, retries=2, local_address="0.0.0.0"
-        )
-    else:
-        # Pin IPv4: see main.py — the host-gateway alias answers an unreachable AAAA.
-        transport = httpx.HTTPTransport(retries=2, local_address="0.0.0.0")
-    provider_http_client = httpx.Client(
-        transport=transport,
-        timeout=settings.faro_timeout_seconds,
-        trust_env=False,
+    provider_http_client = create_faro_http_client(
+        proxy_url=settings.faro_proxy_url,
+        timeout_seconds=settings.faro_timeout_seconds,
     )
     llm_adapter = FaroOpenAICompatibleAdapter(
         api_key=settings.faro_api_key.get_secret_value(),

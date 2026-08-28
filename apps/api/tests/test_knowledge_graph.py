@@ -6,12 +6,13 @@ from uuid import UUID
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
+from tutor_api.knowledge.candidate_service import confirm_candidate_batch
 from tutor_api.knowledge.candidates import CandidateLinkKind, CandidateNoteKind
 from tutor_api.knowledge.graph import KnowledgeGraph, load_knowledge_graph
 from tutor_api.knowledge.models import (
@@ -23,6 +24,7 @@ from tutor_api.knowledge.models import (
     KnowledgeCandidateBatch,
     KnowledgeCandidateLink,
     KnowledgeCandidateNote,
+    MarkdownNote,
 )
 from tutor_api.main import create_app
 from tutor_api.spaces.models import Space, SpaceKind
@@ -239,6 +241,34 @@ def test_graph_returns_accepted_candidates_from_the_requested_confirmed_batch(
         "edges",
     )
     assert batch.state is CandidateBatchState.CONFIRMED
+
+
+def test_graph_nodes_link_to_their_published_notes_after_confirmation(session: Session) -> None:
+    owner, space, knowledge_base, document, version = create_source(session)
+    batch, chapter, concept, link = seed_graph_batch(
+        session, owner, space, knowledge_base, document, version
+    )
+    batch.state = CandidateBatchState.NEEDS_REVIEW
+    session.flush()
+
+    confirm_candidate_batch(
+        session,
+        owner,
+        knowledge_base.id,
+        batch.id,
+        accepted_note_ids={chapter.id, concept.id},
+        accepted_link_ids={link.id},
+    )
+
+    published_by_title = {
+        note.title: note.id
+        for note in session.scalars(
+            select(MarkdownNote).where(MarkdownNote.knowledge_base_id == knowledge_base.id)
+        )
+    }
+    graph = load_knowledge_graph(session, owner, knowledge_base.id)
+
+    assert {node.title: node.note_id for node in graph.nodes} == published_by_title
 
 
 def test_graph_is_not_readable_by_an_outsider(session: Session) -> None:
@@ -490,12 +520,14 @@ def test_get_knowledge_graph_returns_confirmed_snapshot() -> None:
         "nodes": [
             {
                 "id": str(chapter_id),
+                "note_id": None,
                 "title": "移动无线传播",
                 "kind": "chapter",
                 "source_pointers": ["wireless.docx#block=120"],
             },
             {
                 "id": str(concept_id),
+                "note_id": None,
                 "title": "路径损耗",
                 "kind": "concept",
                 "source_pointers": ["wireless.docx#block=150"],

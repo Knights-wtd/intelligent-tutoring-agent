@@ -26,6 +26,16 @@ Copy-Item .env.example .env
 
 MinIO 初始化器只用 `MINIO_ROOT_USER` 和 `MINIO_ROOT_PASSWORD` 执行管理操作，然后为 `OBJECT_STORAGE_BUCKET` 创建专用策略和应用用户。API 只会收到权限限定到该存储桶的 `OBJECT_STORAGE_ACCESS_KEY` 和 `OBJECT_STORAGE_SECRET_KEY`，不会收到 MinIO 管理员凭据。
 
+Faro 默认由 API 和 worker 容器直接访问，正常环境应保持 `FARO_PROXY_URL=` 为空。只有确认 Docker Desktop 的直连网络异常时，才启用仓库自带的受限 CONNECT 中继。这个可选兼容方案需要宿主机安装 Python 3.12；先启动中继，再把 `.env` 中的 `FARO_PROXY_URL` 设为 `http://host.docker.internal:17897`：
+
+```powershell
+Start-Process -WindowStyle Hidden `
+  -FilePath 'py.exe' `
+  -ArgumentList @('-3.12', '.\scripts\faro_relay.py', '17897')
+```
+
+该中继只允许连接 `faroapi.com:443`，不会转发任意目标。API 和 worker 共用同一套 Faro 网络客户端：当已配置的中继在**建立连接阶段**不可达时，会安全回退到容器直连；一旦已经收到 HTTP 响应则不会重复发送 POST。这样宿主机中继停止后不会在容器直连可用时同时拖垮 AI 助教和候选生成。若不再需要中继，应清空 `FARO_PROXY_URL`；修改该变量后需要重新创建 API 和 worker 容器。
+
 ```powershell
 docker compose --env-file .env up --build -d
 docker compose --env-file .env ps
@@ -47,7 +57,7 @@ docker compose --env-file .env exec api python -c "import httpx; print(httpx.__v
 
 启动完成后可访问：
 
-- Web 工作区：<http://localhost:3000>
+- Web 工作区：`http://localhost:${WEB_PORT}`（默认 `3000`；可在 `.env` 中换成新端口）
 - API 健康检查：<http://127.0.0.1:8000/api/v1/health>
 - MinIO 管理界面：<http://127.0.0.1:9001>
 

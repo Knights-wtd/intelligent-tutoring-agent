@@ -52,4 +52,23 @@ describe("AuthForm", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("密码至少需要 12 位。");
     expect(mockApi.register).not.toHaveBeenCalled();
   });
+
+  it("explains that an existing account should be opened from the login page", async () => {
+    const user = userEvent.setup();
+    mockApi.register.mockRejectedValue(new Error("邮箱或用户名已被使用"));
+    render(<AuthForm mode="register" />);
+
+    await user.type(screen.getByLabelText("用户名"), "existing-user");
+    await user.type(screen.getByLabelText("邮箱"), "existing@example.com");
+    await user.type(screen.getByLabelText("密码"), "correct horse battery staple 9");
+    await user.click(screen.getByRole("button", { name: "注册" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "该邮箱或用户名已注册，请直接登录或更换后重试。",
+    );
+    expect(screen.getByRole("link", { name: "已有账号？去登录" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
+  });
 });

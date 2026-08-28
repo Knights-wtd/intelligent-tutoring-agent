@@ -47,6 +47,7 @@ class KnowledgeDocumentStatusResponse(BaseModel):
 
 class KnowledgeGraphNodeResponse(BaseModel):
     id: UUID
+    note_id: UUID | None
     title: str
     kind: str
     source_pointers: list[str]
@@ -147,4 +148,47 @@ class KnowledgeCandidateBatchResponse(BaseModel):
     notes: list[KnowledgeCandidateNoteResponse]
     links: list[KnowledgeCandidateLinkResponse]
     created_at: datetime
+    updated_at: datetime
+
+class KnowledgeWorkspaceDocumentResponse(BaseModel):
+    document_id: UUID
+    document_version_id: UUID
+    source_name: str
+    content_type: str
+    processing_state: Literal["processing", "searchable", "failed"]
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeNoteSummaryResponse(BaseModel):
+    id: UUID
+    title: str
+    kind: str
+    parent_id: UUID | None
+    source_document_id: UUID | None
+    updated_at: datetime
+
+
+class KnowledgeWorkspaceResponse(BaseModel):
+    knowledge_base_id: UUID
+    documents: list[KnowledgeWorkspaceDocumentResponse]
+    candidate_batch: KnowledgeCandidateBatchResponse | None
+    notes: list[KnowledgeNoteSummaryResponse]
+
+
+class KnowledgeNoteReferenceResponse(BaseModel):
+    id: UUID
+    title: str
+
+
+class KnowledgeNoteDetailResponse(BaseModel):
+    id: UUID
+    title: str
+    kind: str
+    markdown: str
+    source_markers: list[str]
+    source_document_id: UUID | None
+    source_name: str | None
+    parent: KnowledgeNoteReferenceResponse | None
+    children: list[KnowledgeNoteReferenceResponse]
     updated_at: datetime

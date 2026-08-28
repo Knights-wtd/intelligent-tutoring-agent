@@ -14,6 +14,8 @@ const mockKnowledgeApi = vi.hoisted(() => ({
   pagePreview: vi.fn(),
   documentStatus: vi.fn(),
   graph: vi.fn(),
+  workspace: vi.fn(),
+  note: vi.fn(),
 }));
 const mockQuestionBankApi = vi.hoisted(() => ({
   listQuestions: vi.fn(),
@@ -73,6 +75,24 @@ beforeEach(() => {
   for (const mock of Object.values(mockTutorApi)) mock.mockReset();
   mockKnowledgeApi.list.mockResolvedValue([wireless, digital]);
   mockKnowledgeApi.graph.mockResolvedValue({ nodes: [], edges: [] });
+  mockKnowledgeApi.workspace.mockImplementation((knowledgeBaseId: string) =>
+    Promise.resolve({
+      knowledge_base_id: knowledgeBaseId,
+      documents: [],
+      candidate_batch: null,
+      notes: [],
+    }),
+  );
+  mockKnowledgeApi.note.mockResolvedValue({
+    id: "note-digital",
+    title: "数字调制",
+    parent: null,
+    markdown: "# 数字调制\n\n这是图节点对应的正式知识笔记。",
+    source_document_id: null,
+    source_name: "数字通信.md",
+    source_markers: ["数字通信.md#数字调制"],
+    updated_at: "2026-08-28T00:00:00Z",
+  });
   mockQuestionBankApi.listQuestions.mockResolvedValue([]);
   mockQuestionBankApi.listReviewItems.mockResolvedValue({ items: [], next_cursor: null });
   mockTutorApi.status.mockResolvedValue({ configured: false, model: "" });
@@ -111,6 +131,94 @@ describe("WorkspaceShell", () => {
 
     await user.click(screen.getByRole("button", { name: "打开数字通信关联图" }));
     expect(screen.getAllByRole("tab", { name: "关联图 · 数字通信" })).toHaveLength(1);
+  });
+
+  it("opens a graph from the knowledge page without embedding it below the file explorer", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    await user.click(screen.getByRole("tab", { name: "知识库" }));
+    await user.click(await screen.findByRole("button", { name: "打开链路图" }));
+
+    expect(screen.getByRole("tab", { name: "关联图 · 无线通信" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByLabelText("知识关联图")).toBeInTheDocument();
+    expect(screen.queryByLabelText("知识库内容层级")).not.toBeInTheDocument();
+  });
+
+  it("routes a published graph node to its formal note in the explorer", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.graph.mockResolvedValue({
+      knowledge_base_id: digital.id,
+      nodes: [
+        {
+          id: "candidate-digital",
+          note_id: "note-digital",
+          title: "数字调制",
+          kind: "concept",
+          source_pointers: ["数字通信.md#数字调制"],
+        },
+      ],
+      edges: [],
+    });
+    mockKnowledgeApi.workspace.mockImplementation((knowledgeBaseId: string) =>
+      Promise.resolve({
+        knowledge_base_id: knowledgeBaseId,
+        documents: [],
+        candidate_batch: null,
+        notes:
+          knowledgeBaseId === digital.id
+            ? [
+                {
+                  id: "note-digital",
+                  title: "数字调制",
+                  parent_id: null,
+                  source_document_id: null,
+                  source_name: "数字通信.md",
+                  updated_at: "2026-08-28T00:00:00Z",
+                },
+              ]
+            : [],
+      }),
+    );
+
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+    await user.click(await screen.findByRole("button", { name: "打开数字通信关联图" }));
+    await user.click(await screen.findByRole("button", { name: "数字调制" }));
+
+    expect(screen.getByRole("tab", { name: "知识库" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "选择数字通信" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(await screen.findByRole("heading", { name: "数字调制" })).toBeInTheDocument();
+    expect(mockKnowledgeApi.note).toHaveBeenCalledWith(
+      digital.id,
+      "note-digital",
+      expect.any(AbortSignal),
+    );
+  });
+  it("returns an empty graph to candidate review for the graph knowledge base", async () => {
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    await user.click(await screen.findByRole("button", { name: "打开数字通信关联图" }));
+    await user.click(await screen.findByRole("button", { name: "审核候选内容" }));
+
+    expect(screen.getByRole("tab", { name: "知识库" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(await screen.findByLabelText("知识库面板")).toHaveTextContent("数字通信");
+    expect(screen.getByRole("button", { name: "选择数字通信" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 
   it("switches central tabs while keeping the selected knowledge base controlled by the shell", async () => {

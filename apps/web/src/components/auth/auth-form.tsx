@@ -9,9 +9,10 @@ import styles from "./auth-form.module.css";
 
 type AuthFormProps = {
   mode: "login" | "register";
+  onAuthenticated?: () => Promise<void> | void;
 };
 
-export function AuthForm({ mode }: AuthFormProps) {
+export function AuthForm({ mode, onAuthenticated }: AuthFormProps) {
   const router = useRouter();
   const isRegistration = mode === "register";
   const [error, setError] = useState<string | null>(null);
@@ -42,10 +43,20 @@ export function AuthForm({ mode }: AuthFormProps) {
       } else {
         await api.login({ identifier, password });
       }
-      router.push("/");
-    } catch {
+      if (onAuthenticated) {
+        await onAuthenticated();
+      } else {
+        router.push("/");
+      }
+    } catch (caught) {
+      const isExistingAccount =
+        isRegistration &&
+        caught instanceof Error &&
+        caught.message === "邮箱或用户名已被使用";
       setError(
-        isRegistration
+        isExistingAccount
+          ? "该邮箱或用户名已注册，请直接登录或更换后重试。"
+          : isRegistration
           ? "注册未成功，请检查填写内容后重试。"
           : "登录未成功，请检查邮箱/用户名和密码后重试。",
       );

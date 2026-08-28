@@ -182,17 +182,21 @@
 .knowledgeGraphPanel { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 16px; overflow: auto; padding: 20px 22px 28px; color: var(--text); }
 .graphHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .graphHeader h2, .graphDetails h3 { margin: 3px 0 0; color: #302e3a; }
+.graphControls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; }
+.graphScale { min-width: 48px; color: #5b5669; font-variant-numeric: tabular-nums; text-align: center; }
 .knowledgeGraphPanel button { min-height: 40px; padding: 8px 13px; border: 1px solid #d7d4df; border-radius: 8px; background: #fff; color: #494653; font: inherit; font-weight: 700; cursor: pointer; }
 .knowledgeGraphPanel button:hover { border-color: #bdb3e9; background: #f8f6ff; color: #4b419d; }
 .knowledgeGraphPanel button:focus-visible, .knowledgeGraphPanel input:focus-visible { outline: 3px solid #c8bdf5; outline-offset: 2px; }
 .graphMessage, .graphEmptyState { display: grid; justify-items: start; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
 .graphWorkspace { display: grid; min-height: 520px; grid-template-columns: minmax(0, 1fr) minmax(220px, 280px); gap: 16px; }
-.graphCanvas { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fbfaff; }
+.graphCanvas { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fbfaff; cursor: grab; touch-action: none; }
+.graphCanvas:active { cursor: grabbing; }
 .graphCanvas svg { display: block; width: 100%; height: 100%; min-height: 420px; }
 .graphCanvas line { stroke: #bbb5d6; stroke-width: 2; }
 .graphCanvas circle { fill: #7467ce; stroke: #fff; stroke-width: 4; }
 .graphCanvas .graphNodeFocused { fill: #167c59; stroke: #d6f2e6; stroke-width: 7; }
 .graphCanvas text { fill: #514d60; font-size: 13px; text-anchor: middle; }
+.graphNode { cursor: pointer; }
 .graphCanvas [data-testid="graph-viewport"] { transition: transform 180ms ease; }
 .graphSidebar { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
 .graphSearchLabel { display: grid; gap: 7px; color: #5c5867; font-size: 12px; font-weight: 700; }
@@ -336,4 +340,140 @@
   .studyDashboard { padding: 12px; }
   .studyDashboardCard { padding: 18px; border-radius: 12px; }
   .workspaceEmptyState { padding: 20px; }
+}
+
+.knowledgeExplorer {
+  display: grid;
+  grid-template-columns: minmax(220px, 30%) minmax(0, 1fr);
+  min-height: 460px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.explorerTreePane {
+  padding: 16px 12px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: rgba(246, 247, 250, 0.92);
+}
+
+.explorerRootLabel {
+  padding: 0 8px 12px;
+  font-weight: 800;
+}
+
+.explorerFolder {
+  margin-bottom: 14px;
+}
+
+.explorerFolder > strong {
+  display: block;
+  padding: 7px 8px;
+}
+
+.explorerFolder ul {
+  margin: 0;
+  padding-left: 14px;
+  list-style: none;
+}
+
+.explorerFolder p {
+  margin: 4px 8px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.explorerFileButton {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.explorerFileButton:hover,
+.explorerFileButton:focus-visible {
+  background: rgba(64, 91, 136, 0.1);
+}
+
+.explorerFileButton small {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.explorerViewer {
+  min-width: 0;
+  padding: 24px;
+  overflow: auto;
+}
+
+.explorerWelcome {
+  max-width: 520px;
+  margin: 80px auto;
+  text-align: center;
+}
+
+.noteViewer pre {
+  margin: 18px 0;
+  padding: 20px;
+  overflow: auto;
+  border-radius: 14px;
+  background: #f7f8fb;
+  white-space: pre-wrap;
+  font: inherit;
+  line-height: 1.75;
+}
+
+.documentViewer dl > div {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.documentViewer dt {
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .knowledgeExplorer {
+    grid-template-columns: 1fr;
+  }
+
+  .explorerTreePane {
+    max-height: 260px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+.workspaceRecoveryNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #ead7a6;
+  border-radius: 10px;
+  background: #fffaf0;
+  color: #775d1f;
+}
+
+.workspaceRecoveryNotice button {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid #c9ad68;
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
 }

@@ -134,6 +134,7 @@ def seed_chunk(
     existing_index: IndexVersion | None = None,
     ordinal: int = 0,
     page_number: int = 7,
+    content_type: str = "application/pdf",
 ) -> UUID:
     document = Document(
         space_id=space_id,
@@ -154,7 +155,7 @@ def seed_chunk(
         version_number=1,
         content_sha256=content_sha256(content),
         object_key=f"objects/{source_name}",
-        content_type="application/pdf",
+        content_type=content_type,
         state=DocumentVersionState.READY,
         created_by_user_id=user_id,
     )
@@ -251,6 +252,42 @@ def test_search_returns_exact_lexical_match_with_opaque_page_citation() -> None:
         assert chunk_id.hex not in citation_id
         assert "objects/algebra.md" not in response.text
         assert "#chunk=" not in response.text
+    finally:
+        client.close()
+        engine.dispose()
+
+
+def test_search_omits_synthetic_page_number_for_docx_citations() -> None:
+    client, engine = make_client()
+    try:
+        registration = register(client, "retrieval-docx-owner")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="wireless.docx",
+                content="The final chapter explains cellular handoff procedures.",
+                vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                page_number=1,
+                content_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+            )
+            session.commit()
+
+        response = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "cellular handoff"},
+        )
+
+        assert response.status_code == 200, response.text
+        citation = response.json()["results"][0]["citation"]
+        assert citation["source_name"] == "wireless.docx"
+        assert citation["page_number"] is None
     finally:
         client.close()
         engine.dispose()

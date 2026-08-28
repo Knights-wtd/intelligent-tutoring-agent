@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,12 +18,14 @@ const graph: KnowledgeGraph = {
   nodes: [
     {
       id: "node-pythagoras",
+      note_id: "note-pythagoras",
       title: "勾股定理",
       kind: "concept",
       source_pointers: ["数学上册.pdf#page=42"],
     },
     {
       id: "node-triangle",
+      note_id: "note-triangle",
       title: "直角三角形",
       kind: "section",
       source_pointers: ["数学上册.pdf#page=38", "讲义.md#直角三角形"],
@@ -157,6 +159,46 @@ describe("KnowledgeGraphPanel", () => {
     );
   });
 
+  it("zooms with controls and the wheel, resets to 100%, and pans the canvas", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.graph.mockResolvedValue(graph);
+    render(<KnowledgeGraphPanel knowledgeBase={{ id: "kb-1", name: "七年级数学" }} />);
+    const canvas = await screen.findByTestId("graph-canvas");
+    const viewport = screen.getByTestId("graph-viewport");
+
+    expect(screen.getByText("100%")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "放大" }));
+    expect(screen.getByText("120%")).toBeInTheDocument();
+    expect(viewport).toHaveAttribute("transform", expect.stringContaining("scale(1.2)"));
+
+    fireEvent.wheel(canvas, { deltaY: -100 });
+    expect(screen.getByText("140%")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "100%" }));
+    expect(viewport).toHaveAttribute("transform", "translate(0 0) scale(1)");
+
+    fireEvent.pointerDown(canvas, { clientX: 20, clientY: 30, pointerId: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 70, clientY: 80, pointerId: 1 });
+    fireEvent.pointerUp(canvas, { pointerId: 1 });
+    expect(viewport).toHaveAttribute("transform", "translate(50 50) scale(1)");
+  });
+
+  it("routes a published graph node back to its knowledge note", async () => {
+    const user = userEvent.setup();
+    const onOpenNote = vi.fn();
+    mockKnowledgeApi.graph.mockResolvedValue(graph);
+    render(
+      <KnowledgeGraphPanel
+        knowledgeBase={{ id: "kb-1", name: "七年级数学" }}
+        onOpenNote={onOpenNote}
+      />,
+    );
+    await screen.findByRole("img", { name: "七年级数学关联图" });
+
+    await user.click(screen.getByRole("button", { name: "勾股定理" }));
+
+    expect(onOpenNote).toHaveBeenCalledWith("note-pythagoras");
+  });
+
   it("aborts the old request, resets controls, and ignores its stale result", async () => {
     const user = userEvent.setup();
     let firstSignal: AbortSignal | undefined;
@@ -164,13 +206,13 @@ describe("KnowledgeGraphPanel", () => {
     const currentGraph: KnowledgeGraph = {
       ...graph,
       knowledge_base_id: "kb-3",
-      nodes: [{ id: "node-current", title: "当前知识节点", kind: "concept", source_pointers: ["当前教材.pdf#page=9"] }],
+      nodes: [{ id: "node-current", note_id: "note-current", title: "当前知识节点", kind: "concept", source_pointers: ["当前教材.pdf#page=9"] }],
       edges: [],
     };
     const staleGraph: KnowledgeGraph = {
       ...graph,
       knowledge_base_id: "kb-1",
-      nodes: [{ id: "node-stale", title: "过期知识节点", kind: "concept", source_pointers: ["旧教材.pdf#page=1"] }],
+      nodes: [{ id: "node-stale", note_id: "note-stale", title: "过期知识节点", kind: "concept", source_pointers: ["旧教材.pdf#page=1"] }],
       edges: [],
     };
     mockKnowledgeApi.graph

@@ -1,5 +1,6 @@
 """Read-only projections of confirmed, accepted knowledge candidates."""
 
+from collections import Counter
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -14,12 +15,14 @@ from tutor_api.knowledge.models import (
     KnowledgeCandidateBatch,
     KnowledgeCandidateLink,
     KnowledgeCandidateNote,
+    MarkdownNote,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class KnowledgeGraphNode:
     id: UUID
+    note_id: UUID | None
     title: str
     kind: str
     source_pointers: tuple[str, ...]
@@ -40,6 +43,33 @@ class KnowledgeGraph:
     knowledge_base_id: UUID
     nodes: tuple[KnowledgeGraphNode, ...]
     edges: tuple[KnowledgeGraphEdge, ...]
+
+
+def _normalize_title(title: str) -> str:
+    return " ".join(title.casefold().split())
+
+
+def _qualified_title(title: str, qualifier: str) -> str:
+    suffix = f"（{qualifier}）"
+    return f"{title[: 500 - len(suffix)]}{suffix}"
+
+
+def _published_titles(notes: tuple[KnowledgeCandidateNote, ...]) -> dict[UUID, str]:
+    notes_by_batch: dict[UUID, list[KnowledgeCandidateNote]] = {}
+    for note in notes:
+        notes_by_batch.setdefault(note.batch_id, []).append(note)
+    result: dict[UUID, str] = {}
+    for batch_notes in notes_by_batch.values():
+        counts = Counter(note.normalized_title for note in batch_notes)
+        by_key = {note.candidate_key: note for note in batch_notes}
+        for note in batch_notes:
+            if counts[note.normalized_title] == 1:
+                result[note.id] = note.title
+                continue
+            parent = by_key.get(note.parent_key) if note.parent_key is not None else None
+            qualifier = parent.title if parent is not None else str(note.ordinal + 1)
+            result[note.id] = _qualified_title(note.title, qualifier)
+    return result
 
 
 def load_knowledge_graph(
@@ -63,9 +93,35 @@ def load_knowledge_graph(
             )
         )
     )
+    batches = {
+        batch.id: batch
+        for batch in session.scalars(
+            select(KnowledgeCandidateBatch).where(
+                KnowledgeCandidateBatch.id.in_({note.batch_id for note in notes})
+            )
+        )
+    } if notes else {}
+    published_notes = tuple(
+        session.scalars(
+            select(MarkdownNote).where(
+                MarkdownNote.knowledge_base_id == knowledge_base.id,
+                MarkdownNote.space_id == knowledge_base.space_id,
+            )
+        )
+    )
+    formal_by_source_and_title = {
+        (note.source_document_id, note.normalized_title): note.id for note in published_notes
+    }
+    published_title_by_candidate_id = _published_titles(notes)
     nodes = tuple(
         KnowledgeGraphNode(
             id=note.id,
+            note_id=formal_by_source_and_title.get(
+                (
+                    batches[note.batch_id].document_id,
+                    _normalize_title(published_title_by_candidate_id[note.id]),
+                )
+            ),
             title=note.title,
             kind=note.kind.value,
             source_pointers=tuple(note.source_pointers),

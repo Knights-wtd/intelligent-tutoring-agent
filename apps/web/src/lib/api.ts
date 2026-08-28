@@ -58,7 +58,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error("API request failed");
+    let detail = "API request failed";
+    try {
+      const payload = (await response.json()) as { detail?: unknown };
+      if (typeof payload.detail === "string" && payload.detail.trim()) {
+        detail = payload.detail;
+      }
+    } catch {
+      // Keep the neutral fallback for non-JSON gateway and infrastructure errors.
+    }
+    throw new Error(detail);
   }
 
   return response.json() as Promise<T>;

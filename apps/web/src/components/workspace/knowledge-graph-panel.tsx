@@ -1,26 +1,39 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { knowledgeApi, type KnowledgeBase, type KnowledgeGraph, type KnowledgeGraphNode } from "@/lib/knowledge-api";
 import { layoutGraph } from "./graph-layout";
 import styles from "./workspace-shell.module.css";
 
 const WIDTH = 800;
 const HEIGHT = 520;
-const FIT = "translate(0 0) scale(1)";
+const MIN_SCALE = 0.4;
+const MAX_SCALE = 2.4;
+const SCALE_STEP = 0.2;
+
+type Viewport = {
+  x: number;
+  y: number;
+  scale: number;
+};
+
+const FIT_VIEWPORT: Viewport = { x: 0, y: 0, scale: 1 };
 
 type Props = {
   knowledgeBase: Pick<KnowledgeBase, "id" | "name">;
   onReviewCandidates?: () => void;
+  onOpenNote?: (noteId: string) => void;
 };
 
-export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates }: Props) {
+export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates, onOpenNote }: Props) {
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
   const [search, setSearch] = useState("");
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [viewport, setViewport] = useState<Viewport>(FIT_VIEWPORT);
   const [requestNumber, setRequestNumber] = useState(0);
+  const dragStart = useRef<{ pointerId: number; clientX: number; clientY: number; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -32,6 +45,8 @@ export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates }: Props
       setFailed(false);
       setSearch("");
       setFocusedId(null);
+      setViewport(FIT_VIEWPORT);
+      dragStart.current = null;
     });
     void knowledgeApi.graph(knowledgeBase.id, controller.signal)
       .then((value) => {
@@ -66,13 +81,34 @@ export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates }: Props
   const visibleNodes = graph?.nodes.filter(
     (node) => node.title.toLocaleLowerCase("zh-CN").includes(query),
   ) ?? [];
-  const transform = focusedNode ? focusTransform(positions.get(focusedNode.id)) : FIT;
+  const transform = `translate(${viewport.x} ${viewport.y}) scale(${viewport.scale})`;
+
+  const setScale = (nextScale: number) => {
+    setViewport((current) => ({ ...current, scale: clampScale(nextScale) }));
+  };
+
+  const selectNode = (node: KnowledgeGraphNode) => {
+    setFocusedId(node.id);
+    setViewport(focusViewport(positions.get(node.id)));
+    if (node.note_id) onOpenNote?.(node.note_id);
+  };
+
+  const fitView = () => {
+    setFocusedId(null);
+    setViewport(FIT_VIEWPORT);
+  };
 
   return (
     <section aria-label="知识关联图" className={styles.knowledgeGraphPanel}>
       <header className={styles.graphHeader}>
         <div><span className={styles.eyebrow}>{knowledgeBase.name}</span><h2>知识关联图</h2></div>
-        <button onClick={() => setFocusedId(null)} type="button">适应视图</button>
+        <div aria-label="图谱视图控制" className={styles.graphControls} role="group">
+          <button aria-label="缩小" onClick={() => setScale(viewport.scale - SCALE_STEP)} type="button">−</button>
+          <span className={styles.graphScale}>{Math.round(viewport.scale * 100)}%</span>
+          <button aria-label="放大" onClick={() => setScale(viewport.scale + SCALE_STEP)} type="button">＋</button>
+          <button aria-label="100%" onClick={() => setViewport(FIT_VIEWPORT)} type="button">重置</button>
+          <button onClick={fitView} type="button">适应视图</button>
+        </div>
       </header>
       {loading ? <p role="status">正在加载关联图…</p> : null}
       {!loading && failed ? (
@@ -89,7 +125,37 @@ export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates }: Props
       ) : null}
       {!loading && !failed && graph && graph.nodes.length > 0 ? (
         <div className={styles.graphWorkspace}>
-          <div className={styles.graphCanvas}>
+          <div
+            className={styles.graphCanvas}
+            data-testid="graph-canvas"
+            onPointerDown={(event) => {
+              dragStart.current = {
+                pointerId: event.pointerId,
+                clientX: event.clientX,
+                clientY: event.clientY,
+                x: viewport.x,
+                y: viewport.y,
+              };
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const start = dragStart.current;
+              if (!start || start.pointerId !== event.pointerId) return;
+              setViewport((current) => ({
+                ...current,
+                x: start.x + event.clientX - start.clientX,
+                y: start.y + event.clientY - start.clientY,
+              }));
+            }}
+            onPointerUp={(event) => {
+              if (dragStart.current?.pointerId === event.pointerId) dragStart.current = null;
+              event.currentTarget.releasePointerCapture?.(event.pointerId);
+            }}
+            onWheel={(event) => {
+              event.preventDefault();
+              setScale(viewport.scale + (event.deltaY < 0 ? SCALE_STEP : -SCALE_STEP));
+            }}
+          >
             <svg aria-label={`${knowledgeBase.name}关联图`} role="img" viewBox={`0 0 ${WIDTH} ${HEIGHT}`}>
               <g data-testid="graph-viewport" transform={transform}>
                 <g data-testid="graph-edges">
@@ -111,7 +177,7 @@ export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates }: Props
                   {graph.nodes.map((node) => {
                     const position = positions.get(node.id);
                     return position ? (
-                      <g key={node.id}>
+                      <g className={styles.graphNode} key={node.id} onClick={() => selectNode(node)}>
                         <circle className={node.id === focusedId ? styles.graphNodeFocused : undefined} cx={position.x} cy={position.y} r="12" />
                         <text x={position.x} y={position.y + 30}>{node.title}</text>
                       </g>
@@ -127,7 +193,7 @@ export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates }: Props
             </label>
             <ul aria-label="关联图节点" className={styles.graphNodeList}>
               {visibleNodes.map((node) => (
-                <li key={node.id}><button aria-pressed={node.id === focusedId} onClick={() => setFocusedId(node.id)} type="button">{node.title}</button></li>
+                <li key={node.id}><button aria-pressed={node.id === focusedId} onClick={() => selectNode(node)} type="button">{node.title}</button></li>
               ))}
             </ul>
             <ul aria-label="关联关系">
@@ -158,8 +224,16 @@ function NodeDetails({ node }: { node: KnowledgeGraphNode }) {
   );
 }
 
-function focusTransform(position: { x: number; y: number } | undefined): string {
-  if (!position) return FIT;
-  const scale = 1.35;
-  return `translate(${WIDTH / 2 - position.x * scale} ${HEIGHT / 2 - position.y * scale}) scale(${scale})`;
+function clampScale(scale: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, Math.round(scale * 10) / 10));
+}
+
+function focusViewport(position: { x: number; y: number } | undefined): Viewport {
+  if (!position) return FIT_VIEWPORT;
+  const scale = 1.4;
+  return {
+    x: WIDTH / 2 - position.x * scale,
+    y: HEIGHT / 2 - position.y * scale,
+    scale,
+  };
 }
