@@ -109,6 +109,9 @@ def create_candidate_generation(
         kind=IngestionJobKind.GENERATE_MARKDOWN,
         idempotency_key=job_key,
         checkpoint={"candidate_batch_id": str(batch.id)},
+        # Provider reachability flaps for minutes at a time on some networks;
+        # six attempts with the worker's minute-level backoff span those windows.
+        max_attempts=6,
         created_by_user_id=user.id,
     )
     session.add(job)

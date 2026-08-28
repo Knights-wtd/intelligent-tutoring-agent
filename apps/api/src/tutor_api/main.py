@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from threading import Semaphore
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -57,11 +58,32 @@ def create_app(
         max_attempts=active_settings.register_max_attempts,
         lockout_seconds=active_settings.register_lockout_seconds,
     )
+    # A shared client keeps TLS connections pooled; when FARO_PROXY_URL is set the
+    # explicit proxy is honored while trust_env stays off (no ambient env leaks).
+    # A shared client keeps TLS connections pooled; transport-level retries ride
+    # out TLS handshake flaps on constrained networks. When FARO_PROXY_URL is set
+    # the explicit proxy is honored while trust_env stays off (no env leaks).
+    if active_settings.faro_proxy_url:
+        transport = httpx.HTTPTransport(
+            proxy=active_settings.faro_proxy_url,
+            retries=2,
+            local_address="0.0.0.0",
+        )
+    else:
+        # Pin IPv4: Docker Desktop hands out an unreachable AAAA for host-gateway
+        # aliases and httpx does not fall back across address families.
+        transport = httpx.HTTPTransport(retries=2, local_address="0.0.0.0")
+    provider_http_client = httpx.Client(
+        transport=transport,
+        timeout=active_settings.faro_timeout_seconds,
+        trust_env=False,
+    )
     app.state.tutor_adapter = tutor_adapter or FaroOpenAICompatibleAdapter(
         api_key=active_settings.faro_api_key.get_secret_value(),
         base_url=active_settings.faro_api_base_url,
         model=active_settings.faro_model,
         timeout_seconds=active_settings.faro_timeout_seconds,
+        http_client=provider_http_client,
     )
     # Bounds concurrent tutor provider calls (chat path). Guards the LLM
     # endpoint against unbounded fan-out when many learners chat at once.

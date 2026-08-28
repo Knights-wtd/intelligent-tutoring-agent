@@ -121,6 +121,10 @@ class Settings(BaseSettings):
     faro_context_window: int = 32_000
     faro_timeout_seconds: int = 60
     faro_max_concurrency: int = 2
+    # Optional explicit egress proxy for provider calls, e.g.
+    # http://host.docker.internal:7890 on container deployments where direct
+    # TLS to the provider is unreliable. Empty means direct connection.
+    faro_proxy_url: str = Field(default="", repr=False)
     session_cookie_name: str = "session"
     session_ttl_seconds: int = 604800
     login_max_attempts: int = 5
@@ -245,6 +249,17 @@ class Settings(BaseSettings):
         if parsed is None or parsed.scheme != "https" or parsed.query or parsed.fragment:
             raise ValueError("FARO_API_BASE_URL must be an absolute HTTPS URL")
         return normalized.rstrip("/")
+
+    @field_validator("faro_proxy_url")
+    @classmethod
+    def validate_faro_proxy_url(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            return ""
+        parsed = _parse_absolute_url(normalized)
+        if parsed is None or parsed.scheme != "http" or parsed.query or parsed.fragment:
+            raise ValueError("FARO_PROXY_URL must be an absolute http:// proxy URL")
+        return normalized
 
     @field_validator("faro_model")
     @classmethod

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 
 import httpx
@@ -89,50 +90,71 @@ class FaroOpenAICompatibleAdapter:
         )
         close_client = self._http_client is None
         try:
-            response = client.post(
-                f"{self._base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json=payload,
+            # Provider reachability flaps in windows of a few minutes on some
+            # networks; transient failures (network/timeout/429/5xx) are retried
+            # with growing backoff. Auth and request-shape errors are not.
+            response = None
+            last_error: LlmProviderError | None = None
+            last_cause: Exception | None = None
+            for attempt in range(5):
+                try:
+                    response = client.post(
+                        f"{self._base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {self._api_key}"},
+                        json=payload,
+                    )
+                except httpx.TimeoutException as error:
+                    last_error = LlmProviderError("llm_timeout")
+                    last_cause = error
+                except httpx.HTTPError as error:
+                    last_error = LlmProviderError("llm_network_error")
+                    last_cause = error
+                else:
+                    if response.status_code == 429:
+                        last_error = LlmProviderError("llm_rate_limited")
+                        last_cause = None
+                        response = None
+                    elif response.status_code >= 500:
+                        last_error = LlmProviderError("llm_provider_error")
+                        last_cause = None
+                        response = None
+                    else:
+                        break
+                if attempt < 4:
+                    time.sleep(3 * (2**attempt))
+            if response is None:
+                assert last_error is not None
+                raise last_error from last_cause
+
+            if response.status_code == 401:
+                raise LlmProviderError("llm_unauthorized")
+            if response.status_code >= 400:
+                raise LlmProviderError("llm_request_rejected")
+            try:
+                data = response.json()
+                text = data["choices"][0]["message"]["content"]
+                usage_data = data.get("usage")
+                if usage_data is None:
+                    usage_data = {}
+                if not isinstance(usage_data, dict):
+                    raise TypeError
+            except (KeyError, IndexError, TypeError, ValueError) as error:
+                raise LlmProviderError("llm_response_invalid") from error
+            if not isinstance(text, str) or not text.strip():
+                raise LlmProviderError("llm_response_empty")
+            return LlmCompletion(
+                text=text,
+                request_id=response.headers.get("x-request-id")
+                or (data.get("id") if isinstance(data.get("id"), str) else None),
+                usage=LlmUsage(
+                    prompt_tokens=_nonnegative_int(usage_data.get("prompt_tokens")),
+                    completion_tokens=_nonnegative_int(usage_data.get("completion_tokens")),
+                    total_tokens=_nonnegative_int(usage_data.get("total_tokens")),
+                ),
             )
-        except httpx.TimeoutException as error:
-            raise LlmProviderError("llm_timeout") from error
-        except httpx.HTTPError as error:
-            raise LlmProviderError("llm_network_error") from error
         finally:
             if close_client:
                 client.close()
-
-        if response.status_code == 401:
-            raise LlmProviderError("llm_unauthorized")
-        if response.status_code == 429:
-            raise LlmProviderError("llm_rate_limited")
-        if response.status_code >= 500:
-            raise LlmProviderError("llm_provider_error")
-        if response.status_code >= 400:
-            raise LlmProviderError("llm_request_rejected")
-
-        try:
-            data = response.json()
-            text = data["choices"][0]["message"]["content"]
-            usage_data = data.get("usage")
-            if usage_data is None:
-                usage_data = {}
-            if not isinstance(usage_data, dict):
-                raise TypeError
-        except (KeyError, IndexError, TypeError, ValueError) as error:
-            raise LlmProviderError("llm_response_invalid") from error
-        if not isinstance(text, str) or not text.strip():
-            raise LlmProviderError("llm_response_empty")
-        return LlmCompletion(
-            text=text,
-            request_id=response.headers.get("x-request-id")
-            or (data.get("id") if isinstance(data.get("id"), str) else None),
-            usage=LlmUsage(
-                prompt_tokens=_nonnegative_int(usage_data.get("prompt_tokens")),
-                completion_tokens=_nonnegative_int(usage_data.get("completion_tokens")),
-                total_tokens=_nonnegative_int(usage_data.get("total_tokens")),
-            ),
-        )
 
 
 def _nonnegative_int(value: object) -> int:

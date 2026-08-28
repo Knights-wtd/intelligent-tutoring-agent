@@ -7,8 +7,10 @@ import signal
 import socket
 import threading
 from collections.abc import Mapping
+from datetime import timedelta
 from uuid import uuid4
 
+import httpx
 from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.core.config import Settings, get_settings
@@ -58,11 +60,24 @@ def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]
         dimension=settings.embedding_dimension,
     )
     object_storage = create_object_storage(settings)
+    if settings.faro_proxy_url:
+        transport = httpx.HTTPTransport(
+            proxy=settings.faro_proxy_url, retries=2, local_address="0.0.0.0"
+        )
+    else:
+        # Pin IPv4: see main.py — the host-gateway alias answers an unreachable AAAA.
+        transport = httpx.HTTPTransport(retries=2, local_address="0.0.0.0")
+    provider_http_client = httpx.Client(
+        transport=transport,
+        timeout=settings.faro_timeout_seconds,
+        trust_env=False,
+    )
     llm_adapter = FaroOpenAICompatibleAdapter(
         api_key=settings.faro_api_key.get_secret_value(),
         base_url=settings.faro_api_base_url,
         model=settings.faro_model,
         timeout_seconds=settings.faro_timeout_seconds,
+        http_client=provider_http_client,
     )
     return {
         IngestionJobKind.PARSE_DOCUMENT: make_parse_document_handler(
@@ -111,7 +126,12 @@ def main() -> None:
     run_worker_forever(
         create_session_factory(settings),
         create_handlers(settings),
-        config=WorkerConfig(worker_id=default_worker_id()),
+        config=WorkerConfig(
+            worker_id=default_worker_id(),
+            # Minute-level spacing lets GENERATE_MARKDOWN jobs ride out
+            # multi-minute provider reachability windows.
+            retry_delay=timedelta(minutes=1),
+        ),
         should_stop=stop_event.is_set,
     )
 

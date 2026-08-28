@@ -169,6 +169,11 @@ services:
       FARO_CONTEXT_WINDOW: ${FARO_CONTEXT_WINDOW:-32000}
       FARO_TIMEOUT_SECONDS: ${FARO_TIMEOUT_SECONDS:-60}
       FARO_MAX_CONCURRENCY: ${FARO_MAX_CONCURRENCY:-2}
+      FARO_PROXY_URL: ${FARO_PROXY_URL:-}
+    # 本机网络会对容器发往 faroapi.com 的 TLS 握手黑洞化（宿主机正常）；
+    # 通过 extra_hosts 把域名钉到宿主机上的 faro_relay.py(443)。
+    extra_hosts:
+      - "faroapi.com:host-gateway"
     ports:
       - "127.0.0.1:${API_PORT:-8000}:${API_PORT:-8000}"
     depends_on:
@@ -206,6 +211,11 @@ services:
       FARO_CONTEXT_WINDOW: ${FARO_CONTEXT_WINDOW:-32000}
       FARO_TIMEOUT_SECONDS: ${FARO_TIMEOUT_SECONDS:-60}
       FARO_MAX_CONCURRENCY: ${FARO_MAX_CONCURRENCY:-2}
+      FARO_PROXY_URL: ${FARO_PROXY_URL:-}
+    # 本机网络会对容器发往 faroapi.com 的 TLS 握手黑洞化（宿主机正常）；
+    # 通过 extra_hosts 把域名钉到宿主机上的 faro_relay.py(443)。
+    extra_hosts:
+      - "faroapi.com:host-gateway"
     command: ["python", "-m", "tutor_api.worker_main"]
     healthcheck:
       disable: true
@@ -230,3 +240,11 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+
+# WSL2/NAT MTU drift after engine restarts blackholes large TLS handshakes from
+# containers (host works, containers timeout); pin the bridge MTU explicitly.
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1300"

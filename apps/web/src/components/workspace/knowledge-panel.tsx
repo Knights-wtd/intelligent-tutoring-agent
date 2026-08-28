@@ -317,10 +317,12 @@ function KnowledgePanelForKnowledgeBase({
     setIsGeneratingCandidates(true);
     setCandidateMessage("");
     try {
+      // A fresh key per click: a FAILED batch must be re-generatable, not
+      // replayed from the server's idempotency cache.
       const batch = await knowledgeApi.startCandidateGeneration(
         selectedKnowledgeBaseId,
         entry.response.document_version_id,
-        `candidate-${entry.response.document_version_id}`,
+        `candidate-${entry.response.document_version_id}-${crypto.randomUUID()}`,
       );
       showCandidateBatch(batch);
     } catch {
