@@ -109,6 +109,14 @@ export type KnowledgeSearchResponse = {
   results: KnowledgeSearchResult[];
 };
 
+export type KnowledgeDocumentSummary = {
+  document_id: string;
+  document_version_id: string;
+  source_name: string;
+  processing_state: "processing" | "searchable" | "failed";
+  created_at: string;
+};
+
 export type KnowledgePreview = {
   blob: Blob;
   contentType: string;
@@ -249,6 +257,12 @@ export const knowledgeApi = {
     return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/search`, {
       method: "POST",
       body: JSON.stringify({ query, limit: boundedLimit }),
+      signal,
+    });
+  },
+
+  documents(knowledgeBaseId: string, signal?: AbortSignal): Promise<KnowledgeDocumentSummary[]> {
+    return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/documents`, {
       signal,
     });
   },

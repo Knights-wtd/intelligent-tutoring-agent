@@ -37,6 +37,7 @@ from tutor_api.knowledge.schemas import (
     KnowledgeCandidateLinkResponse,
     KnowledgeCandidateNoteResponse,
     KnowledgeCitationResponse,
+    KnowledgeDocumentResponse,
     KnowledgeDocumentStatusResponse,
     KnowledgeGraphEdgeResponse,
     KnowledgeGraphNodeResponse,
@@ -53,6 +54,7 @@ from tutor_api.knowledge.service import (
     get_document_processing_state,
     get_knowledge_base,
     list_knowledge_bases,
+    list_knowledge_documents,
     upload_prepared_knowledge_document,
 )
 from tutor_api.knowledge.storage import ObjectStorage
@@ -97,7 +99,9 @@ def _load_upload_user(session: Session, user_id: UUID) -> User:
 
 
 def _citation_secret(request: Request) -> str:
-    return request.app.state.settings.object_storage_secret_key.get_secret_value()
+    # Must match the secret used to mint tutor-chat citations; a mismatch makes
+    # tutor citations 404 on preview while search citations keep working.
+    return request.app.state.settings.effective_citation_hmac_secret
 
 
 def _preview_response(preview: SourcePreview) -> Response:
@@ -284,6 +288,28 @@ def post_knowledge_search(
             for hit in hits
         ]
     )
+
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents",
+    response_model=list[KnowledgeDocumentResponse],
+)
+def get_knowledge_documents(
+    knowledge_base_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> list[KnowledgeDocumentResponse]:
+    with session_scope(_session_factory(request)) as session:
+        return [
+            KnowledgeDocumentResponse(
+                document_id=summary.document_id,
+                document_version_id=summary.document_version_id,
+                source_name=summary.source_name,
+                processing_state=summary.processing_state,
+                created_at=summary.created_at,
+            )
+            for summary in list_knowledge_documents(session, current_user, knowledge_base_id)
+        ]
 
 
 @router.get(

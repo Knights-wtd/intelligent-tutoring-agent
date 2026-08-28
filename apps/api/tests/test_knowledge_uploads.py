@@ -941,3 +941,50 @@ def test_document_status_read_is_scoped_truthful_and_safe() -> None:
     )
     assert denied.status_code == 404
     engine.dispose()
+
+
+def test_document_list_restores_uploads_and_hides_from_outsiders() -> None:
+    client, engine, _ = make_client()
+    owner_info = register(client, "list-owner")
+    space_id = owner_info["personal_space"]["id"]
+    knowledge_base = create_knowledge_base(client, space_id)
+
+    empty = client.get(f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents")
+    assert empty.status_code == 200
+    assert empty.json() == []
+
+    uploaded = upload(
+        client,
+        knowledge_base["id"],
+        name="lesson.md",
+        content=b"# Lesson\n\nquadratic content",
+        content_type="text/markdown",
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    upload(
+        client,
+        knowledge_base["id"],
+        name="second.md",
+        content=b"# Second\n\nmore content",
+        content_type="text/markdown",
+        key="upload-key-2",
+    )
+
+    listed = client.get(f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents")
+    assert listed.status_code == 200, listed.text
+    documents = listed.json()
+    assert {document["source_name"] for document in documents} == {
+        "lesson.md",
+        "second.md",
+    }
+    for document in documents:
+        assert document["document_id"]
+        assert document["document_version_id"]
+        assert document["processing_state"] in {"processing", "searchable", "failed"}
+        assert document["created_at"]
+
+    outsider = TestClient(client.app)
+    register(outsider, "list-outsider")
+    denied = outsider.get(f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents")
+    assert denied.status_code == 404
+    engine.dispose()

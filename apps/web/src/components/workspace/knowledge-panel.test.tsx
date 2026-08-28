@@ -14,6 +14,7 @@ const mockKnowledgeApi = vi.hoisted(() => ({
   candidateBatch: vi.fn(),
   confirmCandidateBatch: vi.fn(),
   documentStatus: vi.fn(),
+  documents: vi.fn(),
 }));
 
 vi.mock("@/lib/knowledge-api", async (importOriginal) => {
@@ -108,6 +109,51 @@ describe("KnowledgePanel", () => {
     const hierarchy = screen.getByLabelText("知识库内容层级");
     expect(await within(hierarchy).findByText("处理中")).toBeInTheDocument();
     expect(hierarchy).not.toHaveTextContent("可搜索");
+  });
+
+  it("restores previously uploaded documents when the panel mounts", async () => {
+    mockKnowledgeApi.documents.mockResolvedValue([
+      {
+        document_id: "doc-restored",
+        document_version_id: "version-restored",
+        source_name: "restored.md",
+        processing_state: "searchable",
+        created_at: "2026-08-20T00:00:00Z",
+      },
+    ]);
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    const hierarchy = screen.getByLabelText("知识库内容层级");
+    expect(await within(hierarchy).findByText("restored.md")).toBeInTheDocument();
+    expect(within(hierarchy).getByText("可搜索")).toBeInTheDocument();
+    expect(mockKnowledgeApi.documents).toHaveBeenCalledWith("kb-math", expect.anything());
+    expect(screen.queryByText("尚未上传文件")).not.toBeInTheDocument();
+  });
+
+  it("keeps session uploads ahead of restored documents without duplication", async () => {
+    mockKnowledgeApi.documents.mockResolvedValue([
+      {
+        document_id: "doc-1",
+        document_version_id: "version-2",
+        source_name: "server-copy.md",
+        processing_state: "searchable",
+        created_at: "2026-08-20T00:00:00Z",
+      },
+    ]);
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse({ document_id: "doc-1" }));
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["content"], "chapter.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    const hierarchy = screen.getByLabelText("知识库内容层级");
+    expect(await within(hierarchy).findByText("chapter.md")).toBeInTheDocument();
+
+    expect(within(hierarchy).queryByText("server-copy.md")).not.toBeInTheDocument();
+    expect(within(hierarchy).getAllByText("chapter.md")).toHaveLength(1);
   });
 
   it("shows failed upload state without internal details and retries the same file", async () => {

@@ -37,8 +37,9 @@ type KnowledgePanelProps = {
 
 type UploadEntry = {
   id: string;
-  file: File;
-  idempotencyKey: string;
+  /** Present only for entries created this session; restored entries come from the server. */
+  file?: File;
+  idempotencyKey?: string;
   status: "uploading" | "failed" | "accepted";
   response?: KnowledgeUpload;
   processingState?: "processing" | "searchable" | "failed";
@@ -192,6 +193,7 @@ function KnowledgePanelForKnowledgeBase({
     }));
 
     try {
+      if (!entry.file || !entry.idempotencyKey) return;
       const response = await knowledgeApi.upload(
         knowledgeBaseId,
         entry.file,
@@ -205,17 +207,25 @@ function KnowledgePanelForKnowledgeBase({
       ) {
         return;
       }
-      setUploadsByKnowledgeBase((current) => ({
-        ...current,
-        [knowledgeBaseId]: replaceUpload(current[knowledgeBaseId] ?? [], {
-          ...entry,
-          status: "accepted",
-          response,
-          processingState: "processing",
-          statusRefreshFailed: false,
-        }),
-      }));
-      setSelectedFile((current) => (current === entry.file ? null : current));
+      setUploadsByKnowledgeBase((current) => {
+        // A restore fetch may have landed a server entry for this same
+        // document while the upload was in flight; keep the session entry.
+        const withoutRestoredDuplicate = (current[knowledgeBaseId] ?? []).filter(
+          (item) =>
+            item.id === entry.id || item.response?.document_id !== response.document_id,
+        );
+        return {
+          ...current,
+          [knowledgeBaseId]: replaceUpload(withoutRestoredDuplicate, {
+            ...entry,
+            status: "accepted",
+            response,
+            processingState: "processing",
+            statusRefreshFailed: false,
+          }),
+        };
+      });
+      setSelectedFile((current) => (current && entry.file && current === entry.file ? null : current));
     } catch {
       if (
         controller.signal.aborted ||
@@ -563,6 +573,57 @@ function KnowledgePanelForKnowledgeBase({
     void openPreview(citationRequest.citation);
   }, [citationRequest, onCitationRequestHandled, openPreview]);
 
+  // The upload list lives in component state and this component remounts per
+  // knowledge base (keyed), so restored entries must be re-fetched on mount or
+  // previously uploaded documents would vanish and invite duplicate re-uploads.
+  const restoreSequenceRef = useRef(0);
+  useEffect(() => {
+    if (!selectedKnowledgeBase) return;
+    const sequence = ++restoreSequenceRef.current;
+    const knowledgeBaseId = selectedKnowledgeBase.id;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const documents = await knowledgeApi.documents(knowledgeBaseId, controller.signal);
+        if (
+          !mountedRef.current ||
+          controller.signal.aborted ||
+          sequence !== restoreSequenceRef.current ||
+          !Array.isArray(documents)
+        ) {
+          return;
+        }
+        setUploadsByKnowledgeBase((current) => {
+          const existing = current[knowledgeBaseId] ?? [];
+          const knownDocuments = new Set(
+            existing.map((entry) => entry.response?.document_id).filter(Boolean),
+          );
+          const restored = documents
+            .filter((document) => !knownDocuments.has(document.document_id))
+            .map((document) => ({
+              id: `doc-${document.document_id}`,
+              status: "accepted" as const,
+              response: {
+                document_id: document.document_id,
+                document_version_id: document.document_version_id,
+                source_name: document.source_name,
+                created_at: document.created_at,
+              },
+              processingState: document.processing_state,
+            }));
+          if (restored.length === 0) return current;
+          return {
+            ...current,
+            [knowledgeBaseId]: [...restored, ...existing],
+          };
+        });
+      } catch {
+        // Restore is best-effort; the empty state stays visible on failure.
+      }
+    })();
+    return () => controller.abort();
+  }, [selectedKnowledgeBase]);
+
   return (
     <section aria-label="知识库面板" className={styles.knowledgePanel}>
       <header className={styles.knowledgeHeader}>
@@ -582,9 +643,9 @@ function KnowledgePanelForKnowledgeBase({
               {uploads.length === 0 ? <span>尚未上传文件</span> : null}
               {uploads.map((entry) => (
                 <div className={styles.fileState} key={entry.id}>
-                  <span>{entry.file.name}</span>
+                  <span>{entryFileName(entry)}</span>
                   {entry.status === "uploading" ? (
-                    <span role="status">正在上传 {entry.file.name}</span>
+                    <span role="status">正在上传 {entryFileName(entry)}</span>
                   ) : null}
                   {entry.status === "failed" ? (
                     <>
@@ -867,6 +928,10 @@ function newUploadId(): string {
 function newUploadKey(): string {
   const value = globalThis.crypto?.randomUUID?.() ?? newUploadId();
   return `web-${value}`;
+}
+
+function entryFileName(entry: UploadEntry): string {
+  return entry.file?.name ?? entry.response?.source_name ?? "未命名文档";
 }
 
 function learnerUploadState(entry: UploadEntry): string {

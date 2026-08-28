@@ -116,6 +116,67 @@ def get_knowledge_base(
     return get_readable_knowledge_base(session, user, knowledge_base_id)
 
 
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentSummary:
+    document_id: UUID
+    document_version_id: UUID
+    source_name: str
+    processing_state: str
+    created_at: object
+
+
+def list_knowledge_documents(
+    session: Session, user: User, knowledge_base_id: UUID
+) -> list[KnowledgeDocumentSummary]:
+    """List a knowledge base's active documents with their latest-version state.
+
+    The upload UI keeps its in-session list only per mount, so it needs this to
+    restore previously uploaded documents after a reload or knowledge-base switch.
+    """
+    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
+    documents = list(
+        session.scalars(
+            select(Document)
+            .where(
+                Document.knowledge_base_id == knowledge_base.id,
+                Document.space_id == knowledge_base.space_id,
+                Document.state == DocumentState.ACTIVE,
+            )
+            .order_by(Document.created_at, Document.id)
+        )
+    )
+    summaries: list[KnowledgeDocumentSummary] = []
+    for document in documents:
+        version = session.scalar(
+            select(DocumentVersion)
+            .where(
+                DocumentVersion.document_id == document.id,
+                DocumentVersion.knowledge_base_id == knowledge_base.id,
+                DocumentVersion.space_id == knowledge_base.space_id,
+            )
+            .order_by(DocumentVersion.created_at.desc(), DocumentVersion.id.desc())
+            .limit(1)
+        )
+        if version is None:
+            continue
+        summaries.append(
+            KnowledgeDocumentSummary(
+                document_id=document.id,
+                document_version_id=version.id,
+                source_name=document.source_key,
+                processing_state=get_document_processing_state(
+                    session,
+                    user,
+                    knowledge_base.id,
+                    document.id,
+                    version.id,
+                ),
+                created_at=document.created_at,
+            )
+        )
+    return summaries
+
+
 def get_document_processing_state(
     session: Session,
     user: User,

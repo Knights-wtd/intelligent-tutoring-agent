@@ -45,6 +45,14 @@ class KnowledgeDocumentStatusResponse(BaseModel):
     processing_state: Literal["processing", "searchable", "failed"]
 
 
+class KnowledgeDocumentResponse(BaseModel):
+    document_id: UUID
+    document_version_id: UUID
+    source_name: str
+    processing_state: Literal["processing", "searchable", "failed"]
+    created_at: datetime
+
+
 class KnowledgeGraphNodeResponse(BaseModel):
     id: UUID
     title: str

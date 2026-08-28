@@ -200,3 +200,38 @@ def test_preview_redacts_storage_exception_and_accepts_only_opaque_citation() ->
     finally:
         client.close()
         engine.dispose()
+
+
+def test_preview_accepts_citations_when_citation_hmac_differs_from_storage_secret() -> None:
+    """Regression: tutor citations are minted with CITATION_HMAC_SECRET while
+    search citations used OBJECT_STORAGE_SECRET_KEY; preview must verify with
+    the same effective secret or tutor citations 404 while search works."""
+    from tutor_api.core.config import Settings
+    from tutor_api.core.database import Base, create_engine_from_url
+    from tutor_api.main import create_app
+
+    storage = MemoryObjectStorage()
+    engine = create_engine_from_url("sqlite://", app_env="test")
+    Base.metadata.create_all(engine)
+    app = create_app(
+        Settings(
+            app_env="test",
+            citation_hmac_secret="citation-hmac-secret-0123456789abcdef",
+            object_storage_secret_key="storage-secret-0123456789abcdef",
+        ),
+        sessionmaker(bind=engine),
+        object_storage=storage,
+    )
+    app.state.embedding_adapter = FixedEmbeddingAdapter()
+    client = TestClient(app)
+    _, knowledge_base, citation_id, _, _ = _ingest_preview_target(
+        client, engine, storage, username="secret-split"
+    )
+
+    preview = client.get(
+        f"/api/v1/knowledge-bases/{knowledge_base['id']}/citations/{citation_id}/page",
+        headers={"Range": "bytes=0-31"},
+    )
+    assert preview.status_code == 206, preview.text
+    assert preview.text.startswith("Quadratic")
+    engine.dispose()
