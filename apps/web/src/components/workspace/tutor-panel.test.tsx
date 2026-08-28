@@ -147,6 +147,32 @@ describe("TutorPanel", () => {
     expect(screen.getByRole("button", { name: "重试" })).toBeInTheDocument();
   });
 
+  it("tells the operator to fix the API key when the provider rejects it as unauthorized", async () => {
+    const user = userEvent.setup();
+    mockTutorApi.createConversation.mockRejectedValue(
+      new TutorApiError(503, "tutor_provider_key_invalid"),
+    );
+    render(<TutorPanel knowledgeBase={{ id: "kb-1", name: "数学" }} contextLabel="章节" onOpenCitation={vi.fn()} />);
+    const input = await screen.findByRole("textbox", { name: "向 AI 导师提问" });
+    await user.type(input, "问题");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "AI 导师服务密钥无效：请在 .env 中配置真实的 FARO_API_KEY 后重启服务。",
+    );
+  });
+
+  it("shows a timeout message when the provider times out", async () => {
+    const user = userEvent.setup();
+    mockTutorApi.createConversation.mockRejectedValue(
+      new TutorApiError(503, "tutor_provider_timeout"),
+    );
+    render(<TutorPanel knowledgeBase={{ id: "kb-1", name: "数学" }} contextLabel="章节" onOpenCitation={vi.fn()} />);
+    const input = await screen.findByRole("textbox", { name: "向 AI 导师提问" });
+    await user.type(input, "问题");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("AI 导师响应超时，请稍后重试。");
+  });
+
   it("retries a general message failure with the same prompt", async () => {
     const user = userEvent.setup();
     mockTutorApi.createConversation

@@ -25,7 +25,7 @@ export function TutorPanel({ knowledgeBase, contextLabel, onOpenCitation }: Prop
   const [conversation, setConversation] = useState<TutorConversation | null>(null);
   const [prompt, setPrompt] = useState("");
   const [pending, setPending] = useState(false);
-  const [requestError, setRequestError] = useState<number | null>(null);
+  const [requestError, setRequestError] = useState<TutorApiError | null>(null);
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const operation = useRef<AbortController | null>(null);
   const generation = useRef(0);
@@ -89,7 +89,7 @@ export function TutorPanel({ knowledgeBase, contextLabel, onOpenCitation }: Prop
       }
     } catch (error) {
       if (!controller.signal.aborted && requestGeneration === generation.current) {
-        setRequestError(error instanceof TutorApiError ? error.status : 0);
+        setRequestError(error instanceof TutorApiError ? error : new TutorApiError(0));
         setRetryPrompt(currentPrompt);
       }
     } finally {
@@ -105,13 +105,22 @@ export function TutorPanel({ knowledgeBase, contextLabel, onOpenCitation }: Prop
   }
 
   const disabled = pending || status === null || !status.configured || statusFailed;
-  const errorMessage = requestError === 429
-    ? "请求过于频繁，请稍后再试。"
-    : requestError === 503
-      ? "导师服务暂时不可用，请稍后重试。"
-      : requestError !== null
-        ? "消息发送失败，请重试。"
-        : null;
+  const errorMessage = (() => {
+    if (requestError === null) return null;
+    if (requestError.code === "tutor_provider_key_invalid") {
+      return "AI 导师服务密钥无效：请在 .env 中配置真实的 FARO_API_KEY 后重启服务。";
+    }
+    if (requestError.code === "tutor_provider_timeout") {
+      return "AI 导师响应超时，请稍后重试。";
+    }
+    if (requestError.code === "tutor_provider_rate_limited" || requestError.status === 429) {
+      return "请求过于频繁，请稍后再试。";
+    }
+    if (requestError.status === 503) {
+      return "导师服务暂时不可用，请稍后重试。";
+    }
+    return "消息发送失败，请重试。";
+  })();
 
   return (
     <section aria-label="AI 导师" className={styles.tutorPanel}>
@@ -125,7 +134,9 @@ export function TutorPanel({ knowledgeBase, contextLabel, onOpenCitation }: Prop
       </header>
 
       {status === null && !statusFailed ? <p role="status">正在检查导师状态…</p> : null}
-      {status && !status.configured ? <p role="status">模型待配置</p> : null}
+      {status && !status.configured ? (
+        <p role="status">模型待配置：请在服务端 .env 中设置真实的 FARO_API_KEY 后重启服务。</p>
+      ) : null}
       {statusFailed ? (
         <div className={styles.tutorError}>
           <p role="alert">导师状态暂时无法加载。</p>

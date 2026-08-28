@@ -117,6 +117,10 @@ def _provider_service_code(provider_code: str) -> str:
         return "tutor_provider_timeout"
     if provider_code == "llm_rate_limited":
         return "tutor_provider_rate_limited"
+    if provider_code == "llm_unauthorized":
+        # 401 means the configured key is wrong; surfacing it as generic
+        # "unavailable" sends users chasing network problems that don't exist.
+        return "tutor_provider_key_invalid"
     return "tutor_provider_unavailable"
 
 

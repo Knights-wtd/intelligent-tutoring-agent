@@ -768,3 +768,104 @@ def test_page_preview_redacts_storage_failures() -> None:
     finally:
         client.close()
         engine.dispose()
+
+
+def test_bounded_excerpt_maps_casefold_expansion_back_to_original_offsets() -> None:
+    from tutor_api.knowledge.retrieval import bounded_excerpt
+
+    # "ß" casefolds to "ss": folding the whole string first shifts every offset
+    # after it by +1, so the old implementation sliced the window at the wrong
+    # original position and the hit term landed outside the excerpt.
+    content = (
+        "Weiß " + "filler " * 120 + " the quadratic formula appears here "
+        + "filler " * 120
+    )
+    excerpt = bounded_excerpt(content, ["quadratic"])
+
+    assert len(excerpt) <= MAX_EXCERPT_CHARACTERS + 2  # ellipses
+    assert "quadratic formula" in excerpt
+
+    # The ligature "ﬁ" casefolds to "fi" (length 2 -> 2, but ﬃ -> ffi grows);
+    # a leading expandable character must not displace the window either.
+    ligature_content = "ﬁ" + "x" * 900 + " quadratic endpoint"
+    ligature_excerpt = bounded_excerpt(ligature_content, ["quadratic"])
+    assert "quadratic endpoint" in ligature_excerpt
+    assert ligature_excerpt.endswith("quadratic endpoint")
+
+
+def test_bounded_excerpt_without_any_hit_starts_at_the_beginning() -> None:
+    from tutor_api.knowledge.retrieval import bounded_excerpt
+
+    content = "y" * 900
+    assert bounded_excerpt(content, ["absent"]) == content
+
+
+def test_vector_only_hits_below_similarity_floor_return_no_results() -> None:
+    # The chunk's stored vector is orthogonal to the query embedding
+    # (cosine similarity = 0), and the query shares no lexical term with the
+    # content: with the floor in place RRF has no ranking to fuse and the
+    # search must return an empty result instead of a confident-looking
+    # irrelevant excerpt.
+    adapter = FixedEmbeddingAdapter(
+        {"unrelated question": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+    )
+    client, engine = make_client(adapter)
+    try:
+        registration = register(client, "floor-owner")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="orthogonal.md",
+                content="completely different storage internals",
+                vector=[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            )
+            session.commit()
+
+        response = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "unrelated question"},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {"results": []}
+    finally:
+        client.close()
+        engine.dispose()
+
+
+def test_vector_hits_above_similarity_floor_are_still_returned() -> None:
+    adapter = FixedEmbeddingAdapter(
+        {"path loss": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
+    )
+    client, engine = make_client(adapter)
+    try:
+        registration = register(client, "floor-pass-owner")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="aligned.md",
+                content="path loss increases with transmission distance",
+                vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            )
+            session.commit()
+
+        response = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "path loss"},
+        )
+
+        assert response.status_code == 200
+        results = response.json()["results"]
+        assert len(results) == 1
+        assert "path loss" in results[0]["excerpt"]
+    finally:
+        client.close()
+        engine.dispose()

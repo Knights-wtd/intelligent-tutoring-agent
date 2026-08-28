@@ -29,11 +29,13 @@ export type TutorConversation = {
 
 export class TutorApiError extends Error {
   readonly status: number;
+  readonly code: string | null;
 
-  constructor(status: number) {
+  constructor(status: number, code: string | null = null) {
     super("Tutor request failed");
     this.name = "TutorApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -50,7 +52,24 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
       ...init.headers,
     },
   });
-  if (!response.ok) throw new TutorApiError(response.status);
+  if (!response.ok) {
+    let code: string | null = null;
+    try {
+      const body: unknown = await response.json();
+      if (
+        body !== null &&
+        typeof body === "object" &&
+        "detail" in body &&
+        typeof (body as { detail: unknown }).detail === "string"
+      ) {
+        code = (body as { detail: string }).detail;
+      }
+    } catch {
+      // Non-JSON error bodies keep the null code; the status alone still
+      // selects the generic message.
+    }
+    throw new TutorApiError(response.status, code);
+  }
   return response.json() as Promise<T>;
 }
 

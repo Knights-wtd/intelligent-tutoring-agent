@@ -642,7 +642,7 @@ def test_empty_search_still_calls_adapter_with_no_evidence_instruction(
     [
         ("llm_timeout", "tutor_provider_timeout"),
         ("llm_rate_limited", "tutor_provider_rate_limited"),
-        ("llm_unauthorized", "tutor_provider_unavailable"),
+        ("llm_unauthorized", "tutor_provider_key_invalid"),
         ("llm_provider_error", "tutor_provider_unavailable"),
     ],
 )
@@ -789,6 +789,7 @@ def make_tutor_client(
     configured: bool,
     *,
     adapter: object | None = None,
+    faro_api_key: str | None = None,
 ) -> tuple[TestClient, dict[str, object], object, object]:
     engine = create_engine_from_url("sqlite://", app_env="test")
     Base.metadata.create_all(engine)
@@ -797,7 +798,9 @@ def make_tutor_client(
     )
     settings = Settings(
         app_env="test",
-        faro_api_key=SecretStr("sk-test" if configured else ""),
+        faro_api_key=SecretStr(
+            faro_api_key if faro_api_key is not None else ("sk-test" if configured else "")
+        ),
     )
     app = create_app(settings, sessionmaker(bind=engine))
     app.state.tutor_adapter = active_adapter
@@ -852,6 +855,27 @@ def test_tutor_status_reports_configured_model(
         "configured": True,
         "model": "gemini-3.7-flash-tiered",
     }
+
+
+def test_placeholder_api_key_reports_unconfigured_and_never_calls_adapter() -> None:
+    active_client, knowledge_base, engine, adapter = make_tutor_client(
+        False, faro_api_key="placeholder-faro-key"
+    )
+    try:
+        status = active_client.get("/api/v1/tutor/status")
+        assert status.status_code == 200
+        assert status.json()["configured"] is False
+
+        response = active_client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
+            json={"prompt": "path loss"},
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "tutor_provider_unavailable"}
+        assert adapter.messages == ()
+    finally:
+        active_client.close()
+        engine.dispose()
 
 
 def test_unconfigured_create_is_safe_and_does_not_call_adapter(client: TestClient) -> None:
@@ -957,15 +981,11 @@ def test_provider_errors_have_stable_safe_http_mapping(
             json={"prompt": "path loss"},
         )
         assert response.status_code == expected_status
-        expected_detail = (
-            "tutor_provider_rate_limited"
-            if provider_code == "llm_rate_limited"
-            else (
-                "tutor_provider_timeout"
-                if provider_code == "llm_timeout"
-                else "tutor_provider_unavailable"
-            )
-        )
+        expected_detail = {
+            "llm_rate_limited": "tutor_provider_rate_limited",
+            "llm_timeout": "tutor_provider_timeout",
+            "llm_unauthorized": "tutor_provider_key_invalid",
+        }.get(provider_code, "tutor_provider_unavailable")
         assert response.json() == {"detail": expected_detail}
         assert "provider body secret" not in response.text
     finally:

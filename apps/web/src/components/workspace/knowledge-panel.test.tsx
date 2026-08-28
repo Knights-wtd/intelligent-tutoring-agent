@@ -499,4 +499,40 @@ describe("KnowledgePanel", () => {
     );
     expect(await screen.findByText("已写入正式知识库")).toBeInTheDocument();
   });
+
+  it("explains why candidate generation failed using the batch failure code", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse());
+    mockKnowledgeApi.documentStatus.mockResolvedValue({
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      processing_state: "searchable",
+    });
+    mockKnowledgeApi.startCandidateGeneration.mockResolvedValue({
+      id: "batch-failed",
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      generation_number: 1,
+      state: "failed",
+      failure_code: "llm_unauthorized",
+      notes: [],
+      links: [],
+      created_at: "2026-08-24T00:00:00Z",
+      updated_at: "2026-08-24T00:00:00Z",
+    });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["# chapter"], "chapter.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    await user.click(await screen.findByRole("button", { name: "刷新处理状态" }));
+    await screen.findByText("可搜索");
+    await user.click(screen.getByRole("button", { name: "生成知识候选" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "候选生成失败：Faro API 密钥无效。请在 .env 中配置真实的 FARO_API_KEY 并重启服务。",
+    );
+  });
 });

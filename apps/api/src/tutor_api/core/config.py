@@ -269,6 +269,32 @@ class Settings(BaseSettings):
             raise ValueError("FARO_MODEL must be a non-blank model id without whitespace")
         return normalized
 
+    def faro_api_key_configured(self) -> bool:
+        """Whether a real (non-placeholder) Faro API key is present.
+
+        Skeleton .env files ship values like "placeholder..." or the
+        .env.example default "replace-with-your-faro-api-key"; such a key is
+        non-empty yet still fails every provider call with 401. Reporting those
+        as "configured" makes the product claim the provider is ready when it
+        is not, which reads as a mysterious network outage.
+        """
+        value = self.faro_api_key.get_secret_value().strip()
+        if not value:
+            return False
+        lowered = value.casefold()
+        return not any(
+            marker in lowered
+            for marker in (
+                "placeholder",
+                "replace-with",
+                "your-api-key",
+                "your-faro",
+                "changeme",
+                "change-me",
+                "dummy",
+            )
+        )
+
     @field_validator("faro_context_window")
     @classmethod
     def validate_faro_context_window(cls, value: int) -> int:

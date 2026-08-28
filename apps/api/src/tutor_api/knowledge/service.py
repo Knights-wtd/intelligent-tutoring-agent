@@ -163,21 +163,42 @@ def get_document_processing_state(
     if indexed is not None:
         return "searchable"
 
-    failed_jobs = session.scalars(
-        select(IngestionJob).where(
+    # Push the "did any FAILED job target this version" question into SQL
+    # instead of streaming every failed job of the knowledge base into Python:
+    # ingestion jobs are append-only audit rows, so the old full scan degraded
+    # linearly with the knowledge base's failure history.
+    version_id_text = str(version.id)
+    failed_build_targeting_version = session.scalar(
+        select(IngestionJob.id)
+        .where(
             IngestionJob.knowledge_base_id == knowledge_base.id,
             IngestionJob.space_id == knowledge_base.space_id,
             IngestionJob.state == IngestionJobState.FAILED,
+            IngestionJob.kind == IngestionJobKind.BUILD_INDEX,
+            IngestionJob.checkpoint["document_version_ids"].as_string().contains(
+                version_id_text
+            ),
         )
+        .limit(1)
     )
-    for job in failed_jobs:
-        if job.kind in {IngestionJobKind.PARSE_DOCUMENT, IngestionJobKind.OCR_PAGE}:
-            if job.document_id == document.id and job.document_version_id == version.id:
-                return "failed"
-        elif job.kind == IngestionJobKind.BUILD_INDEX:
-            version_ids = job.checkpoint.get("document_version_ids", [])
-            if str(version.id) in version_ids:
-                return "failed"
+    if failed_build_targeting_version is not None:
+        return "failed"
+    failed_parse_or_ocr = session.scalar(
+        select(IngestionJob.id)
+        .where(
+            IngestionJob.knowledge_base_id == knowledge_base.id,
+            IngestionJob.space_id == knowledge_base.space_id,
+            IngestionJob.state == IngestionJobState.FAILED,
+            IngestionJob.kind.in_(
+                (IngestionJobKind.PARSE_DOCUMENT, IngestionJobKind.OCR_PAGE)
+            ),
+            IngestionJob.document_id == document.id,
+            IngestionJob.document_version_id == version.id,
+        )
+        .limit(1)
+    )
+    if failed_parse_or_ocr is not None:
+        return "failed"
     return "processing"
 
 _UPLOAD_SOURCE_KIND = "upload"

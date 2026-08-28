@@ -92,12 +92,12 @@ describe("KnowledgeGraphPanel", () => {
       />,
     );
 
-    expect(await screen.findByText("还没有已确认的知识节点。")) .toBeInTheDocument();
+    expect(await screen.findByText(/还没有已确认的知识节点/)) .toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "审核候选内容" }));
     expect(onReviewCandidates).toHaveBeenCalledTimes(1);
 
     rerender(<KnowledgeGraphPanel knowledgeBase={{ id: "kb-empty-2", name: "另一个空知识库" }} />);
-    expect(await screen.findByText("还没有已确认的知识节点。")) .toBeInTheDocument();
+    expect(await screen.findByText(/还没有已确认的知识节点/)) .toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "审核候选内容" })).not.toBeInTheDocument();
   });
 

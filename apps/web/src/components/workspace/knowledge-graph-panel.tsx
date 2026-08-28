@@ -83,7 +83,7 @@ export function KnowledgeGraphPanel({ knowledgeBase, onReviewCandidates }: Props
       ) : null}
       {!loading && !failed && graph?.nodes.length === 0 ? (
         <div className={styles.graphEmptyState}>
-          <p>还没有已确认的知识节点。</p>
+          <p>还没有已确认的知识节点。上传文档后，先在资料库中生成知识候选并确认，链路图会在这里展示。</p>
           {onReviewCandidates ? <button onClick={onReviewCandidates} type="button">审核候选内容</button> : null}
         </div>
       ) : null}

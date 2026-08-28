@@ -44,6 +44,11 @@ MAX_QUERY_CHARACTERS = 500
 MAX_RESULTS = 20
 MAX_EXCERPT_CHARACTERS = 500
 MAX_RETRIEVAL_CANDIDATES = 1_000
+# Chunks whose query cosine similarity falls below this floor are excluded from
+# the vector ranking. RRF only compares ranks, so without a floor even a chunk
+# that is nearly orthogonal to the query would appear as a top hit and produce
+# a confident-looking but irrelevant answer excerpt.
+MIN_VECTOR_SIMILARITY = 0.2
 MAX_PREVIEW_BYTES = 256 * 1024
 DEFAULT_PREVIEW_BYTES = 64 * 1024
 MAX_PREVIEW_START = 100 * 1024 * 1024
@@ -170,17 +175,43 @@ def reciprocal_rank_fusion(
     return sorted(scores, key=lambda item: (-scores[item], str(item)))
 
 
+def _casefold_alignments(text: str) -> tuple[list[int], str]:
+    """Map casefolded positions back to original-string offsets.
+
+    ``str.casefold`` can expand one character into several (``ß`` -> ``ss``,
+    ``ﬁ`` -> ``fi``), so folding the whole string first and reusing the folded
+    offset to slice the original string misplaces every excerpt window built
+    from it. This returns, for each casefolded character index, the offset of
+    the original character that produced it, plus the folded string itself.
+    """
+
+    folded_chars: list[str] = []
+    offsets: list[int] = []
+    for index, char in enumerate(text):
+        expanded = char.casefold()
+        folded_chars.append(expanded)
+        offsets.extend([index] * len(expanded))
+    return offsets, "".join(folded_chars)
+
+
 def bounded_excerpt(content: str, query_terms: Sequence[str]) -> str:
     """Produce a bounded, stable excerpt centered on the earliest lexical hit."""
 
     normalized = " ".join(content.split())
     if len(normalized) <= MAX_EXCERPT_CHARACTERS:
         return normalized
-    folded = normalized.casefold()
-    start = min(
-        (position for term in query_terms if (position := folded.find(term)) >= 0),
-        default=0,
-    )
+    offsets, folded = _casefold_alignments(normalized)
+    # A folded character index n maps to offsets[n]; the fold length of the
+    # original character at offset i is offsets.count(i), which bounds how far
+    # a term starting at offset i can reach into the folded string.
+    hits = [
+        offsets[position]
+        for term in query_terms
+        if (position := folded.find(term.casefold())) >= 0
+    ]
+    if not hits:
+        return normalized
+    start = min(hits)
     left = max(0, start - MAX_EXCERPT_CHARACTERS // 3)
     right = min(len(normalized), left + MAX_EXCERPT_CHARACTERS)
     left = max(0, right - MAX_EXCERPT_CHARACTERS)
@@ -367,11 +398,12 @@ def search_knowledge(
             and candidate.chunk.embedding_dimension == len(query_embedding)
         ):
             similarity = _cosine_similarity(query_embedding, candidate.chunk.embedding)
-            _add_bounded_candidate(
-                vector_heap,
-                candidate,
-                (-similarity, candidate.chunk.ordinal, str(candidate.chunk.id)),
-            )
+            if similarity >= MIN_VECTOR_SIMILARITY:
+                _add_bounded_candidate(
+                    vector_heap,
+                    candidate,
+                    (-similarity, candidate.chunk.ordinal, str(candidate.chunk.id)),
+                )
 
     lexical = _ordered_candidates(lexical_heap)
     vector = _ordered_candidates(vector_heap)

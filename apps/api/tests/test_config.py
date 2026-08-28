@@ -49,6 +49,19 @@ def test_settings_parse_faro_runtime_configuration_without_exposing_key() -> Non
     assert secret not in repr(settings)
 
 
+def test_settings_detects_placeholder_faro_api_key_as_unconfigured() -> None:
+    assert Settings(faro_api_key="").faro_api_key_configured() is False
+    assert Settings(faro_api_key="   ").faro_api_key_configured() is False
+    assert (
+        Settings(faro_api_key="placeholder-faro-key").faro_api_key_configured() is False
+    )
+    assert (
+        Settings(faro_api_key="replace-with-your-faro-api-key").faro_api_key_configured()
+        is False
+    )
+    assert Settings(faro_api_key="sk-live-tutor-secret").faro_api_key_configured() is True
+
+
 def test_settings_rejects_insecure_faro_base_url() -> None:
     with pytest.raises(ValueError, match="FARO_API_BASE_URL"):
         Settings(faro_api_base_url="http://faroapi.com/v1")

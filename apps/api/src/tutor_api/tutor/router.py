@@ -21,7 +21,7 @@ router = APIRouter(tags=["tutor"])
 
 
 def _configured(request: Request) -> bool:
-    return bool(request.app.state.settings.faro_api_key.get_secret_value().strip())
+    return request.app.state.settings.faro_api_key_configured()
 
 
 def _require_configured(request: Request) -> None:
@@ -32,6 +32,18 @@ def _require_configured(request: Request) -> None:
         )
 
 
+_KNOWN_SERVICE_CODES = frozenset(
+    {
+        "tutor_conversation_not_found",
+        "tutor_prompt_invalid",
+        "tutor_provider_rate_limited",
+        "tutor_provider_timeout",
+        "tutor_provider_unavailable",
+        "tutor_provider_key_invalid",
+    }
+)
+
+
 def _service_error(error: TutorServiceError) -> HTTPException:
     status_code = {
         "tutor_conversation_not_found": status.HTTP_404_NOT_FOUND,
@@ -39,14 +51,9 @@ def _service_error(error: TutorServiceError) -> HTTPException:
         "tutor_provider_rate_limited": status.HTTP_429_TOO_MANY_REQUESTS,
         "tutor_provider_timeout": status.HTTP_503_SERVICE_UNAVAILABLE,
         "tutor_provider_unavailable": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "tutor_provider_key_invalid": status.HTTP_503_SERVICE_UNAVAILABLE,
     }.get(error.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-    detail = error.code if error.code in {
-        "tutor_conversation_not_found",
-        "tutor_prompt_invalid",
-        "tutor_provider_rate_limited",
-        "tutor_provider_timeout",
-        "tutor_provider_unavailable",
-    } else "tutor_provider_unavailable"
+    detail = error.code if error.code in _KNOWN_SERVICE_CODES else "tutor_provider_unavailable"
     return HTTPException(status_code=status_code, detail=detail)
 
 

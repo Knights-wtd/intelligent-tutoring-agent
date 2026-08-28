@@ -38,6 +38,7 @@ from tutor_api.knowledge.ocr import RenderedPage
 from tutor_api.knowledge.parsers import ParsedDocument, ParsedPage, parse_markdown
 from tutor_api.knowledge.service import (
     PreparedUpload,
+    get_document_processing_state,
     persist_parsed_document_and_enqueue_build,
     upload_prepared_knowledge_document,
 )
@@ -1356,3 +1357,78 @@ def test_worker_main_injects_real_formula_evidence_provider(
     worker_main.create_handlers(Settings(app_env="test", embedding_dimension=8))
 
     assert captured["formula_evidence_provider"] is sentinel
+
+
+def test_failed_build_index_job_marks_its_document_versions_failed(
+    factory: sessionmaker[Session],
+) -> None:
+    """B3 regression: the status query must still see FAILED build jobs whose
+    checkpoint lists the version, now via SQL JSON filtering instead of the old
+    Python-side scan over every failed job of the knowledge base."""
+
+    now = datetime(2026, 8, 26, 12, tzinfo=UTC)
+    with factory.begin() as session:
+        adapter, _, _, job, version = real_build_target(
+            session, suffix="status-failed-build", now=now
+        )
+        job.max_attempts = 1
+        job.available_at = now
+        job_id = job.id
+        version_id = version.id
+        kb_id = version.knowledge_base_id
+        document_id = version.document_id
+
+    class FailingEmbedding:
+        backend = adapter.backend
+        model = adapter.model
+        dimension = adapter.dimension
+        signature = adapter.signature
+
+        def embed(self, text: str) -> list[float]:
+            del text
+            raise RuntimeError("private provider failure")
+
+    assert run_worker_once(
+        factory,
+        {IngestionJobKind.BUILD_INDEX: make_build_index_handler(FailingEmbedding())},
+        config=WorkerConfig(worker_id="status-failed-worker", retry_delay=timedelta(0)),
+        now=now,
+    )
+
+    with factory() as session:
+        job = session.get(IngestionJob, job_id)
+        version = session.get(DocumentVersion, version_id)
+        user = session.get(User, version.created_by_user_id)
+        assert job and job.state is IngestionJobState.FAILED
+        assert version and user
+        # The version itself stays READY; only the status projection reports
+        # the failed build targeting it.
+        assert version.state is DocumentVersionState.READY
+        assert (
+            get_document_processing_state(
+                session, user, kb_id, document_id, version_id
+            )
+            == "failed"
+        )
+
+    # A different version of the same knowledge base (not listed in the failed
+    # checkpoint) must not be tainted by the failed build job.
+    with factory.begin() as session:
+        job = session.get(IngestionJob, job_id)
+        assert job is not None
+        job.checkpoint = {
+            **job.checkpoint,
+            "document_version_ids": [str(uuid4())],
+        }
+        session.commit()
+
+    with factory() as session:
+        version = session.get(DocumentVersion, version_id)
+        user = session.get(User, version.created_by_user_id)
+        assert version and user
+        assert (
+            get_document_processing_state(
+                session, user, version.knowledge_base_id, version.document_id, version.id
+            )
+            == "processing"
+        )

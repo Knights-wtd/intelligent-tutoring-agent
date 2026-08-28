@@ -651,7 +651,9 @@ function KnowledgePanelForKnowledgeBase({
                 </>
               ) : null}
               {candidateBatch.state === "failed" ? (
-                <p role="alert">候选生成失败，请重新发起生成。</p>
+                <p role="alert">
+                  候选生成失败：{candidateFailureMessage(candidateBatch.failure_code)}
+                </p>
               ) : null}
               {candidateBatch.state === "confirmed" ? <p>已写入正式知识库</p> : null}
               {candidateBatch.state === "needs_review" ? (
@@ -836,6 +838,26 @@ function replaceUpload(entries: UploadEntry[], next: UploadEntry): UploadEntry[]
   const index = entries.findIndex((entry) => entry.id === next.id);
   if (index === -1) return [...entries, next];
   return entries.map((entry) => (entry.id === next.id ? next : entry));
+}
+
+function candidateFailureMessage(failureCode: string | null): string {
+  switch (failureCode) {
+    case "llm_unauthorized":
+      return "Faro API 密钥无效。请在 .env 中配置真实的 FARO_API_KEY 并重启服务。";
+    case "llm_timeout":
+      return "连接 Faro 超时，请稍后重试。";
+    case "llm_rate_limited":
+      return "Faro 请求过于频繁，请稍后重试。";
+    case "llm_network_error":
+      return "无法连接 Faro 服务，请检查网络后重试。";
+    case "llm_provider_unavailable":
+    case "llm_provider_error":
+    case "llm_response_invalid":
+    case "llm_response_empty":
+      return "Faro 服务暂时异常，请稍后重试。";
+    default:
+      return "请重新发起生成。";
+  }
 }
 
 function newUploadId(): string {

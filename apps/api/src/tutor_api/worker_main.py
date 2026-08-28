@@ -113,6 +113,15 @@ def main() -> None:
     production_errors = settings.production_errors()
     if production_errors:
         raise RuntimeError("Invalid production configuration: " + "; ".join(production_errors))
+    if not settings.faro_api_key_configured():
+        # The worker prints almost nothing, so an invalid key would otherwise
+        # only surface as GENERATE_MARKDOWN jobs failing with llm_unauthorized.
+        print(
+            "WARNING: FARO_API_KEY is empty or still a placeholder; "
+            "candidate generation (GENERATE_MARKDOWN) will fail with "
+            "llm_unauthorized until a real key is configured.",
+            flush=True,
+        )
 
     stop_event = threading.Event()
 
