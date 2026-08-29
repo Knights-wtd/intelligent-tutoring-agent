@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { api } from "@/lib/api";
@@ -57,6 +58,9 @@ export function AuthForm({ mode }: AuthFormProps) {
   return (
     <main className={styles.authPage}>
       <section className={styles.authCard}>
+        <Link className={styles.backLink} href="/welcome">
+          ← 返回介绍页
+        </Link>
         <div className={styles.brandMark}>知</div>
         <span className={styles.eyebrow}>知学空间 · 教材学习工作台</span>
         <h1>{isRegistration ? "注册" : "登录"}</h1>
@@ -94,6 +98,9 @@ export function AuthForm({ mode }: AuthFormProps) {
         <a className={styles.switchLink} href={isRegistration ? "/login" : "/register"}>
           {isRegistration ? "已有账号？去登录" : "还没有账号？去注册"}
         </a>
+        <Link className={styles.introLink} href="/welcome">
+          先看看这个平台能做什么 →
+        </Link>
       </section>
     </main>
   );

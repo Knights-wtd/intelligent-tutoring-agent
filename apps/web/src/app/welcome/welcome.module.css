@@ -1,0 +1,405 @@
+/* Intro page design language: black/white, outline type, glowing bubbles.
+   Scoped entirely to this page; must not touch global app styles. */
+
+.page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 20% 10%, rgb(156 142 255 / 10%), transparent 40%),
+    radial-gradient(circle at 85% 85%, rgb(138 124 240 / 8%), transparent 38%),
+    #14131c;
+  color: #f0eefb;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  overflow-x: hidden;
+}
+
+/* ---------- Hero ---------- */
+
+.hero {
+  position: relative;
+  min-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 96px 8vw 72px;
+  overflow: hidden;
+}
+
+.bubbles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.bubble {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, #cabffe 0%, #a99bf5 55%, #8a7cf0 100%);
+  box-shadow:
+    0 0 40px 12px rgb(154 142 240 / 0.35),
+    0 0 120px 40px rgb(154 142 240 / 0.15);
+  opacity: 0.85;
+  animation: float linear infinite;
+}
+
+@keyframes float {
+  0% { transform: translateY(0) translateX(0); }
+  50% { transform: translateY(-26px) translateX(10px); }
+  100% { transform: translateY(0) translateX(0); }
+}
+
+.heroKicker {
+  position: relative;
+  font-size: 12px;
+  letter-spacing: 0.35em;
+  color: #9d94d8;
+  margin-bottom: 28px;
+}
+
+.heroTitle {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: clamp(52px, 9vw, 128px);
+  line-height: 1.02;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  margin: 0 0 32px;
+}
+
+.heroTitleOutline {
+  color: transparent;
+  -webkit-text-stroke: 2px #b7a9fb;
+}
+
+.heroSub {
+  position: relative;
+  max-width: 560px;
+  font-size: 17px;
+  line-height: 1.8;
+  color: #c3bce4;
+  margin: 0 0 40px;
+}
+
+.heroActions {
+  position: relative;
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.primaryAction,
+.ghostAction {
+  display: inline-block;
+  padding: 14px 32px;
+  font-size: 15px;
+  text-decoration: none;
+  transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.primaryAction {
+  background: #efeafd;
+  color: #1d1a33;
+  border: 1px solid #efeafd;
+}
+
+.primaryAction:hover {
+  transform: translateY(-2px);
+  background: #f4f1ff;
+}
+
+.ghostAction {
+  color: #efeafd;
+  border: 1px solid #413c74;
+}
+
+.ghostAction:hover {
+  border-color: #efeafd;
+}
+
+/* ---------- Marquee divider ---------- */
+
+.marquee {
+  overflow: hidden;
+  border-top: 1px solid #262347;
+  border-bottom: 1px solid #262347;
+  padding: 18px 0;
+}
+
+.marqueeTrack {
+  display: flex;
+  gap: 48px;
+  width: max-content;
+  animation: marquee 22s linear infinite;
+}
+
+.marqueeItem {
+  display: flex;
+  align-items: center;
+  gap: 48px;
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: transparent;
+  -webkit-text-stroke: 1.5px #8d84c4;
+  white-space: nowrap;
+}
+
+.marqueeDots {
+  width: 160px;
+  border-top: 3px dotted #5c5488;
+}
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+/* ---------- Shared section styles ---------- */
+
+.sectionTitle {
+  font-size: clamp(30px, 4.5vw, 52px);
+  font-weight: 800;
+  margin: 0 0 48px;
+}
+
+.section {
+  padding: 110px 8vw;
+}
+
+/* Principles */
+
+.principleList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 32px;
+}
+
+.principle {
+  border: 1px solid #2c2952;
+  padding: 36px 28px;
+  transition: border-color 0.25s ease, transform 0.25s ease;
+}
+
+.principle:hover {
+  border-color: #efeafd;
+  transform: translateY(-4px);
+}
+
+.principleNo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1.5px solid #efeafd;
+  border-radius: 50%;
+  font-size: 16px;
+  margin-bottom: 24px;
+}
+
+.principleTitle {
+  font-size: 22px;
+  margin: 0 0 12px;
+}
+
+.principleBody {
+  font-size: 15px;
+  line-height: 1.8;
+  color: #b0a9d4;
+  margin: 0;
+}
+
+/* Pipeline rows (table-like) */
+
+.pipelineList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pipelineRow {
+  display: grid;
+  grid-template-columns: 72px 1fr 1fr 48px;
+  align-items: center;
+  gap: 24px;
+  padding: 34px 8px;
+  border-bottom: 1px solid #2c2952;
+  transition: background 0.2s ease, padding-left 0.2s ease;
+}
+
+.pipelineRow:first-child {
+  border-top: 1px solid #2c2952;
+}
+
+.pipelineRow:hover {
+  background: #1b1930;
+  padding-left: 20px;
+}
+
+.pipelineStep {
+  font-size: 14px;
+  color: #7a72a8;
+  letter-spacing: 0.2em;
+}
+
+.pipelineLabel {
+  font-size: clamp(20px, 2.4vw, 30px);
+  font-weight: 700;
+}
+
+.pipelineNote {
+  font-size: 14px;
+  color: #9d94c9;
+}
+
+.pipelineArrow {
+  font-size: 22px;
+  color: #7a72a8;
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.pipelineRow:hover .pipelineArrow {
+  transform: translateX(6px);
+  color: #efeafd;
+}
+
+/* Feature cards */
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 28px;
+}
+
+.featureCard {
+  border: 1px solid #2c2952;
+  padding: 32px 26px;
+  transition: border-color 0.25s ease;
+}
+
+.featureCard:hover {
+  border-color: #7a72a8;
+}
+
+.featureIcon {
+  font-size: 26px;
+  display: block;
+  margin-bottom: 18px;
+  color: #d5cef5;
+}
+
+.featureTitle {
+  font-size: 18px;
+  margin: 0 0 10px;
+}
+
+.featureBody {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #9d94c9;
+  margin: 0;
+}
+
+/* FAQ */
+
+.faqList {
+  max-width: 760px;
+}
+
+.faqItem {
+  border-bottom: 1px solid #2c2952;
+  padding: 22px 4px;
+}
+
+.faqItem:first-child {
+  border-top: 1px solid #2c2952;
+}
+
+.faqQuestion {
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.faqQuestion::-webkit-details-marker {
+  display: none;
+}
+
+.faqQuestion::after {
+  content: "+";
+  float: right;
+  font-size: 20px;
+  color: #7a72a8;
+}
+
+.faqItem[open] .faqQuestion::after {
+  content: "−";
+}
+
+.faqAnswer {
+  margin: 14px 0 4px;
+  font-size: 15px;
+  line-height: 1.8;
+  color: #b0a9d4;
+}
+
+/* Footer */
+
+.footer {
+  padding: 90px 8vw 120px;
+  border-top: 1px solid #262347;
+  text-align: center;
+}
+
+.footerLine {
+  font-size: clamp(26px, 3.5vw, 44px);
+  font-weight: 800;
+  margin: 0 0 36px;
+}
+
+/* ---------- Scroll reveal ---------- */
+
+.revealTarget {
+  opacity: 0;
+  transform: translateY(26px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+
+.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 640px) {
+  .pipelineRow {
+    grid-template-columns: 48px 1fr 32px;
+  }
+
+  .pipelineNote {
+    display: none;
+  }
+
+  .section {
+    padding: 72px 6vw;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble,
+  .marqueeTrack {
+    animation: none;
+  }
+
+  .revealTarget {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

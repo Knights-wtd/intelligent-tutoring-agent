@@ -36,13 +36,16 @@ describe("workspace CSS Module contract", () => {
     expect([...referenced].filter((className) => !defined.has(className))).toEqual([]);
   });
 
-  it("keeps the approved light workspace tokens and responsive contract", () => {
+  it("keeps the approved lavender-light workspace tokens and responsive contract", () => {
+    // 2026-08-28: palette re-approved as LAVENDER-LIGHT (original light theme
+    // tinted toward purple to match the /welcome intro and auth pages).
+    // Structural/responsive assertions below are unchanged.
     const stylesheet = readFileSync(
       path.join(process.cwd(), "src/components/workspace/workspace-shell.module.css"),
       "utf8",
     );
 
-    expect(stylesheet).toContain("--bg: #fbfbfd");
+    expect(stylesheet).toContain("--bg: #faf9fe");
     expect(stylesheet).toContain("--purple: #6558c9");
     expect(stylesheet).toContain("--green: #167c59");
     expect(stylesheet).not.toMatch(/\.panelGroup\s*\{[^}]*min-width:\s*(?:900|820|760)px/s);
