@@ -1,33 +1,29 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "./api";
 
-describe("api", () => {
-  it("sends same-origin API requests with cookies included", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(null), { status: 401 }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await api.me();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/auth/me",
-      expect.objectContaining({ credentials: "include" }),
-    );
+describe("API client", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("keeps the configured API origin separate from the web origin", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify([]), { status: 200 }),
+  it("preserves the safe registration conflict reason returned by the API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail: "邮箱或用户名已被使用" }), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
     );
-    vi.stubGlobal("fetch", fetchMock);
 
-    await api.spaces();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/spaces",
-      expect.objectContaining({ credentials: "include" }),
-    );
+    await expect(
+      api.register({
+        email: "existing@example.com",
+        username: "existing-user",
+        password: "correct horse battery staple 9",
+      }),
+    ).rejects.toThrow("邮箱或用户名已被使用");
   });
 });

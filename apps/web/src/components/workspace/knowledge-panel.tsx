@@ -6,12 +6,18 @@ import {
   MAX_KNOWLEDGE_QUERY_CHARACTERS,
   MAX_KNOWLEDGE_UPLOAD_BYTES,
   MAX_SOURCE_NAME_CHARACTERS,
+  KnowledgeApiError,
   knowledgeApi,
   type KnowledgeBase,
   type KnowledgeSearchResult,
   type KnowledgeCandidateBatch,
+  type KnowledgeNoteSummary,
   type KnowledgeUpload,
+  type KnowledgeWorkspaceDocument,
 } from "@/lib/knowledge-api";
+
+import { KnowledgeCandidateReview } from "./knowledge-candidate-review";
+import { KnowledgeExplorer } from "./knowledge-explorer";
 
 import styles from "./workspace-shell.module.css";
 
@@ -33,6 +39,9 @@ type KnowledgePanelProps = {
   knowledgeBase: KnowledgeBase;
   citationRequest?: KnowledgeCitationRequest;
   onCitationRequestHandled?: (requestId: number) => void;
+  onOpenGraph?: () => void;
+  initialNoteId?: string | null;
+  onInitialNoteHandled?: (noteId: string) => void;
 };
 
 type UploadEntry = {
@@ -61,6 +70,9 @@ function KnowledgePanelForKnowledgeBase({
   knowledgeBase,
   citationRequest,
   onCitationRequestHandled,
+  onOpenGraph,
+  initialNoteId,
+  onInitialNoteHandled,
 }: KnowledgePanelProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadMessage, setUploadMessage] = useState("");
@@ -74,6 +86,13 @@ function KnowledgePanelForKnowledgeBase({
   const [candidateMessage, setCandidateMessage] = useState("");
   const [isGeneratingCandidates, setIsGeneratingCandidates] = useState(false);
   const [isConfirmingCandidates, setIsConfirmingCandidates] = useState(false);
+  const [workspaceDocuments, setWorkspaceDocuments] = useState<KnowledgeWorkspaceDocument[]>([]);
+  const [publishedNotes, setPublishedNotes] = useState<KnowledgeNoteSummary[]>([]);
+  const [workspaceNotice, setWorkspaceNotice] = useState<{
+    knowledgeBaseId: string;
+    message: string;
+  } | null>(null);
+  const [workspaceReload, setWorkspaceReload] = useState(0);
   const [searchResults, setSearchResults] = useState<KnowledgeSearchResult[]>([]);
   const [searchMessage, setSearchMessage] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -93,6 +112,7 @@ function KnowledgePanelForKnowledgeBase({
     | null
   >(null);
   const mountedRef = useRef(true);
+  const workspaceHasRunningTaskRef = useRef(false);
   const [isUploading, setIsUploading] = useState(false);
 
   const disposePreviewUrl = useCallback(() => {
@@ -142,11 +162,23 @@ function KnowledgePanelForKnowledgeBase({
     setIsOpeningPreview(false);
   }, [abortPreviewRequest, disposePreviewUrl]);
 
+  const showCandidateBatch = useCallback((batch: KnowledgeCandidateBatch) => {
+    setCandidateBatch(batch);
+    setAcceptedCandidateNotes(
+      batch.notes.filter((note) => note.review_state !== "rejected").map((note) => note.id),
+    );
+    setAcceptedCandidateLinks(
+      batch.links.filter((link) => link.review_state !== "rejected").map((link) => link.id),
+    );
+    setCandidateMessage("");
+  }, []);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      activeUploadRef.current?.controller.abort();
+      // Keep the upload request alive across tab or knowledge-base switches. Once the
+      // API accepts it, the database-backed workspace snapshot restores its progress.
       abortStatusRefresh();
       abortSearchRequest();
       abortPreviewRequest();
@@ -159,6 +191,50 @@ function KnowledgePanelForKnowledgeBase({
   const uploads = selectedKnowledgeBaseId
     ? (uploadsByKnowledgeBase[selectedKnowledgeBaseId] ?? [])
     : [];
+  const workspaceMessage =
+    workspaceNotice?.knowledgeBaseId === selectedKnowledgeBaseId
+      ? workspaceNotice.message
+      : "";
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void knowledgeApi
+      .workspace(selectedKnowledgeBaseId, controller.signal)
+      .then((snapshot) => {
+        if (controller.signal.aborted) return;
+        setWorkspaceNotice(null);
+        setWorkspaceDocuments(snapshot.documents);
+        setPublishedNotes(snapshot.notes);
+        workspaceHasRunningTaskRef.current =
+          snapshot.documents.some((document) => document.processing_state === "processing") ||
+          snapshot.candidate_batch?.state === "processing";
+        if (snapshot.candidate_batch) showCandidateBatch(snapshot.candidate_batch);
+        else {
+          setCandidateBatch(null);
+          setAcceptedCandidateNotes([]);
+          setAcceptedCandidateLinks([]);
+        }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setWorkspaceNotice({
+          knowledgeBaseId: selectedKnowledgeBaseId,
+          message: workspaceHasRunningTaskRef.current
+            ? "任务仍在后台执行，可重新连接。"
+            : "工作区暂时无法恢复，请重新加载。",
+        });
+      });
+    return () => controller.abort();
+  }, [selectedKnowledgeBaseId, showCandidateBatch, workspaceReload]);
+
+  useEffect(() => {
+    const hasRunningDocument = workspaceDocuments.some(
+      (document) => document.processing_state === "processing",
+    );
+    if (!hasRunningDocument && candidateBatch?.state !== "processing") return;
+    const timer = window.setTimeout(() => setWorkspaceReload((value) => value + 1), 1800);
+    return () => window.clearTimeout(timer);
+  }, [candidateBatch?.state, workspaceDocuments]);
 
   function validateFile(file: File): string | null {
     if (!file.name || file.name.length > MAX_SOURCE_NAME_CHARACTERS) {
@@ -226,6 +302,7 @@ function KnowledgePanelForKnowledgeBase({
         };
       });
       setSelectedFile((current) => (current && entry.file && current === entry.file ? null : current));
+      setWorkspaceReload((value) => value + 1);
     } catch {
       if (
         controller.signal.aborted ||
@@ -288,6 +365,17 @@ function KnowledgePanelForKnowledgeBase({
             : item,
         ),
       }));
+      setWorkspaceDocuments((current) =>
+        current.map((document) =>
+          document.document_id === status.document_id &&
+          document.document_version_id === status.document_version_id
+            ? { ...document, processing_state: status.processing_state }
+            : document,
+        ),
+      );
+      if (status.processing_state !== "processing") {
+        setWorkspaceReload((value) => value + 1);
+      }
     } catch {
       if (
         !controller.signal.aborted &&
@@ -315,13 +403,6 @@ function KnowledgePanelForKnowledgeBase({
       }
     }
   }
-  function showCandidateBatch(batch: KnowledgeCandidateBatch) {
-    setCandidateBatch(batch);
-    setAcceptedCandidateNotes(batch.notes.map((note) => note.id));
-    setAcceptedCandidateLinks(batch.links.map((link) => link.id));
-    setCandidateMessage("");
-  }
-
   async function startCandidateGeneration(entry: UploadEntry) {
     if (!entry.response || !selectedKnowledgeBaseId || isGeneratingCandidates) return;
     setIsGeneratingCandidates(true);
@@ -387,8 +468,12 @@ function KnowledgePanelForKnowledgeBase({
       );
       setCandidateBatch(confirmed);
       setCandidateMessage("");
-    } catch {
-      setCandidateMessage("确认失败，候选内容尚未写入，请重试。");
+    } catch (error) {
+      setCandidateMessage(
+        error instanceof KnowledgeApiError && error.status === 409
+          ? "候选存在标题或层级冲突，请刷新后重新确认。"
+          : "确认暂时失败，候选内容仍保留，请稍后重试。",
+      );
     } finally {
       setIsConfirmingCandidates(false);
     }
@@ -573,56 +658,9 @@ function KnowledgePanelForKnowledgeBase({
     void openPreview(citationRequest.citation);
   }, [citationRequest, onCitationRequestHandled, openPreview]);
 
-  // The upload list lives in component state and this component remounts per
-  // knowledge base (keyed), so restored entries must be re-fetched on mount or
-  // previously uploaded documents would vanish and invite duplicate re-uploads.
-  const restoreSequenceRef = useRef(0);
-  useEffect(() => {
-    if (!selectedKnowledgeBase) return;
-    const sequence = ++restoreSequenceRef.current;
-    const knowledgeBaseId = selectedKnowledgeBase.id;
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const documents = await knowledgeApi.documents(knowledgeBaseId, controller.signal);
-        if (
-          !mountedRef.current ||
-          controller.signal.aborted ||
-          sequence !== restoreSequenceRef.current ||
-          !Array.isArray(documents)
-        ) {
-          return;
-        }
-        setUploadsByKnowledgeBase((current) => {
-          const existing = current[knowledgeBaseId] ?? [];
-          const knownDocuments = new Set(
-            existing.map((entry) => entry.response?.document_id).filter(Boolean),
-          );
-          const restored = documents
-            .filter((document) => !knownDocuments.has(document.document_id))
-            .map((document) => ({
-              id: `doc-${document.document_id}`,
-              status: "accepted" as const,
-              response: {
-                document_id: document.document_id,
-                document_version_id: document.document_version_id,
-                source_name: document.source_name,
-                created_at: document.created_at,
-              },
-              processingState: document.processing_state,
-            }));
-          if (restored.length === 0) return current;
-          return {
-            ...current,
-            [knowledgeBaseId]: [...restored, ...existing],
-          };
-        });
-      } catch {
-        // Restore is best-effort; the empty state stays visible on failure.
-      }
-    })();
-    return () => controller.abort();
-  }, [selectedKnowledgeBase]);
+  // Upload progress is restored from the database-backed workspace snapshot
+  // (knowledgeApi.workspace) fetched by the effect above; the workspace reload
+  // counter re-triggers it after uploads and candidate confirmations.
 
   return (
     <section aria-label="知识库面板" className={styles.knowledgePanel}>
@@ -631,189 +669,118 @@ function KnowledgePanelForKnowledgeBase({
           <span className={styles.eyebrow}>{spaceName}</span>
           <h2>知识库</h2>
         </div>
+        {onOpenGraph ? <button onClick={onOpenGraph} type="button">打开链路图</button> : null}
       </header>
 
       <>
-          <div aria-label="知识库内容层级" className={styles.knowledgeHierarchy}>
-            <strong>知识库</strong>
-            <span>当前知识库：{selectedKnowledgeBase?.name ?? "请选择知识库"}</span>
-            <strong className={styles.hierarchyBranch}>教材/练习</strong>
-            <strong className={styles.hierarchyBranch}>文件</strong>
-            <div className={styles.hierarchyFiles}>
-              {uploads.length === 0 ? <span>尚未上传文件</span> : null}
-              {uploads.map((entry) => (
-                <div className={styles.fileState} key={entry.id}>
-                  <span>{entryFileName(entry)}</span>
-                  {entry.status === "uploading" ? (
-                    <span role="status">正在上传 {entryFileName(entry)}</span>
-                  ) : null}
-                  {entry.status === "failed" ? (
-                    <>
-                      <span>上传失败，请重试。</span>
-                      <button
-                        disabled={isUploading}
-                        type="button"
-                        onClick={() =>
-                          void upload(entry, selectedKnowledgeBaseId, contextSequenceRef.current)
-                        }
-                      >
-                        重试上传
-                      </button>
-                    </>
-                  ) : null}
-                  {entry.status === "accepted" ? (
-                    <>
-                      <span>{learnerUploadState(entry)}</span>
-                      <button
-                        disabled={entry.isRefreshing}
-                        type="button"
-                        onClick={() =>
-                          void refreshUploadStatus(
-                            entry,
-                            selectedKnowledgeBaseId,
-                            contextSequenceRef.current,
-                          )
-                        }
-                      >
-                        {entry.isRefreshing ? "刷新中…" : "刷新处理状态"}
-                      </button>
-                      {entry.processingState === "searchable" ? (
-                        <button
-                          disabled={isGeneratingCandidates}
-                          onClick={() => void startCandidateGeneration(entry)}
-                          type="button"
-                        >
-                          {isGeneratingCandidates ? "生成中…" : "生成知识候选"}
-                        </button>
-                      ) : null}
-                      {entry.statusRefreshFailed ? (
-                        <span role="alert">暂时无法刷新状态，请重试。</span>
-                      ) : null}
-                    </>
-                  ) : null}
-                </div>
-              ))}
+          {workspaceMessage ? (
+            <div className={styles.workspaceRecoveryNotice} role="alert">
+              <span>{workspaceMessage}</span>
+              <button onClick={() => setWorkspaceReload((value) => value + 1)} type="button">
+                重新加载
+              </button>
             </div>
-          </div>
+          ) : null}
+
+          <KnowledgeExplorer
+            documents={workspaceDocuments}
+            initialNoteId={initialNoteId}
+            knowledgeBase={selectedKnowledgeBase}
+            notes={publishedNotes}
+            onInitialNoteHandled={onInitialNoteHandled}
+            taskContent={
+              uploads.length > 0 ? (
+                <section aria-label="当前上传任务" className={styles.explorerFolder}>
+                  <strong><span aria-hidden="true">▾ </span><span>当前任务</span></strong>
+                  <div className={styles.hierarchyFiles}>
+                    {uploads.map((entry) => (
+                      <div className={styles.fileState} key={entry.id}>
+                        <span>{entryFileName(entry)}</span>
+                        {entry.status === "uploading" ? (
+                          <span role="status">正在上传 {entryFileName(entry)}</span>
+                        ) : null}
+                        {entry.status === "failed" ? (
+                          <>
+                            <span>上传失败，请重试。</span>
+                            <button
+                              disabled={isUploading}
+                              type="button"
+                              onClick={() =>
+                                void upload(entry, selectedKnowledgeBaseId, contextSequenceRef.current)
+                              }
+                            >
+                              重试上传
+                            </button>
+                          </>
+                        ) : null}
+                        {entry.status === "accepted" ? (
+                          <>
+                            <span>{learnerUploadState(entry)}</span>
+                            <button
+                              disabled={entry.isRefreshing}
+                              type="button"
+                              onClick={() =>
+                                void refreshUploadStatus(
+                                  entry,
+                                  selectedKnowledgeBaseId,
+                                  contextSequenceRef.current,
+                                )
+                              }
+                            >
+                              {entry.isRefreshing ? "刷新中…" : "刷新处理状态"}
+                            </button>
+                            {entry.processingState === "searchable" ? (
+                              <button
+                                disabled={isGeneratingCandidates}
+                                onClick={() => void startCandidateGeneration(entry)}
+                                type="button"
+                              >
+                                {isGeneratingCandidates ? "生成中…" : "生成知识候选"}
+                              </button>
+                            ) : null}
+                            {entry.statusRefreshFailed ? (
+                              <span role="alert">暂时无法刷新状态，请重试。</span>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ) : null
+            }
+          />
 
           {candidateMessage ? <p role="alert">{candidateMessage}</p> : null}
           {candidateBatch ? (
-            <section aria-label="知识候选审核">
-              {candidateBatch.state === "processing" ? (
-                <>
-                  <p role="status">正在识别章、节、小节并生成候选…</p>
-                  <button
-                    disabled={isGeneratingCandidates}
-                    onClick={() => void refreshCandidateBatch()}
-                    type="button"
-                  >
-                    刷新候选状态
-                  </button>
-                </>
-              ) : null}
-              {candidateBatch.state === "failed" ? (
-                <p role="alert">
-                  候选生成失败：{candidateFailureMessage(candidateBatch.failure_code)}
-                </p>
-              ) : null}
-              {candidateBatch.state === "confirmed" ? <p>已写入正式知识库</p> : null}
-              {candidateBatch.state === "needs_review" ? (
-                <>
-                  <h3>结构候选</h3>
-                  {candidateBatch.notes
-                    .filter((note) =>
-                      ["chapter", "section", "subsection"].includes(note.kind),
-                    )
-                    .map((note) => (
-                      <label key={note.id}>
-                        <input
-                          checked={acceptedCandidateNotes.includes(note.id)}
-                          onChange={() =>
-                            toggleCandidate(
-                              note.id,
-                              acceptedCandidateNotes,
-                              setAcceptedCandidateNotes,
-                            )
-                          }
-                          type="checkbox"
-                        />
-                        <span>{note.title}</span>
-                      </label>
-                    ))}
-                  <h3>知识笔记候选</h3>
-                  {candidateBatch.notes
-                    .filter(
-                      (note) =>
-                        !["chapter", "section", "subsection"].includes(note.kind),
-                    )
-                    .map((note) => (
-                      <label key={note.id}>
-                        <input
-                          checked={acceptedCandidateNotes.includes(note.id)}
-                          onChange={() =>
-                            toggleCandidate(
-                              note.id,
-                              acceptedCandidateNotes,
-                              setAcceptedCandidateNotes,
-                            )
-                          }
-                          type="checkbox"
-                        />
-                        <span>{note.title}</span>
-                      </label>
-                    ))}
-                  <h3>结构链接</h3>
-                  {candidateBatch.links
-                    .filter((link) => link.kind === "structure")
-                    .map((link) => (
-                      <label key={link.id}>
-                        <input
-                          checked={acceptedCandidateLinks.includes(link.id)}
-                          onChange={() =>
-                            toggleCandidate(
-                              link.id,
-                              acceptedCandidateLinks,
-                              setAcceptedCandidateLinks,
-                            )
-                          }
-                          type="checkbox"
-                        />
-                        <span>{link.context}</span>
-                      </label>
-                    ))}
-                  <h3>重复术语链接</h3>
-                  {candidateBatch.links
-                    .filter((link) => link.kind === "term")
-                    .map((link) => (
-                      <label key={link.id}>
-                        <input
-                          checked={acceptedCandidateLinks.includes(link.id)}
-                          onChange={() =>
-                            toggleCandidate(
-                              link.id,
-                              acceptedCandidateLinks,
-                              setAcceptedCandidateLinks,
-                            )
-                          }
-                          type="checkbox"
-                        />
-                        <span>{link.context}</span>
-                      </label>
-                    ))}
-                  <button
-                    disabled={
-                      isConfirmingCandidates || acceptedCandidateNotes.length === 0
-                    }
-                    onClick={() => void confirmCandidates()}
-                    type="button"
-                  >
-                    {isConfirmingCandidates
-                      ? "正在写入…"
-                      : "确认并生成层级知识库"}
-                  </button>
-                </>
-              ) : null}
-            </section>
+            <KnowledgeCandidateReview
+              acceptedLinkIds={acceptedCandidateLinks}
+              acceptedNoteIds={acceptedCandidateNotes}
+              batch={candidateBatch}
+              failureMessage={
+                candidateBatch.state === "failed"
+                  ? `候选生成失败：${candidateFailureMessage(candidateBatch.failure_code)}`
+                  : undefined
+              }
+              isConfirming={isConfirmingCandidates}
+              isRefreshing={isGeneratingCandidates}
+              onConfirm={() => void confirmCandidates()}
+              onRefresh={() => void refreshCandidateBatch()}
+              onToggleLink={(linkId) =>
+                toggleCandidate(
+                  linkId,
+                  acceptedCandidateLinks,
+                  setAcceptedCandidateLinks,
+                )
+              }
+              onToggleNote={(noteId) =>
+                toggleCandidate(
+                  noteId,
+                  acceptedCandidateNotes,
+                  setAcceptedCandidateNotes,
+                )
+              }
+            />
           ) : null}
 
 

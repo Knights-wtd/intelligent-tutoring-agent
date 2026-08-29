@@ -148,6 +148,93 @@ def test_confirmation_publishes_only_hierarchy_as_wikilinks(session) -> None:
     assert version.document_id == document.id
 
 
+def test_confirmation_qualifies_duplicate_titles_with_their_parent(session) -> None:
+    owner, space, knowledge_base, _, version = create_source(session)
+    version.state = DocumentVersionState.READY
+    batch, _ = create_candidate_generation(
+        session,
+        owner,
+        knowledge_base.id,
+        version.id,
+        idempotency_key="duplicate-section-titles",
+    )
+    batch.state = CandidateBatchState.NEEDS_REVIEW
+    part_four = KnowledgeCandidateNote(
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        batch_id=batch.id,
+        ordinal=0,
+        candidate_key="part-4",
+        title="第四部分：直接配置 Claude Code",
+        normalized_title="第四部分：直接配置 claude code",
+        kind=CandidateNoteKind.CHAPTER,
+        markdown="# 第四部分：直接配置 Claude Code",
+        source_pointers=["guide.md#part-4"],
+    )
+    part_five = KnowledgeCandidateNote(
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        batch_id=batch.id,
+        ordinal=1,
+        candidate_key="part-5",
+        title="第五部分：直接配置 Codex",
+        normalized_title="第五部分：直接配置 codex",
+        kind=CandidateNoteKind.CHAPTER,
+        markdown="# 第五部分：直接配置 Codex",
+        source_pointers=["guide.md#part-5"],
+    )
+    claude_location = KnowledgeCandidateNote(
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        batch_id=batch.id,
+        ordinal=2,
+        candidate_key="claude-config-location",
+        title="配置文件位置",
+        normalized_title="配置文件位置",
+        kind=CandidateNoteKind.SECTION,
+        parent_key=part_four.candidate_key,
+        markdown="# 配置文件位置\n\nClaude 配置路径。",
+        source_pointers=["guide.md#claude-location"],
+    )
+    codex_location = KnowledgeCandidateNote(
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        batch_id=batch.id,
+        ordinal=3,
+        candidate_key="codex-config-location",
+        title="配置文件位置",
+        normalized_title="配置文件位置",
+        kind=CandidateNoteKind.SECTION,
+        parent_key=part_five.candidate_key,
+        markdown="# 配置文件位置\n\nCodex 配置路径。",
+        source_pointers=["guide.md#codex-location"],
+    )
+    notes = [part_four, part_five, claude_location, codex_location]
+    session.add_all(notes)
+    session.flush()
+
+    result = confirm_candidate_batch(
+        session,
+        owner,
+        knowledge_base.id,
+        batch.id,
+        accepted_note_ids={note.id for note in notes},
+        accepted_link_ids=set(),
+    )
+
+    assert result.state is CandidateBatchState.CONFIRMED
+    published_titles = set(session.scalars(select(MarkdownNote.title)))
+    assert "配置文件位置（第四部分：直接配置 Claude Code）" in published_titles
+    assert "配置文件位置（第五部分：直接配置 Codex）" in published_titles
+    part_four_revision = session.scalar(
+        select(MarkdownRevision)
+        .join(MarkdownNote, MarkdownNote.id == MarkdownRevision.note_id)
+        .where(MarkdownNote.title == "第四部分：直接配置 Claude Code")
+    )
+    assert part_four_revision is not None
+    assert "[[配置文件位置（第四部分：直接配置 Claude Code）]]" in part_four_revision.markdown
+
+
 def test_confirmation_rejects_an_accepted_child_without_its_parent(session) -> None:
     owner, space, knowledge_base, _, version = create_source(session)
     version.state = DocumentVersionState.READY

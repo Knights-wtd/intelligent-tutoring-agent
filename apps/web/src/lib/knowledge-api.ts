@@ -28,6 +28,43 @@ export type KnowledgeDocumentStatus = {
 };
 
 
+export type KnowledgeWorkspaceDocument = {
+  document_id: string;
+  document_version_id: string;
+  source_name: string;
+  content_type: string;
+  processing_state: "processing" | "searchable" | "failed";
+  created_at: string;
+  updated_at: string;
+};
+
+export type KnowledgeNoteSummary = {
+  id: string;
+  title: string;
+  kind: string;
+  parent_id: string | null;
+  source_document_id: string | null;
+  updated_at: string;
+};
+
+export type KnowledgeNoteReference = {
+  id: string;
+  title: string;
+};
+
+export type KnowledgeNoteDetail = {
+  id: string;
+  title: string;
+  kind: string;
+  markdown: string;
+  source_markers: string[];
+  source_document_id: string | null;
+  source_name: string | null;
+  parent: KnowledgeNoteReference | null;
+  children: KnowledgeNoteReference[];
+  updated_at: string;
+};
+
 export type KnowledgeCandidateNote = {
   id: string;
   ordinal: number;
@@ -73,8 +110,15 @@ export type KnowledgeCandidateBatch = {
   created_at: string;
   updated_at: string;
 };
+export type KnowledgeWorkspace = {
+  knowledge_base_id: string;
+  documents: KnowledgeWorkspaceDocument[];
+  candidate_batch: KnowledgeCandidateBatch | null;
+  notes: KnowledgeNoteSummary[];
+};
 export type KnowledgeGraphNode = {
   id: string;
+  note_id: string | null;
   title: string;
   kind: string;
   source_pointers: string[];
@@ -182,6 +226,21 @@ export const knowledgeApi = {
     );
     if (!response.ok) throw new KnowledgeApiError(response.status);
     return response.json() as Promise<KnowledgeUpload>;
+  },
+
+  workspace(knowledgeBaseId: string, signal?: AbortSignal): Promise<KnowledgeWorkspace> {
+    return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/workspace`, { signal });
+  },
+
+  note(
+    knowledgeBaseId: string,
+    noteId: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeNoteDetail> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/notes/${resource(noteId)}`,
+      { signal },
+    );
   },
 
   graph(knowledgeBaseId: string, signal?: AbortSignal): Promise<KnowledgeGraph> {

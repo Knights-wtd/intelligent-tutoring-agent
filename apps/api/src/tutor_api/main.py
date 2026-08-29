@@ -2,7 +2,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from threading import Semaphore
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -21,6 +20,7 @@ from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.router import router as knowledge_router
 from tutor_api.knowledge.storage import ObjectStorage, create_object_storage
 from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
+from tutor_api.llm.http_client import create_faro_http_client
 from tutor_api.llm.ports import TutorChatAdapter
 from tutor_api.providers.router import router as providers_router
 from tutor_api.providers.service import synchronize_provider_profiles
@@ -58,25 +58,11 @@ def create_app(
         max_attempts=active_settings.register_max_attempts,
         lockout_seconds=active_settings.register_lockout_seconds,
     )
-    # A shared client keeps TLS connections pooled; when FARO_PROXY_URL is set the
-    # explicit proxy is honored while trust_env stays off (no ambient env leaks).
-    # A shared client keeps TLS connections pooled; transport-level retries ride
-    # out TLS handshake flaps on constrained networks. When FARO_PROXY_URL is set
-    # the explicit proxy is honored while trust_env stays off (no env leaks).
-    if active_settings.faro_proxy_url:
-        transport = httpx.HTTPTransport(
-            proxy=active_settings.faro_proxy_url,
-            retries=2,
-            local_address="0.0.0.0",
-        )
-    else:
-        # Pin IPv4: Docker Desktop hands out an unreachable AAAA for host-gateway
-        # aliases and httpx does not fall back across address families.
-        transport = httpx.HTTPTransport(retries=2, local_address="0.0.0.0")
-    provider_http_client = httpx.Client(
-        transport=transport,
-        timeout=active_settings.faro_timeout_seconds,
-        trust_env=False,
+    # API and worker share the same hardened network path. A stale optional host
+    # relay falls back to direct IPv4 egress only before an HTTP response exists.
+    provider_http_client = create_faro_http_client(
+        proxy_url=active_settings.faro_proxy_url,
+        timeout_seconds=active_settings.faro_timeout_seconds,
     )
     app.state.tutor_adapter = tutor_adapter or FaroOpenAICompatibleAdapter(
         api_key=active_settings.faro_api_key.get_secret_value(),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections import Counter
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -36,6 +37,15 @@ def _conflict(detail: str) -> HTTPException:
 
 def _not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资源不存在")
+
+
+def _normalize_title(title: str) -> str:
+    return " ".join(title.casefold().split())
+
+
+def _qualified_title(title: str, qualifier: str) -> str:
+    suffix = f"（{qualifier}）"
+    return f"{title[: 500 - len(suffix)]}{suffix}"
 
 
 def create_candidate_generation(
@@ -196,6 +206,24 @@ def confirm_candidate_batch(
     formal_by_key: dict[str, MarkdownNote] = {}
     revision_by_key: dict[str, MarkdownRevision] = {}
     candidate_by_key = {note.candidate_key: note for note in accepted_notes}
+    normalized_title_counts = Counter(note.normalized_title for note in accepted_notes)
+    published_title_by_key: dict[str, str] = {}
+    published_normalized_title_by_key: dict[str, str] = {}
+    for candidate in accepted_notes:
+        if normalized_title_counts[candidate.normalized_title] == 1:
+            published_title = candidate.title
+        else:
+            parent = (
+                candidate_by_key.get(candidate.parent_key)
+                if candidate.parent_key is not None
+                else None
+            )
+            qualifier = parent.title if parent is not None else str(candidate.ordinal + 1)
+            published_title = _qualified_title(candidate.title, qualifier)
+        published_title_by_key[candidate.candidate_key] = published_title
+        published_normalized_title_by_key[candidate.candidate_key] = _normalize_title(
+            published_title
+        )
     children_by_parent: dict[str, list[KnowledgeCandidateNote]] = {}
     for note in accepted_notes:
         if note.parent_key is not None:
@@ -211,10 +239,11 @@ def confirm_candidate_batch(
             semantic_links_by_source.setdefault(link.source_key, []).append(link)
 
     for candidate in accepted_notes:
+        published_normalized_title = published_normalized_title_by_key[candidate.candidate_key]
         existing = session.scalar(
             select(MarkdownNote).where(
                 MarkdownNote.knowledge_base_id == knowledge_base.id,
-                MarkdownNote.normalized_title == candidate.normalized_title,
+                MarkdownNote.normalized_title == published_normalized_title,
             )
         )
         if existing is not None:
@@ -223,8 +252,8 @@ def confirm_candidate_batch(
             space_id=knowledge_base.space_id,
             knowledge_base_id=knowledge_base.id,
             source_document_id=batch.document_id,
-            title=candidate.title,
-            normalized_title=candidate.normalized_title,
+            title=published_title_by_key[candidate.candidate_key],
+            normalized_title=published_normalized_title,
             state=MarkdownNoteState.PUBLISHED,
             created_by_user_id=user.id,
         )
@@ -235,14 +264,15 @@ def confirm_candidate_batch(
     for candidate in accepted_notes:
         hierarchy_lines: list[str] = []
         if candidate.parent_key is not None:
-            parent = candidate_by_key[candidate.parent_key]
-            hierarchy_lines.append(f"- 所属结构 → [[{parent.title}]]")
+            hierarchy_lines.append(
+                f"- 所属结构 → [[{published_title_by_key[candidate.parent_key]}]]"
+            )
         hierarchy_lines.extend(
-            f"- contains → [[{child.title}]]"
+            f"- contains → [[{published_title_by_key[child.candidate_key]}]]"
             for child in children_by_parent.get(candidate.candidate_key, [])
         )
         semantic_lines = [
-            f"- {link.relation} → {candidate_by_key[link.target_key].title}"
+            f"- {link.relation} → {published_title_by_key[link.target_key]}"
             for link in semantic_links_by_source.get(candidate.candidate_key, [])
         ]
         markdown = candidate.markdown.rstrip()
@@ -279,7 +309,6 @@ def confirm_candidate_batch(
             (child.parent_key, child.candidate_key),
         ):
             ordinal = link_ordinal_by_source.get(source_key, 0)
-            target = candidate_by_key[target_key]
             session.add(
                 MarkdownLink(
                     space_id=knowledge_base.space_id,
@@ -288,7 +317,7 @@ def confirm_candidate_batch(
                     source_revision_id=revision_by_key[source_key].id,
                     ordinal=ordinal,
                     target_note_id=formal_by_key[target_key].id,
-                    target_title=target.title,
+                    target_title=published_title_by_key[target_key],
                 )
             )
             link_ordinal_by_source[source_key] = ordinal + 1

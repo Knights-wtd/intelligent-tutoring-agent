@@ -157,6 +157,46 @@ describe("knowledgeApi", () => {
       expect.objectContaining({ credentials: "include" }),
     );
   });
+  it("loads the database-authoritative workspace and a note lazily", async () => {
+    const workspace = {
+      knowledge_base_id: "kb/1",
+      documents: [],
+      candidate_batch: null,
+      notes: [],
+    };
+    const note = {
+      id: "note/1",
+      title: "Faro 配置",
+      kind: "note",
+      markdown: "# Faro 配置",
+      source_markers: [],
+      source_document_id: null,
+      source_name: null,
+      parent: null,
+      children: [],
+      updated_at: "2026-08-28T00:00:00Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(workspace), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(note), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(knowledgeApi.workspace("kb/1")).resolves.toEqual(workspace);
+    await expect(knowledgeApi.note("kb/1", "note/1")).resolves.toEqual(note);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/knowledge-bases/kb%2F1/workspace",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/knowledge-bases/kb%2F1/notes/note%2F1",
+      expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
   it("starts, loads, and confirms a review-only candidate batch", async () => {
     const batch = {
       id: "batch-1",

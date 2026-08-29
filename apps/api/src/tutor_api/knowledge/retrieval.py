@@ -54,6 +54,14 @@ DEFAULT_PREVIEW_BYTES = 64 * 1024
 MAX_PREVIEW_START = 100 * 1024 * 1024
 RRF_RANK_CONSTANT = 60
 _CITATION_ID = re.compile(r"^cite_([A-Za-z0-9_-]{38})$")
+_NON_PAGINATED_CONTENT_TYPES = frozenset(
+    {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/zip",
+        "text/markdown",
+        "text/plain",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,11 +287,19 @@ def _active_index(session: Session, knowledge_base: KnowledgeBase) -> IndexVersi
     )
 
 
+def _citation_page_number(content_type: str, page_number: int | None) -> int | None:
+    if content_type.casefold().split(";", 1)[0].strip() in _NON_PAGINATED_CONTENT_TYPES:
+        return None
+    return page_number
+
+
 def _active_candidate_rows(
     session: Session, knowledge_base: KnowledgeBase, active_index: IndexVersion
 ) -> Iterable[_Candidate]:
     statement = (
-        select(Chunk, Document.source_key, Page.page_number)
+        select(
+            Chunk, Document.source_key, DocumentVersion.content_type, Page.page_number
+        )
         .join(DocumentVersion, DocumentVersion.id == Chunk.document_version_id)
         .join(Document, Document.id == DocumentVersion.document_id)
         .outerjoin(Page, Page.id == Chunk.page_id)
@@ -299,8 +315,12 @@ def _active_candidate_rows(
     )
     rows = session.execute(statement).yield_per(MAX_RETRIEVAL_CANDIDATES)
     try:
-        for chunk, source_name, page_number in rows:
-            yield _Candidate(chunk=chunk, source_name=source_name, page_number=page_number)
+        for chunk, source_name, content_type, page_number in rows:
+            yield _Candidate(
+                chunk=chunk,
+                source_name=source_name,
+                page_number=_citation_page_number(content_type, page_number),
+            )
     finally:
         rows.close()
 

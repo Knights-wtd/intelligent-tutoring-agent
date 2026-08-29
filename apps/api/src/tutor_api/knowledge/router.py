@@ -42,10 +42,15 @@ from tutor_api.knowledge.schemas import (
     KnowledgeGraphEdgeResponse,
     KnowledgeGraphNodeResponse,
     KnowledgeGraphResponse,
+    KnowledgeNoteDetailResponse,
+    KnowledgeNoteReferenceResponse,
+    KnowledgeNoteSummaryResponse,
     KnowledgeSearchRequest,
     KnowledgeSearchResponse,
     KnowledgeSearchResultResponse,
     KnowledgeUploadResponse,
+    KnowledgeWorkspaceDocumentResponse,
+    KnowledgeWorkspaceResponse,
 )
 from tutor_api.knowledge.service import (
     PreparedUpload,
@@ -58,6 +63,7 @@ from tutor_api.knowledge.service import (
     upload_prepared_knowledge_document,
 )
 from tutor_api.knowledge.storage import ObjectStorage
+from tutor_api.knowledge.workspace import load_knowledge_workspace, load_published_note
 
 router = APIRouter(tags=["knowledge bases"])
 
@@ -230,6 +236,7 @@ def get_knowledge_graph(
         nodes=[
             KnowledgeGraphNodeResponse(
                 id=node.id,
+                note_id=node.note_id,
                 title=node.title,
                 kind=node.kind,
                 source_pointers=list(node.source_pointers),
@@ -248,6 +255,7 @@ def get_knowledge_graph(
             for edge in graph.edges
         ],
     )
+
 
 @router.post(
     "/api/v1/knowledge-bases/{knowledge_base_id}/search",
@@ -476,6 +484,83 @@ def _candidate_batch_response(
         created_at=batch.created_at,
         updated_at=batch.updated_at,
     )
+
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/workspace",
+    response_model=KnowledgeWorkspaceResponse,
+)
+def get_knowledge_workspace_snapshot(
+    knowledge_base_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeWorkspaceResponse:
+    with session_scope(_session_factory(request)) as session:
+        snapshot = load_knowledge_workspace(session, current_user, knowledge_base_id)
+        return KnowledgeWorkspaceResponse(
+            knowledge_base_id=snapshot.knowledge_base_id,
+            documents=[
+                KnowledgeWorkspaceDocumentResponse(
+                    document_id=item.document_id,
+                    document_version_id=item.document_version_id,
+                    source_name=item.source_name,
+                    content_type=item.content_type,
+                    processing_state=item.processing_state,
+                    created_at=item.created_at,
+                    updated_at=item.updated_at,
+                )
+                for item in snapshot.documents
+            ],
+            candidate_batch=(
+                _candidate_batch_response(session, snapshot.candidate_batch)
+                if snapshot.candidate_batch is not None
+                else None
+            ),
+            notes=[
+                KnowledgeNoteSummaryResponse(
+                    id=item.id,
+                    title=item.title,
+                    kind=item.kind,
+                    parent_id=item.parent_id,
+                    source_document_id=item.source_document_id,
+                    updated_at=item.updated_at,
+                )
+                for item in snapshot.notes
+            ],
+        )
+
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/notes/{note_id}",
+    response_model=KnowledgeNoteDetailResponse,
+)
+def get_published_knowledge_note(
+    knowledge_base_id: UUID,
+    note_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> KnowledgeNoteDetailResponse:
+    with session_scope(_session_factory(request)) as session:
+        note = load_published_note(session, current_user, knowledge_base_id, note_id)
+        return KnowledgeNoteDetailResponse(
+            id=note.id,
+            title=note.title,
+            kind=note.kind,
+            markdown=note.markdown,
+            source_markers=list(note.source_markers),
+            source_document_id=note.source_document_id,
+            source_name=note.source_name,
+            parent=(
+                KnowledgeNoteReferenceResponse(id=note.parent.id, title=note.parent.title)
+                if note.parent is not None
+                else None
+            ),
+            children=[
+                KnowledgeNoteReferenceResponse(id=child.id, title=child.title)
+                for child in note.children
+            ],
+            updated_at=note.updated_at,
+        )
 
 
 @router.post(

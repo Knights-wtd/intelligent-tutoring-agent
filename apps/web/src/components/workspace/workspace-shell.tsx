@@ -56,6 +56,12 @@ type CitationOpenRequest = {
   requestId: number;
 };
 
+type NoteOpenRequest = {
+  knowledgeBaseId: string;
+  noteId: string;
+  requestId: number;
+};
+
 export function WorkspaceShell({
   spaces = exampleSpaces,
   onClassroomAdded,
@@ -74,7 +80,9 @@ export function WorkspaceShell({
   const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
   const [isTutorDrawerOpen, setIsTutorDrawerOpen] = useState(false);
   const [citationOpenRequest, setCitationOpenRequest] = useState<CitationOpenRequest | null>(null);
+  const [noteOpenRequest, setNoteOpenRequest] = useState<NoteOpenRequest | null>(null);
   const citationRequestSequenceRef = useRef(0);
+  const noteRequestSequenceRef = useRef(0);
   const libraryDrawerTriggerRef = useRef<HTMLButtonElement>(null);
   const libraryDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const tutorDrawerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -248,6 +256,17 @@ export function WorkspaceShell({
       knowledgeBaseName: knowledgeBase.name,
     });
   };
+  const openGraphNote = (knowledgeBase: KnowledgeBase, noteId: string) => {
+    setNoteOpenRequest({
+      knowledgeBaseId: knowledgeBase.id,
+      noteId,
+      requestId: ++noteRequestSequenceRef.current,
+    });
+    if (selectedKnowledgeBaseId !== knowledgeBase.id) {
+      selectKnowledgeBase(knowledgeBase.id);
+    }
+    dispatchTabs({ type: "focus", tabId: "knowledge" });
+  };
   const openTutorCitation = (citation: TutorCitation) => {
     if (!tutorKnowledgeBase) return;
     setCitationOpenRequest({
@@ -264,6 +283,11 @@ export function WorkspaceShell({
 
   const handleCitationRequestHandled = (requestId: number) => {
     setCitationOpenRequest((current) =>
+      current?.requestId === requestId ? null : current,
+    );
+  };
+  const handleNoteRequestHandled = (requestId: number) => {
+    setNoteOpenRequest((current) =>
       current?.requestId === requestId ? null : current,
     );
   };
@@ -323,21 +347,37 @@ export function WorkspaceShell({
         tabs={tabsState.tabs}
       />
       <div className={styles.centralContent} id="workspace-active-panel" role="tabpanel">
-        {renderActivePanel({
-          activeTab,
-          graphKnowledgeBase: knowledgeBaseForGraphTab,
-          selectedKnowledgeBase,
-          selectedSpace,
-          citationRequest:
+        <ActivePanel
+          activeTab={activeTab}
+          citationRequest={
             citationOpenRequest !== null &&
             citationOpenRequest.knowledgeBaseId === selectedKnowledgeBase?.id
               ? citationOpenRequest
-              : undefined,
-          onCitationRequestHandled: handleCitationRequestHandled,
-          onOpenKnowledge: () => dispatchTabs({ type: "focus", tabId: "knowledge" }),
-          onOpenPractice: (questionVersionId) =>
-            dispatchTabs({ type: "open-practice", questionVersionId }),
-        })}
+              : undefined
+          }
+          graphKnowledgeBase={knowledgeBaseForGraphTab}
+          noteRequest={
+            noteOpenRequest !== null &&
+            noteOpenRequest.knowledgeBaseId === selectedKnowledgeBase?.id
+              ? noteOpenRequest
+              : undefined
+          }
+          onCitationRequestHandled={handleCitationRequestHandled}
+          onNoteRequestHandled={handleNoteRequestHandled}
+          onOpenGraph={openGraph}
+          onOpenGraphNote={openGraphNote}
+          onOpenKnowledge={(knowledgeBaseId) => {
+            if (knowledgeBaseId && knowledgeBaseId !== selectedKnowledgeBaseId) {
+              selectKnowledgeBase(knowledgeBaseId);
+            }
+            dispatchTabs({ type: "focus", tabId: "knowledge" });
+          }}
+          onOpenPractice={(questionVersionId) =>
+            dispatchTabs({ type: "open-practice", questionVersionId })
+          }
+          selectedKnowledgeBase={selectedKnowledgeBase}
+          selectedSpace={selectedSpace}
+        />
       </div>
     </section>
   );
@@ -610,13 +650,17 @@ function WorkspaceTabBar({
   );
 }
 
-function renderActivePanel({
+function ActivePanel({
   activeTab,
   graphKnowledgeBase,
   selectedKnowledgeBase,
   selectedSpace,
   citationRequest,
+  noteRequest,
   onCitationRequestHandled,
+  onNoteRequestHandled,
+  onOpenGraph,
+  onOpenGraphNote,
   onOpenKnowledge,
   onOpenPractice,
 }: {
@@ -625,8 +669,12 @@ function renderActivePanel({
   selectedKnowledgeBase: KnowledgeBase | null;
   selectedSpace: SpaceSummary;
   citationRequest?: CitationOpenRequest;
+  noteRequest?: NoteOpenRequest;
   onCitationRequestHandled: (requestId: number) => void;
-  onOpenKnowledge: () => void;
+  onNoteRequestHandled: (requestId: number) => void;
+  onOpenGraph: (knowledgeBase: KnowledgeBase) => void;
+  onOpenGraphNote: (knowledgeBase: KnowledgeBase, noteId: string) => void;
+  onOpenKnowledge: (knowledgeBaseId?: string) => void;
   onOpenPractice: (questionVersionId: string) => void;
 }) {
   switch (activeTab.kind) {
@@ -642,8 +690,11 @@ function renderActivePanel({
       return selectedKnowledgeBase ? (
         <KnowledgePanel
           citationRequest={citationRequest}
+          initialNoteId={noteRequest?.noteId}
           knowledgeBase={selectedKnowledgeBase}
           onCitationRequestHandled={onCitationRequestHandled}
+          onInitialNoteHandled={() => noteRequest && onNoteRequestHandled(noteRequest.requestId)}
+          onOpenGraph={() => onOpenGraph(selectedKnowledgeBase)}
           spaceName={selectedSpace.name}
         />
       ) : (
@@ -660,7 +711,11 @@ function renderActivePanel({
       );
     case "graph":
       return graphKnowledgeBase ? (
-        <KnowledgeGraphPanel knowledgeBase={graphKnowledgeBase} />
+        <KnowledgeGraphPanel
+          knowledgeBase={graphKnowledgeBase}
+          onOpenNote={(noteId) => onOpenGraphNote(graphKnowledgeBase, noteId)}
+          onReviewCandidates={() => onOpenKnowledge(graphKnowledgeBase.id)}
+        />
       ) : (
         <KnowledgeEmptyState description="这个知识库已不在当前空间中。" title="关联图不可用" />
       );
