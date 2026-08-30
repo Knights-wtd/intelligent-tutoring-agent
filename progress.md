@@ -706,3 +706,4 @@ AI 助教“连接不上”的根因已修复。当前实际聊天链路为 `Age
 - 真实结果：删除 HTTP 204；Vault 目录在第一次轮询时已不存在；知识库详情 HTTP 404。未删除或修改用户现有知识库。
 - 最终已知验证基线：API Agent 聚焦 32 passed、API 全量 pytest 与 Ruff lint 通过；Runtime 25 suites / 92 tests、typecheck、build 通过；Web 35 files / 267 tests、ESLint、production build 通过。
 - Compose 当前 API/Web/PostgreSQL/Redis healthy，Worker/MinIO running；数据库迁移为  018_object_deletion_outbox (head)。
+- 项目修复提交 db9e1b9 fix: complete knowledge and tutor stability 已成功推送至 github-collab/feature/platform-foundation-wip；.tmp/ 保留在本地且未提交，未暂存 .env 或密钥文件。

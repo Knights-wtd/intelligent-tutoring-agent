@@ -427,6 +427,6 @@ Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 character
 - [x] 知识库刷新、候选生成、Faro/Gemini AI 助教、会话切换/归档/停止、Capabilities 与删除功能完成回归。
 - [x] 隔离用户真实 Vault 删除 E2E：删除接口 204、Worker 首次轮询即清理目录、详情接口 404。
 - [x] Web、API、Agent Runtime 自动化测试及构建通过，Compose 服务健康，迁移位于 0018 head。
-- [x] 完成最终差异审查；Git 提交与推送进入执行。
+- [x] 完成最终差异审查，并提交推送到 github-collab/feature/platform-foundation-wip。
 
-- **Status:** in_progress
+- **Status:** complete
