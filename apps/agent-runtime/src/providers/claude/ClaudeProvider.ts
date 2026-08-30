@@ -205,7 +205,7 @@ function normalizeSdkMessage(message: Record<string, unknown>, suppressAssistant
   }
 
   if (message.type === "user") {
-    return [{ type: "user_message", payload: { message: message.message ?? null } }];
+    return [{ type: "user_message", payload: { text: userMessageText(message.message) } }];
   }
 
   if (message.type === "result") {
@@ -331,6 +331,20 @@ async function loadDefaultSdk(): Promise<ClaudeSdkAdapter> {
     throw new TypeError("Claude Agent SDK does not expose query/forkSession");
   }
   return sdk;
+}
+
+function userMessageText(value: unknown): string {
+  if (typeof value === "string") return value;
+  const content = asRecord(value).content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      const value = asRecord(block);
+      return value.type === "text" && typeof value.text === "string" ? value.text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

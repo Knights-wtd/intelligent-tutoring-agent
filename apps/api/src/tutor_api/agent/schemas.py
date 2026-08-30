@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Final, Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
 
 AGENT_PROVIDER: Final = "faro"
 AGENT_MODEL: Final = "gemini-3.7-flash-tiered"
@@ -70,9 +70,28 @@ class SessionCreateRequest(BaseModel):
     context_window: Literal[32_000] = AGENT_CONTEXT_WINDOW
 
 
+class AgentLinkedContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_base_id: UUID | None = None
+    vault_file_id: UUID | None = None
+    label: str | None = Field(default=None, max_length=500)
+    source_name: str | None = Field(default=None, max_length=500)
+    path: str | None = Field(default=None, max_length=2048)
+    heading: str | None = Field(default=None, max_length=500)
+    selection: str | None = Field(default=None, max_length=4000)
+
+    @model_validator(mode="after")
+    def require_authorizable_resource(self) -> AgentLinkedContext:
+        if self.knowledge_base_id is None and self.vault_file_id is None:
+            raise ValueError("linked context requires a knowledge base or vault file")
+        return self
+
+
 class TurnCreateRequest(BaseModel):
     prompt: str = Field(min_length=1)
     input: list[dict[str, Any]] | None = None
+    linked_contexts: list[AgentLinkedContext] = Field(default_factory=list, max_length=8)
     idempotency_key: str | None = None
 
 

@@ -236,7 +236,7 @@ describe("AgentPanel", () => {
       model: "gemini-3.7-flash-tiered",
       context_window: 32_000,
       title: "当前知识库",
-      linked_contexts: [{ knowledge_base_id: "kb-current" }],
+      linked_contexts: [{ knowledge_base_id: "kb-current", label: "知识库：当前知识库" }],
     }, expect.any(AbortSignal)));
     await user.click(screen.getByRole("button", { name: "打开助教设置" }));
     expect(screen.getByText("当前知识库")).toBeVisible();
@@ -248,6 +248,13 @@ describe("AgentPanel", () => {
     );
   });
 
+  it("labels the default whole-knowledge-base context without exposing its id", async () => {
+    renderPanel();
+
+    const composer = await screen.findByRole("region", { name: "Agent composer" });
+    expect(within(composer).getByText("知识库：当前知识库")).toBeVisible();
+    expect(within(composer).queryByText("kb-current")).not.toBeInTheDocument();
+  });
   it.each([
     ["URL", () => window.history.replaceState({}, "", "/workspace?agentSession=session-failed&agentAfter=9")],
     ["localStorage", () => localStorage.setItem("agent-session-preference-v1", JSON.stringify({
@@ -314,7 +321,7 @@ describe("AgentPanel", () => {
       model: "gemini-3.7-flash-tiered",
       context_window: 32_000,
       title: "当前知识库",
-      linked_contexts: [{ knowledge_base_id: "kb-current" }],
+      linked_contexts: [{ knowledge_base_id: "kb-current", label: "知识库：当前知识库" }],
     }, expect.any(AbortSignal)));
     expect(mocks.events).toHaveBeenCalledWith(
       "session-created",
@@ -385,7 +392,7 @@ describe("AgentPanel", () => {
     await user.click(within(composer).getByRole("button", { name: "发送" }));
     expect(mocks.send).toHaveBeenCalledWith(
       "session-running",
-      { text: "完整长任务", linked_contexts: [{ knowledge_base_id: "kb-current" }] },
+      { text: "完整长任务", linked_contexts: [{ knowledge_base_id: "kb-current", label: "知识库：当前知识库" }] },
       expect.any(String),
     );
 
@@ -479,7 +486,7 @@ describe("AgentPanel", () => {
       model: "gemini-3.7-flash-tiered",
       context_window: 32_000,
       title: "当前知识库",
-      linked_contexts: [{ knowledge_base_id: "kb-current" }],
+      linked_contexts: [{ knowledge_base_id: "kb-current", label: "知识库：当前知识库" }],
     }, expect.any(AbortSignal)));
     expect(mocks.connectAgentEvents).toHaveBeenCalledTimes(1);
     expect(mocks.connectAgentEvents).toHaveBeenLastCalledWith(

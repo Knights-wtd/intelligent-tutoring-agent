@@ -82,7 +82,6 @@ describe("FaroProvider", () => {
     expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
     expect(JSON.parse(String(init?.body))).toEqual({
       model: TEST_MODEL,
-      temperature: 0.2,
       messages: [
         expect.objectContaining({ role: "system" }),
         { role: "user", content: "你好" },
@@ -94,6 +93,8 @@ describe("FaroProvider", () => {
       "model_text_delta",
       "session_state",
     ]);
+    expect(events[1]?.payload).toMatchObject({ text: "你好" });
+    expect(events[1]?.payload).not.toHaveProperty("message");
     expect(events[0]?.payload).toMatchObject({
       native_session_id: "faro-id-1",
       provider: "faro",
@@ -104,6 +105,32 @@ describe("FaroProvider", () => {
     expect(events.every(event => event.payload.native_session_id === "faro-id-1")).toBe(true);
   });
 
+  it("keeps injected knowledge context out of the visible user message", async () => {
+    const { mock, fetch } = mockFetch(async () => successResponse("基于知识库的回答"));
+    const provider = new FaroProvider({
+      apiBaseUrl: "https://faro.example/v1",
+      apiKey: "test-api-key",
+      model: TEST_MODEL,
+      fetchImpl: fetch,
+      uuid: () => "fixed-id",
+    });
+
+    const events = await collect(provider, makeRequest({
+      input: [
+        { type: "text", text: "用户原始提问" },
+        { type: "text", text: "以下内容来自用户有权访问的知识库，仅作为参考：隐藏检索片段" },
+      ],
+    }));
+
+    expect(events.find(event => event.event_type === "user_message")?.payload).toMatchObject({
+      text: "用户原始提问",
+    });
+    const body = JSON.parse(String(mock.mock.calls[0]?.[1]?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(body.messages.at(-1)?.content).toContain("用户原始提问");
+    expect(body.messages.at(-1)?.content).toContain("隐藏检索片段");
+  });
   it("keeps multi-turn history by native id, copies it on fork, and clears it on rewind", async () => {
     const bodies: Array<{ messages: Array<{ role: string; content: string }> }> = [];
     const answers = ["第一答", "第二答", "分支答", "重置答"];
@@ -275,14 +302,131 @@ describe("FaroProvider", () => {
   });
 
   it("rejects an empty assistant response", async () => {
-    const { fetch } = mockFetch(async () => successResponse("   "));
+    const { mock, fetch } = mockFetch(async () => Response.json({
+      choices: [{ finish_reason: "stop", message: { content: "   " } }],
+      usage: { prompt_tokens: 12, completion_tokens: 0, total_tokens: 12 },
+    }));
     const provider = new FaroProvider({
       apiBaseUrl: "https://faro.example/v1",
       apiKey: "test-api-key",
       model: TEST_MODEL,
       fetchImpl: fetch,
     });
-    await expect(collect(provider)).rejects.toMatchObject({ code: "faro_response_empty" });
+    await expect(collect(provider)).rejects.toMatchObject({
+      code: "faro_response_empty",
+      retryable: false,
+      safeMetadata: {
+        choices_count: 1,
+        finish_reason: "stop",
+        content_type: "string",
+        content_text_length: 3,
+        reasoning_content_length: 0,
+        tool_calls_count: 0,
+        usage: { prompt_tokens: 12, completion_tokens: 0, total_tokens: 12 },
+      },
+    });
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins common content text parts as the final answer", async () => {
+    const { fetch } = mockFetch(async () => Response.json({
+      choices: [{
+        finish_reason: "stop",
+        message: {
+          content: [
+            { type: "text", text: "第一段" },
+            { type: "output_text", text: { value: "第二段" } },
+          ],
+        },
+      }],
+    }));
+    const provider = new FaroProvider({
+      apiBaseUrl: "https://faro.example/v1",
+      apiKey: "test-api-key",
+      model: TEST_MODEL,
+      fetchImpl: fetch,
+    });
+
+    const events = await collect(provider);
+
+    expect(events[2]?.payload).toMatchObject({ text: "第一段第二段" });
+  });
+
+  it("diagnoses reasoning-only responses without exposing reasoning or retrying", async () => {
+    const privateReasoning = "private-reasoning-must-not-leak";
+    const { mock, fetch } = mockFetch(async () => Response.json({
+      id: "response-id",
+      choices: [{
+        finish_reason: "stop",
+        message: { content: null, reasoning_content: privateReasoning },
+      }],
+    }));
+    const provider = new FaroProvider({
+      apiBaseUrl: "https://faro.example/v1",
+      apiKey: "test-api-key",
+      model: TEST_MODEL,
+      fetchImpl: fetch,
+    });
+
+    let failure: unknown;
+    try {
+      await collect(provider);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: "faro_response_reasoning_only",
+      retryable: false,
+      safeMetadata: {
+        top_level_keys: ["choices", "id"],
+        choices_count: 1,
+        finish_reason: "stop",
+        message_keys: ["content", "reasoning_content"],
+        content_type: "null",
+        content_text_length: 0,
+        reasoning_content_length: privateReasoning.length,
+        tool_calls_count: 0,
+      },
+    });
+    expect(JSON.stringify(failure)).not.toContain(privateReasoning);
+    expect(mock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a stable blocked-response code with safe metadata", async () => {
+    const refusal = "private-refusal-must-not-leak";
+    const { fetch } = mockFetch(async () => Response.json({
+      choices: [{
+        finish_reason: "content_filter",
+        message: { content: null, refusal },
+      }],
+      promptFeedback: { blockReason: "SAFETY" },
+    }));
+    const provider = new FaroProvider({
+      apiBaseUrl: "https://faro.example/v1",
+      apiKey: "test-api-key",
+      model: TEST_MODEL,
+      fetchImpl: fetch,
+    });
+
+    let failure: unknown;
+    try {
+      await collect(provider);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toMatchObject({
+      code: "faro_response_blocked",
+      retryable: false,
+      safeMetadata: {
+        finish_reason: "content_filter",
+        refusal_length: refusal.length,
+        prompt_feedback_keys: ["blockReason"],
+        block_reason: "SAFETY",
+      },
+    });
+    expect(JSON.stringify(failure)).not.toContain(refusal);
   });
 
   it("aborts the in-flight Faro request", async () => {

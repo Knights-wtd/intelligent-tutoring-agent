@@ -36,6 +36,8 @@ export interface AgentCreateRequest {
 export interface AgentLinkedContext {
   knowledge_base_id?: string;
   vault_file_id?: string;
+  label?: string;
+  source_name?: string;
   path?: string;
   heading?: string;
   selection?: string;

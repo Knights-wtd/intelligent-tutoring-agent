@@ -99,6 +99,37 @@ class DelayedProvider implements AgentProvider {
   async health() { return { status: "ok" as const }; }
 }
 
+class DiagnosedFailureProvider implements AgentProvider {
+  readonly id = "claude";
+
+  async *start(startRequest: ProviderStartRequest): AsyncIterable<RuntimeEventEnvelope> {
+    yield {
+      event_id: "diagnosed-started",
+      session_id: startRequest.session_id,
+      turn_id: startRequest.turn_id,
+      sequence: 1,
+      event_type: "turn_started",
+      timestamp: "2026-08-30T00:00:00.000Z",
+      payload: { native_session_id: "native-diagnosed" },
+      idempotency_key: `${startRequest.turn_id}:started`,
+    };
+    throw Object.assign(new Error("Faro returned reasoning without final answer text"), {
+      code: "faro_response_reasoning_only",
+      retryable: false,
+      safeMetadata: {
+        choices_count: 1,
+        finish_reason: "stop",
+        reasoning_content_length: 42,
+      },
+    });
+  }
+
+  async stop() {}
+  async rewind() {}
+  async fork() { return { native_session_id: "native-fork" }; }
+  async health() { return { status: "ok" as const }; }
+}
+
 describe("Runtime turn acceptance", () => {
   it("returns after the first durable event while provider work continues", async () => {
     const root = await mkdtemp(join(tmpdir(), "agent-runtime-acceptance-"));
@@ -131,6 +162,37 @@ describe("Runtime turn acceptance", () => {
         });
       }
       expect(published[0]?.event_type).toBe("turn_started");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("preserves stable provider diagnostics in the generic execution failure event", async () => {
+    const root = await mkdtemp(join(tmpdir(), "agent-runtime-provider-failure-"));
+    try {
+      const providers = new ProviderRegistry();
+      providers.register(new DiagnosedFailureProvider());
+      const published: RuntimeEventEnvelope[] = [];
+      const service = new RuntimeService({
+        providers,
+        sessions: await SessionRegistry.open(join(root, "sessions.json")),
+        eventSinkFactory: () => ({ publish: async event => { published.push(event); } }),
+        uuid: () => "diagnosed-execution",
+      });
+
+      await service.startTurn(request("diagnosed-turn"));
+      await service.waitForIdle("app-session");
+
+      expect(published.find(event => event.event_type === "error")?.payload).toEqual({
+        code: "provider_execution_failed",
+        message: "Faro returned reasoning without final answer text",
+        provider_code: "faro_response_reasoning_only",
+        retryable: false,
+        metadata: {
+          choices_count: 1,
+          finish_reason: "stop",
+          reasoning_content_length: 42,
+        },
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }

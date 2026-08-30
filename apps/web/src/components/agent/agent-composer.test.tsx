@@ -116,6 +116,34 @@ describe("AgentComposer", () => {
     });
   });
 
+  it("prefers user-visible context labels and never exposes raw context ids", () => {
+    const knowledgeBaseId = "86d77e8b-74d0-4fea-ba1f-82f24a9c35e0";
+
+    render(
+      <AgentComposer
+        linkedContexts={[
+          { knowledge_base_id: knowledgeBaseId, label: "知识库：当前知识库" },
+          {
+            knowledge_base_id: "kb-1",
+            vault_file_id: "file-1",
+            source_name: "第一章.pdf",
+            heading: "定义",
+          },
+          { knowledge_base_id: "kb-only", vault_file_id: "file-only" },
+        ]}
+        onSend={vi.fn()}
+        state="waiting_input"
+      />,
+    );
+
+    expect(screen.getByText("知识库：当前知识库")).toBeInTheDocument();
+    expect(screen.getByText("第一章.pdf · 定义")).toBeInTheDocument();
+    expect(screen.getByText("上下文 3")).toBeInTheDocument();
+    expect(screen.queryByText(knowledgeBaseId)).not.toBeInTheDocument();
+    expect(screen.queryByText("file-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("file-only")).not.toBeInTheDocument();
+    expect(screen.queryByText("kb-only")).not.toBeInTheDocument();
+  });
   it("shows Stop while running and delegates stopping", async () => {
     const user = userEvent.setup();
     const onStop = vi.fn();

@@ -89,6 +89,37 @@ describe("ClaudeProvider", () => {
     expect(events[0].payload).toMatchObject({ native_session_id: "native-1", permission_mode: "bypassPermissions" });
   });
 
+  it("normalizes SDK user messages to payload.text", async () => {
+    const query = queryFrom([
+      { type: "system", subtype: "init", session_id: "native-1" },
+      {
+        type: "user",
+        session_id: "native-1",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "第一段" },
+            { type: "image", source: { type: "base64", data: "not-emitted" } },
+            { type: "text", text: "第二段" },
+          ],
+        },
+      },
+    ]);
+    const sdk: ClaudeSdkAdapter = {
+      query: () => query,
+      forkSession: async () => ({ sessionId: "fork-native" }),
+    };
+    const provider = new ClaudeProvider({ sdkLoader: async () => sdk });
+
+    const events: RuntimeEventEnvelope[] = [];
+    for await (const event of provider.start(makeRequest(), new AbortController().signal)) {
+      events.push(event);
+    }
+
+    const userMessage = events.find(event => event.event_type === "user_message");
+    expect(userMessage?.payload).toEqual({ text: "第一段\n第二段" });
+  });
+
   it("stops, rewinds, forks, and reports health through the SDK boundary", async () => {
     const query = queryFrom([{ type: "system", subtype: "init", session_id: "native-1" }]);
     const forkSession = jest.fn(async () => ({ sessionId: "fork-native" }));

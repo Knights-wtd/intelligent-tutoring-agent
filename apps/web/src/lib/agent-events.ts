@@ -217,7 +217,9 @@ function appendMessageDelta(
   role: AgentMessageBlock["role"],
   streaming: boolean,
 ): AgentMessageBlock[] {
-  const text = asString(event.payload.text) ?? "";
+  const text = asString(event.payload.text)
+    ?? (role === "user" ? asString(event.payload.message) : undefined)
+    ?? "";
   const sidecar = sidecarFrom(event.payload);
   const last = messages.at(-1);
   if (role === "assistant" && last?.role === role && last.turnId === event.turn_id) {

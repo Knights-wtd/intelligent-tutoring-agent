@@ -182,8 +182,11 @@ export function AgentPanel({
   onOpenCitation,
 }: AgentPanelProps) {
   const defaultLinkedContexts = useMemo<AgentLinkedContext[]>(
-    () => linkedContexts ?? [{ knowledge_base_id: knowledgeBase.id }],
-    [knowledgeBase.id, linkedContexts],
+    () => linkedContexts ?? [{
+      knowledge_base_id: knowledgeBase.id,
+      label: `知识库：${knowledgeBase.name}`,
+    }],
+    [knowledgeBase.id, knowledgeBase.name, linkedContexts],
   );
   const vaultCitationAccess = useMemo(() => ({
     joinedSpaceIds: joinedSpaceIds ?? [space.id],

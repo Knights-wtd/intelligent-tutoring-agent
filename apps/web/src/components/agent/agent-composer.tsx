@@ -27,8 +27,7 @@ export interface AgentComposerProps {
 }
 
 function contextLabel(context: AgentLinkedContext, index: number): string {
-  const location = context.path ?? context.vault_file_id ?? context.knowledge_base_id;
-  const base = location ?? `上下文 ${index + 1}`;
+  const base = context.label ?? context.source_name ?? context.path ?? `上下文 ${index + 1}`;
   return context.heading ? `${base} · ${context.heading}` : base;
 }
 

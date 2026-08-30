@@ -118,6 +118,21 @@ describe("agent event reducer", () => {
     );
   });
 
+  it("projects historical user_message payload.message strings", () => {
+    const state = apply([
+      event({
+        event_id: "legacy-user-message",
+        sequence: 1,
+        event_type: "user_message",
+        payload: { message: "历史用户正文" },
+        idempotency_key: "legacy-user-message",
+      }),
+    ]);
+
+    expect(state.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "历史用户正文" }),
+    ]);
+  });
   it("does not mark completed message blocks as streaming when a later turn resumes", () => {
     const state = apply([
       event({ event_id: "1", sequence: 1, turn_id: "turn-1", event_type: "model_text_delta", payload: { text: "done" }, idempotency_key: "1" }),

@@ -127,7 +127,6 @@ export class RuntimeService {
           rejectAccepted(error);
         } else if (!abortController.signal.aborted) {
           try {
-            const detail = error instanceof Error ? error.message : "Unknown provider failure";
             await publishSource({
               event_id: this.uuid(),
               session_id: request.session_id,
@@ -135,7 +134,7 @@ export class RuntimeService {
               sequence: 0,
               event_type: "error",
               timestamp: new Date().toISOString(),
-              payload: { code: "provider_execution_failed", message: detail },
+              payload: providerFailurePayload(error),
               idempotency_key: `${request.idempotency_key}:provider-error`,
             });
             await publishSource({
@@ -234,4 +233,48 @@ export class RuntimeService {
 function readNativeSessionId(event: RuntimeEventEnvelope): string | undefined {
   const value = event.payload.native_session_id;
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function providerFailurePayload(error: unknown): Record<string, unknown> {
+  const detail = error instanceof Error ? error.message : "Unknown provider failure";
+  const value = error && typeof error === "object" ? error as Record<string, unknown> : undefined;
+  const providerCode = stableProviderCode(value?.code);
+  const retryable = typeof value?.retryable === "boolean" ? value.retryable : undefined;
+  const metadata = sanitizeSafeMetadata(value?.safeMetadata);
+  return {
+    code: "provider_execution_failed",
+    message: detail,
+    ...(providerCode ? { provider_code: providerCode } : {}),
+    ...(typeof retryable === "boolean" ? { retryable } : {}),
+    ...(metadata ? { metadata } : {}),
+  };
+}
+
+function stableProviderCode(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(value) ? value : undefined;
+}
+
+function sanitizeSafeMetadata(value: unknown, depth = 0): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth > 3) return undefined;
+  const result: Record<string, unknown> = {};
+  for (const [key, candidate] of Object.entries(value).slice(0, 64)) {
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(key)) continue;
+    const sanitized = sanitizeSafeMetadataValue(candidate, depth + 1);
+    if (sanitized !== undefined) result[key] = sanitized;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function sanitizeSafeMetadataValue(value: unknown, depth: number): unknown {
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "string") {
+    return /^[A-Za-z0-9_.:<\>-]{0,128}$/.test(value) ? value : undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 64)
+      .map(candidate => sanitizeSafeMetadataValue(candidate, depth + 1))
+      .filter(candidate => candidate !== undefined);
+  }
+  return sanitizeSafeMetadata(value, depth);
 }

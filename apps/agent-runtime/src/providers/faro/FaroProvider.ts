@@ -92,7 +92,10 @@ export class FaroProvider implements AgentProvider {
     if (!this.apiBaseUrl) throw providerError("faro_not_configured", "Faro API base URL is not configured");
 
     const input = textFromInput(request.input);
-    if (!input) throw providerError("faro_input_empty", "Faro request contains no text input");
+    const visibleUserMessage = firstTextFromInput(request.input);
+    if (!input || !visibleUserMessage) {
+      throw providerError("faro_input_empty", "Faro request contains no text input");
+    }
 
     const nativeSessionId = request.native_session_id
       ?? this.sessionAliases.get(request.session_id)
@@ -118,7 +121,7 @@ export class FaroProvider implements AgentProvider {
 
     try {
       yield emit("turn_started", { provider: this.id, model: request.model || this.model });
-      yield emit("user_message", { message: input });
+      yield emit("user_message", { text: visibleUserMessage });
 
       const messages = [
         ...(this.history.get(nativeSessionId) ?? [
@@ -178,7 +181,7 @@ export class FaroProvider implements AgentProvider {
         "Authorization": `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ model, temperature: 0.2, messages }),
+      body: JSON.stringify({ model, messages }),
       signal: timeout.signal,
     };
 
@@ -209,9 +212,15 @@ export class FaroProvider implements AgentProvider {
       } catch (error) {
         throw providerError("faro_response_invalid", "Faro returned invalid JSON", error);
       }
-      const text = responseText(data);
-      if (!text.trim()) throw providerError("faro_response_empty", "Faro returned an empty response");
-      return text;
+      const parsed = parseResponse(data);
+      if (!parsed.text.trim()) {
+        const failure = classifyEmptyResponse(parsed.metadata);
+        throw providerError(failure.code, failure.message, undefined, {
+          retryable: false,
+          safeMetadata: parsed.metadata,
+        });
+      }
+      return parsed.text;
     } finally {
       clearTimeout(timeoutId);
       signal.removeEventListener("abort", onAbort);
@@ -417,6 +426,15 @@ function urlPort(url: URL, fallback: number): number {
   return url.port ? Number(url.port) : fallback;
 }
 
+function firstTextFromInput(input: readonly { type: string; text?: string }[]): string {
+  const block = input.find(candidate => (
+    candidate.type === "text"
+    && typeof candidate.text === "string"
+    && candidate.text.trim().length > 0
+  ));
+  return block?.text?.trim() ?? "";
+}
+
 function textFromInput(input: readonly { type: string; text?: string }[]): string {
   return input
     .filter((block) => block.type === "text" && typeof block.text === "string")
@@ -425,31 +443,170 @@ function textFromInput(input: readonly { type: string; text?: string }[]): strin
     .join("\n");
 }
 
-function responseText(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
-  const choices = (value as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== "object") return "";
-  const message = (choices[0] as { message?: unknown }).message;
-  if (!message || typeof message !== "object") return "";
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .filter((part): part is { text: string } => Boolean(
-        part
-        && typeof part === "object"
-        && typeof (part as { text?: unknown }).text === "string",
-      ))
-      .map((part) => part.text)
-      .join("");
-  }
-  return "";
+type FaroResponseMetadata = {
+  top_level_keys: string[];
+  choices_count: number;
+  choice_keys: string[];
+  finish_reason: string | null;
+  message_keys: string[];
+  content_type: string;
+  content_text_length: number;
+  content_part_types: string[];
+  reasoning_content_type: string;
+  reasoning_content_length: number;
+  tool_calls_count: number;
+  refusal_type: string;
+  refusal_length: number;
+  prompt_feedback_keys: string[];
+  block_reason: string | null;
+  usage?: Record<string, number>;
+};
+
+type FaroResponseParse = {
+  text: string;
+  metadata: FaroResponseMetadata;
+};
+
+type FaroProviderErrorDetails = {
+  retryable?: boolean;
+  safeMetadata?: FaroResponseMetadata;
+};
+
+function parseResponse(value: unknown): FaroResponseParse {
+  const root = recordValue(value);
+  const choices = Array.isArray(root?.choices) ? root.choices : [];
+  const choice = recordValue(choices[0]);
+  const message = recordValue(choice?.message);
+  const content = message?.content;
+  const reasoning = message?.reasoning_content;
+  const refusal = message?.refusal;
+  const promptFeedback = recordValue(root?.promptFeedback) ?? recordValue(root?.prompt_feedback);
+  const blockReason = safeLabel(
+    promptFeedback?.blockReason ?? promptFeedback?.block_reason ?? root?.blockReason ?? root?.block_reason,
+  );
+  const text = contentText(content);
+  const usage = numericUsage(root?.usage);
+  const metadata: FaroResponseMetadata = {
+    top_level_keys: safeKeys(root),
+    choices_count: choices.length,
+    choice_keys: safeKeys(choice),
+    finish_reason: safeLabel(choice?.finish_reason),
+    message_keys: safeKeys(message),
+    content_type: valueType(content),
+    content_text_length: text.length,
+    content_part_types: contentPartTypes(content),
+    reasoning_content_type: valueType(reasoning),
+    reasoning_content_length: contentText(reasoning).length,
+    tool_calls_count: Array.isArray(message?.tool_calls) ? message.tool_calls.length : 0,
+    refusal_type: valueType(refusal),
+    refusal_length: contentText(refusal).length,
+    prompt_feedback_keys: safeKeys(promptFeedback),
+    block_reason: blockReason,
+    ...(usage ? { usage } : {}),
+  };
+  return { text, metadata };
 }
 
-function providerError(code: string, message: string, cause?: unknown): Error & { code: string } {
-  const error = new Error(message) as Error & { code: string };
+function contentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(textPart).join("");
+  return textPart(value);
+}
+
+function textPart(value: unknown): string {
+  if (typeof value === "string") return value;
+  const part = recordValue(value);
+  if (!part) return "";
+  if (typeof part.text === "string") return part.text;
+  const nestedText = recordValue(part.text);
+  return typeof nestedText?.value === "string" ? nestedText.value : "";
+}
+
+function contentPartTypes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 32).map((part) => {
+    const record = recordValue(part);
+    return safeLabel(record?.type) ?? valueType(part);
+  });
+}
+
+function numericUsage(value: unknown): Record<string, number> | undefined {
+  const usage = recordValue(value);
+  if (!usage) return undefined;
+  const result: Record<string, number> = {};
+  for (const key of ["prompt_tokens", "completion_tokens", "total_tokens", "cached_tokens"]) {
+    const candidate = usage[key];
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
+      result[key] = candidate;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function classifyEmptyResponse(metadata: FaroResponseMetadata): { code: string; message: string } {
+  if (metadata.finish_reason === "content_filter" || metadata.block_reason || metadata.refusal_length > 0) {
+    return { code: "faro_response_blocked", message: "Faro response was blocked" };
+  }
+  if (metadata.tool_calls_count > 0) {
+    return {
+      code: "faro_response_tool_call_only",
+      message: "Faro returned tool calls without final answer text",
+    };
+  }
+  if (metadata.reasoning_content_length > 0) {
+    return {
+      code: "faro_response_reasoning_only",
+      message: "Faro returned reasoning without final answer text",
+    };
+  }
+  if (metadata.choices_count === 0) {
+    return { code: "faro_response_no_choices", message: "Faro returned no response choices" };
+  }
+  if (metadata.message_keys.length === 0) {
+    return { code: "faro_response_missing_message", message: "Faro response choice had no message" };
+  }
+  return { code: "faro_response_empty", message: "Faro returned an empty response" };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function safeKeys(value: Record<string, unknown> | undefined): string[] {
+  if (!value) return [];
+  return Object.keys(value)
+    .map(key => safeLabel(key) ?? "<redacted-key>")
+    .sort()
+    .slice(0, 64);
+}
+
+function safeLabel(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(value) ? value : null;
+}
+
+function valueType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function providerError(
+  code: string,
+  message: string,
+  cause?: unknown,
+  details: FaroProviderErrorDetails = {},
+): Error & { code: string; retryable?: boolean; safeMetadata?: FaroResponseMetadata } {
+  const error = new Error(message) as Error & {
+    code: string;
+    retryable?: boolean;
+    safeMetadata?: FaroResponseMetadata;
+  };
   error.name = "FaroProviderError";
   error.code = code;
+  if (typeof details.retryable === "boolean") error.retryable = details.retryable;
+  if (details.safeMetadata) error.safeMetadata = details.safeMetadata;
   if (cause) error.cause = cause;
   return error;
 }

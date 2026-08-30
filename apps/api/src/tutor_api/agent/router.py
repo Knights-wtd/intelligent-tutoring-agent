@@ -150,7 +150,14 @@ async def post_turn(
     callback = request.app.state.settings.agent_runtime_callback_url
     with session_scope(_session_factory(request)) as db:
         turn, runtime_payload = prepare_turn(
-            db, current_user, session_id, payload, request.app.state.settings, callback
+            db,
+            current_user,
+            session_id,
+            payload,
+            request.app.state.settings,
+            callback,
+            embedding_adapter=request.app.state.embedding_adapter,
+            citation_secret=request.app.state.settings.effective_citation_hmac_secret,
         )
         turn_id = turn.id
     try:
