@@ -145,6 +145,9 @@ class Settings(BaseSettings):
     # http://host.docker.internal:7890 on container deployments where direct
     # TLS to the provider is unreliable. Empty means direct connection.
     faro_proxy_url: str = Field(default="", repr=False)
+    # Ingestion worker lease window. Long LLM candidate-generation runs (large
+    # PDFs) exceed the 5-minute default and die with worker_lease_exhausted.
+    worker_lease_minutes: int = 5
     session_cookie_name: str = "session"
     session_ttl_seconds: int = 604800
     login_max_attempts: int = 5
@@ -467,6 +470,13 @@ class Settings(BaseSettings):
         raw = value.get_secret_value()
         if raw != raw.strip() or len(raw) < 32:
             raise ValueError("CITATION_HMAC_SECRET must be a trimmed 32+ character value")
+        return value
+
+    @field_validator("worker_lease_minutes")
+    @classmethod
+    def validate_worker_lease_minutes(cls, value: int) -> int:
+        if not 1 <= value <= 240:
+            raise ValueError("WORKER_LEASE_MINUTES must be between 1 and 240")
         return value
 
     @field_validator("alipay_gateway_url")

@@ -172,6 +172,7 @@ def main() -> None:
             # Minute-level spacing lets provider and object-storage jobs ride out
             # transient reachability windows without a busy retry loop.
             retry_delay=timedelta(minutes=1),
+            lease_duration=timedelta(minutes=settings.worker_lease_minutes),
         )
         run_worker_forever(
             session_factory,
