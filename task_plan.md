@@ -430,3 +430,9 @@ Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 character
 - [x] 完成最终差异审查，并提交推送到 github-collab/feature/platform-foundation-wip。
 
 - **Status:** complete
+## 2026-08-30 · 发布前质量门禁豁免与分支核对
+
+- 按用户要求，本次发布不以 Quality workflow 全绿为前提；失败项仅作为后续质量改进记录，不阻断当前功能发布。已知 API 失败为覆盖率 89.74% 未达到 90% 门槛；本轮没有因该门禁修改产品代码。
+- 远程 `github-collab/feature/platform-foundation-wip` 与本地稳定提交一致，均为 `f2a0acf37b0aee07f53ec91cd7408b967f03e1fa`。
+- 仇勇旺（qyw211）远程 `feature/aiopc-upgrades` 的提交 `c53f459` 未被当前稳定分支包含，本次明确不合并；远程 `feature/add-AIOPC` 的 `117fe2b` 仅为既有 `progress.md` 验证记录，已在稳定分支历史中，不含其后续导师/支付/题库大改动。
+- 远程 `main` 当前为 `3347c6f`，是稳定分支 HEAD 的祖先；发布目标可采用非强制 fast-forward 到 `f2a0acf`。
