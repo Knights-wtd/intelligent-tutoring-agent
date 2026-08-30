@@ -1,20 +1,32 @@
 import { apiUrl } from "@/lib/api-base";
-export type TutorStatus = {
-  configured: boolean;
-  model: string;
-};
 
-export type TutorCitation = {
+export type TutorKnowledgeCitation = {
   id: string;
+  kind?: "knowledge";
   source_name: string;
   page_number: number | null;
+  knowledge_base_id?: string | null;
+  knowledge_base_name?: string | null;
+  space_id?: string | null;
+  url?: null;
 };
+
+export type TutorWebCitation = {
+  id: string;
+  kind: "web";
+  source_name: string;
+  page_number: null;
+  knowledge_base_id: null;
+  knowledge_base_name: null;
+  space_id: null;
+  url: string;
+};
+
+export type TutorCitation = TutorKnowledgeCitation | TutorWebCitation;
 
 export type TutorMessage = {
   id: string;
   role: "user" | "assistant";
-  /** answer 为正式作答;clarify 为导师的 grill 式追问轮。 */
-  kind: "answer" | "clarify";
   content: string;
   citations: TutorCitation[];
   created_at: string;
@@ -31,13 +43,11 @@ export type TutorConversation = {
 
 export class TutorApiError extends Error {
   readonly status: number;
-  readonly code: string | null;
 
-  constructor(status: number, code: string | null = null) {
-    super("Tutor request failed");
+  constructor(status: number) {
+    super("Legacy Tutor history request failed");
     this.name = "TutorApiError";
     this.status = status;
-    this.code = code;
   }
 }
 
@@ -50,47 +60,16 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
     ...init,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      Accept: "application/json",
       ...init.headers,
     },
   });
-  if (!response.ok) {
-    let code: string | null = null;
-    try {
-      const body: unknown = await response.json();
-      if (
-        body !== null &&
-        typeof body === "object" &&
-        "detail" in body &&
-        typeof (body as { detail: unknown }).detail === "string"
-      ) {
-        code = (body as { detail: string }).detail;
-      }
-    } catch {
-      // Non-JSON error bodies keep the null code; the status alone still
-      // selects the generic message.
-    }
-    throw new TutorApiError(response.status, code);
-  }
+  if (!response.ok) throw new TutorApiError(response.status);
   return response.json() as Promise<T>;
 }
 
+/** Read-only compatibility client for legacy Tutor conversation history. */
 export const tutorApi = {
-  status(signal?: AbortSignal): Promise<TutorStatus> {
-    return requestJson("/api/v1/tutor/status", { signal });
-  },
-
-  createConversation(
-    knowledgeBaseId: string,
-    prompt: string,
-    signal?: AbortSignal,
-  ): Promise<TutorConversation> {
-    return requestJson(
-      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/tutor/conversations`,
-      { method: "POST", body: JSON.stringify({ prompt }), signal },
-    );
-  },
-
   getConversation(
     knowledgeBaseId: string,
     conversationId: string,
@@ -99,18 +78,6 @@ export const tutorApi = {
     return requestJson(
       `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/tutor/conversations/${resource(conversationId)}`,
       { signal },
-    );
-  },
-
-  sendMessage(
-    knowledgeBaseId: string,
-    conversationId: string,
-    prompt: string,
-    signal?: AbortSignal,
-  ): Promise<TutorConversation> {
-    return requestJson(
-      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/tutor/conversations/${resource(conversationId)}/messages`,
-      { method: "POST", body: JSON.stringify({ prompt }), signal },
     );
   },
 };

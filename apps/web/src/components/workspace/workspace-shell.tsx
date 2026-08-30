@@ -12,17 +12,17 @@ import { createPortal } from "react-dom";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { type SpaceSummary } from "@/lib/api";
+import { apiUrl } from "@/lib/api-base";
 import { classroomApi } from "@/lib/classrooms-api";
 import type { KnowledgeBase } from "@/lib/knowledge-api";
-import type { TutorCitation } from "@/lib/tutor-api";
 
 import { AccountPanel } from "./account-panel";
+import { AgentPanel, type AgentPanelCitationTarget } from "./agent-panel";
 import { KnowledgeGraphPanel } from "./knowledge-graph-panel";
 import { KnowledgeLibrarySidebar } from "./knowledge-library-sidebar";
 import { KnowledgePanel } from "./knowledge-panel";
 import { QuestionBankPanel } from "./question-bank-panel";
 import { StudyDashboard } from "./study-dashboard";
-import { TutorPanel } from "./tutor-panel";
 import { useKnowledgeLibrary } from "./use-knowledge-library";
 import { useWorkspaceBreakpoint } from "./use-workspace-breakpoint";
 import {
@@ -51,16 +51,28 @@ type WorkspaceShellProps = {
   onClassroomAdded?: (space: SpaceSummary) => void;
 };
 
-type CitationOpenRequest = {
-  knowledgeBaseId: string;
-  citation: TutorCitation;
-  requestId: number;
-};
-
 type NoteOpenRequest = {
   knowledgeBaseId: string;
   noteId: string;
   requestId: number;
+};
+
+type AgentCitationOpenRequest = AgentPanelCitationTarget & {
+  requestId: number;
+};
+
+type VaultFilePreview = {
+  requestId: number;
+  knowledgeBaseId: string;
+  relativePath: string;
+  markdown: string | null;
+  heading?: string;
+};
+
+type VaultFileResponse = {
+  vault_file_id: string;
+  relative_path: string;
+  markdown: string | null;
 };
 
 export function WorkspaceShell({
@@ -80,15 +92,19 @@ export function WorkspaceShell({
   const [classroomError, setClassroomError] = useState<string | null>(null);
   const [createdInviteCode, setCreatedInviteCode] = useState<string | null>(null);
   const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
-  const [isTutorDrawerOpen, setIsTutorDrawerOpen] = useState(false);
-  const [citationOpenRequest, setCitationOpenRequest] = useState<CitationOpenRequest | null>(null);
+  const [isAgentDrawerOpen, setIsAgentDrawerOpen] = useState(false);
+  const [agentCitationOpenRequest, setAgentCitationOpenRequest] =
+    useState<AgentCitationOpenRequest | null>(null);
+  const [vaultFilePreview, setVaultFilePreview] = useState<VaultFilePreview | null>(null);
+  const [citationNavigationError, setCitationNavigationError] = useState(false);
   const [noteOpenRequest, setNoteOpenRequest] = useState<NoteOpenRequest | null>(null);
-  const citationRequestSequenceRef = useRef(0);
+  const agentCitationRequestSequenceRef = useRef(0);
   const noteRequestSequenceRef = useRef(0);
+  const vaultFileControllerRef = useRef<AbortController | null>(null);
   const libraryDrawerTriggerRef = useRef<HTMLButtonElement>(null);
   const libraryDrawerCloseRef = useRef<HTMLButtonElement>(null);
-  const tutorDrawerTriggerRef = useRef<HTMLButtonElement>(null);
-  const tutorDrawerCloseRef = useRef<HTMLButtonElement>(null);
+  const agentDrawerTriggerRef = useRef<HTMLButtonElement>(null);
+  const agentDrawerCloseRef = useRef<HTMLButtonElement>(null);
   const breakpoint = useWorkspaceBreakpoint();
 
   const selectedSpace =
@@ -101,6 +117,8 @@ export function WorkspaceShell({
     error: knowledgeError,
     select: selectKnowledgeBase,
     create: createKnowledgeBase,
+    remove: removeKnowledgeBase,
+    deletingKnowledgeBaseId,
     refresh: refreshKnowledgeBases,
   } = useKnowledgeLibrary(selectedSpace.id);
   const tabsState = tabsBySpace[selectedSpace.id] ?? initialWorkspaceTabs;
@@ -170,17 +188,22 @@ export function WorkspaceShell({
       selectedKnowledgeBaseId,
       activeTabId: tabsState.activeTabId,
     });
-  }, [restoredSpaceIds, selectedKnowledgeBaseId, selectedSpace.id, tabsState.activeTabId]);
+  }, [
+    restoredSpaceIds,
+    selectedKnowledgeBaseId,
+    selectedSpace.id,
+    tabsState.activeTabId,
+  ]);
 
   const knowledgeBaseForGraphTab = useMemo(() => {
     if (activeTab.kind !== "graph") return null;
     return knowledgeBases.find((item) => item.id === activeTab.knowledgeBaseId) ?? null;
   }, [activeTab, knowledgeBases]);
-  const tutorKnowledgeBase = knowledgeBaseForGraphTab ?? selectedKnowledgeBase;
-  const tutorContext = getTutorContext(activeTab, tutorKnowledgeBase);
+  const agentKnowledgeBase = knowledgeBaseForGraphTab ?? selectedKnowledgeBase;
+  const agentContext = getAgentContext(activeTab, agentKnowledgeBase);
   const showsInlineLibrary = breakpoint === "desktop" || breakpoint === "tablet";
   const showsLibraryDrawer = breakpoint === "compact" || breakpoint === "mobile";
-  const showsTutorDrawer = breakpoint !== "desktop";
+  const showsAgentDrawer = breakpoint !== "desktop";
   const portalTarget = typeof document === "undefined" ? null : document.body;
 
   useEffect(() => {
@@ -197,17 +220,19 @@ export function WorkspaceShell({
   }, [isLibraryDrawerOpen]);
 
   useEffect(() => {
-    if (!isTutorDrawerOpen) return;
-    tutorDrawerCloseRef.current?.focus();
+    if (!isAgentDrawerOpen) return;
+    agentDrawerCloseRef.current?.focus();
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setIsTutorDrawerOpen(false);
-      tutorDrawerTriggerRef.current?.focus();
+      setIsAgentDrawerOpen(false);
+      agentDrawerTriggerRef.current?.focus();
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [isTutorDrawerOpen]);
+  }, [isAgentDrawerOpen]);
+
+  useEffect(() => () => vaultFileControllerRef.current?.abort(), []);
 
   const addClassroomSpace = (space: SpaceSummary, closeDialog: boolean) => {
     setAvailableSpaces((current) =>
@@ -258,6 +283,42 @@ export function WorkspaceShell({
       knowledgeBaseName: knowledgeBase.name,
     });
   };
+  const deleteKnowledgeBase = async (knowledgeBase: KnowledgeBase) => {
+    const removal = await removeKnowledgeBase(knowledgeBase.id);
+    if (!removal.removed) return;
+
+    const spaceId = selectedSpace.id;
+    const closeDeletedGraphTab = (currentTabs: WorkspaceTabsState) =>
+      reduceWorkspaceTabs(currentTabs, {
+        type: "close",
+        tabId: `graph:${knowledgeBase.id}`,
+      });
+    const cleanedCurrentTabs = closeDeletedGraphTab(
+      tabsBySpace[spaceId] ?? initialWorkspaceTabs,
+    );
+    setTabsBySpace((current) => ({
+      ...current,
+      [spaceId]: closeDeletedGraphTab(current[spaceId] ?? initialWorkspaceTabs),
+    }));
+    setNoteOpenRequest((current) =>
+      current?.knowledgeBaseId === knowledgeBase.id ? null : current,
+    );
+    setAgentCitationOpenRequest((current) => {
+      if (current?.knowledgeBaseId !== knowledgeBase.id) return current;
+      vaultFileControllerRef.current?.abort();
+      return null;
+    });
+    setVaultFilePreview((current) => {
+      if (current?.knowledgeBaseId !== knowledgeBase.id) return current;
+      vaultFileControllerRef.current?.abort();
+      return null;
+    });
+    setCitationNavigationError(false);
+    writeWorkspacePreference(spaceId, {
+      selectedKnowledgeBaseId: removal.selectedKnowledgeBaseId,
+      activeTabId: cleanedCurrentTabs.activeTabId,
+    });
+  };
   const openGraphNote = (knowledgeBase: KnowledgeBase, noteId: string) => {
     setNoteOpenRequest({
       knowledgeBaseId: knowledgeBase.id,
@@ -269,25 +330,114 @@ export function WorkspaceShell({
     }
     dispatchTabs({ type: "focus", tabId: "knowledge" });
   };
-  const openTutorCitation = (citation: TutorCitation) => {
-    if (!tutorKnowledgeBase) return;
-    setCitationOpenRequest({
-      knowledgeBaseId: tutorKnowledgeBase.id,
-      citation,
-      requestId: ++citationRequestSequenceRef.current,
-    });
-    if (selectedKnowledgeBaseId !== tutorKnowledgeBase.id) {
-      selectKnowledgeBase(tutorKnowledgeBase.id);
+  const focusKnowledgeInSpace = (spaceId: string) => {
+    setTabsBySpace((current) => ({
+      ...current,
+      [spaceId]: reduceWorkspaceTabs(current[spaceId] ?? initialWorkspaceTabs, {
+        type: "focus",
+        tabId: "knowledge",
+      }),
+    }));
+  };
+  const openAgentCitation = (citation: AgentPanelCitationTarget) => {
+    vaultFileControllerRef.current?.abort();
+    setVaultFilePreview(null);
+    setCitationNavigationError(false);
+    const targetSpace = availableSpaces.find((space) => space.id === citation.spaceId);
+    if (!targetSpace) {
+      setAgentCitationOpenRequest(null);
+      setCitationNavigationError(true);
+      if (breakpoint !== "desktop") setIsAgentDrawerOpen(false);
+      return;
     }
-    dispatchTabs({ type: "focus", tabId: "knowledge" });
-    if (breakpoint !== "desktop") setIsTutorDrawerOpen(false);
+
+    setAgentCitationOpenRequest({
+      ...citation,
+      requestId: ++agentCitationRequestSequenceRef.current,
+    });
+    focusKnowledgeInSpace(citation.spaceId);
+    if (selectedSpace.id !== citation.spaceId) setSelectedSpaceId(citation.spaceId);
+    if (breakpoint !== "desktop") setIsAgentDrawerOpen(false);
   };
 
-  const handleCitationRequestHandled = (requestId: number) => {
-    setCitationOpenRequest((current) =>
-      current?.requestId === requestId ? null : current,
+  useEffect(() => {
+    const request = agentCitationOpenRequest;
+    if (request === null || selectedSpace.id !== request.spaceId || isKnowledgeLoading) return;
+
+    if (knowledgeError !== null) {
+      void Promise.resolve().then(() => {
+        setAgentCitationOpenRequest(null);
+        setCitationNavigationError(true);
+      });
+      return;
+    }
+    const targetKnowledgeBase = knowledgeBases.find(
+      (item) => item.id === request.knowledgeBaseId,
     );
-  };
+    if (!targetKnowledgeBase) {
+      void Promise.resolve().then(() => {
+        setAgentCitationOpenRequest(null);
+        setCitationNavigationError(true);
+      });
+      return;
+    }
+    if (selectedKnowledgeBaseId !== targetKnowledgeBase.id) {
+      selectKnowledgeBase(targetKnowledgeBase.id);
+      return;
+    }
+
+    const controller = new AbortController();
+    vaultFileControllerRef.current?.abort();
+    vaultFileControllerRef.current = controller;
+    const knowledgeBaseId = encodeURIComponent(request.knowledgeBaseId);
+    const vaultFileId = encodeURIComponent(request.vaultFileId);
+    void fetch(apiUrl(`/api/v1/knowledge-bases/${knowledgeBaseId}/vault/files/${vaultFileId}`), {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("vault_file_unavailable");
+        return await response.json() as VaultFileResponse;
+      })
+      .then((file) => {
+        if (controller.signal.aborted) return;
+        if (
+          file.vault_file_id !== request.vaultFileId ||
+          typeof file.relative_path !== "string" ||
+          !(typeof file.markdown === "string" || file.markdown === null)
+        ) {
+          throw new Error("vault_file_invalid_response");
+        }
+        setVaultFilePreview({
+          requestId: request.requestId,
+          knowledgeBaseId: request.knowledgeBaseId,
+          relativePath: file.relative_path,
+          markdown: file.markdown,
+          heading: request.heading,
+        });
+        setAgentCitationOpenRequest(null);
+        setCitationNavigationError(false);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setAgentCitationOpenRequest(null);
+        setVaultFilePreview(null);
+        setCitationNavigationError(true);
+      })
+      .finally(() => {
+        if (vaultFileControllerRef.current === controller) vaultFileControllerRef.current = null;
+      });
+  }, [
+    agentCitationOpenRequest,
+    isKnowledgeLoading,
+    knowledgeBases,
+    knowledgeError,
+    selectKnowledgeBase,
+    selectedKnowledgeBaseId,
+    selectedSpace.id,
+  ]);
+
   const handleNoteRequestHandled = (requestId: number) => {
     setNoteOpenRequest((current) =>
       current?.requestId === requestId ? null : current,
@@ -297,18 +447,20 @@ export function WorkspaceShell({
     setIsLibraryDrawerOpen(false);
     libraryDrawerTriggerRef.current?.focus();
   };
-  const closeTutorDrawer = () => {
-    setIsTutorDrawerOpen(false);
-    tutorDrawerTriggerRef.current?.focus();
+  const closeAgentDrawer = () => {
+    setIsAgentDrawerOpen(false);
+    agentDrawerTriggerRef.current?.focus();
   };
   const librarySidebar = (
     <KnowledgeLibrarySidebar
+      deletingKnowledgeBaseId={deletingKnowledgeBaseId}
       error={knowledgeError}
       isLoading={isKnowledgeLoading}
       knowledgeBases={knowledgeBases}
       onCreate={async (name) => {
         await createKnowledgeBase(name);
       }}
+      onDelete={deleteKnowledgeBase}
       onOpenClassroom={openClassroomDialog}
       onOpenAccount={() => setIsAccountDialogOpen(true)}
       onOpenDueReview={() => dispatchTabs({ type: "focus", tabId: "today" })}
@@ -335,11 +487,11 @@ export function WorkspaceShell({
             </button>
           ) : null}
           <button
-            onClick={() => setIsTutorDrawerOpen(true)}
-            ref={tutorDrawerTriggerRef}
+            onClick={() => setIsAgentDrawerOpen(true)}
+            ref={agentDrawerTriggerRef}
             type="button"
           >
-            打开 AI 家教
+            打开 Workspace Agent
           </button>
         </div>
       ) : null}
@@ -350,14 +502,35 @@ export function WorkspaceShell({
         tabs={tabsState.tabs}
       />
       <div className={styles.centralContent} id="workspace-active-panel" role="tabpanel">
+        {citationNavigationError ? (
+          <div className={styles.citationNavigationNotice} role="alert">
+            <span>资源不可用</span>
+            <button onClick={() => setCitationNavigationError(false)} type="button">
+              关闭
+            </button>
+          </div>
+        ) : null}
+        {vaultFilePreview ? (
+          <section aria-label="Vault 文件" className={styles.vaultFileViewer} role="region">
+            <header>
+              <div>
+                <span className={styles.eyebrow}>Vault 文件</span>
+                <h2>{vaultFilePreview.relativePath}</h2>
+                {vaultFilePreview.heading ? <p>定位：{vaultFilePreview.heading}</p> : null}
+              </div>
+              <button onClick={() => setVaultFilePreview(null)} type="button">
+                关闭文件
+              </button>
+            </header>
+            {vaultFilePreview.markdown === null ? (
+              <p>此文件无法作为文本预览。</p>
+            ) : (
+              <pre>{vaultFilePreview.markdown}</pre>
+            )}
+          </section>
+        ) : null}
         <ActivePanel
           activeTab={activeTab}
-          citationRequest={
-            citationOpenRequest !== null &&
-            citationOpenRequest.knowledgeBaseId === selectedKnowledgeBase?.id
-              ? citationOpenRequest
-              : undefined
-          }
           graphKnowledgeBase={knowledgeBaseForGraphTab}
           noteRequest={
             noteOpenRequest !== null &&
@@ -365,7 +538,6 @@ export function WorkspaceShell({
               ? noteOpenRequest
               : undefined
           }
-          onCitationRequestHandled={handleCitationRequestHandled}
           onNoteRequestHandled={handleNoteRequestHandled}
           onOpenGraph={openGraph}
           onOpenGraphNote={openGraphNote}
@@ -384,25 +556,33 @@ export function WorkspaceShell({
       </div>
     </section>
   );
-  const tutorWorkspace = (
-    <aside aria-label="AI 家教" className={styles.tutorWorkspace}>
-      {tutorKnowledgeBase ? (
-        <TutorPanel
-          contextLabel={tutorContext}
-          knowledgeBase={tutorKnowledgeBase}
-          onOpenCitation={openTutorCitation}
-        />
-      ) : (
-        <KnowledgeEmptyState
-          description="选择或创建知识库后，AI 家教会跟随当前学习上下文。"
-          title="AI 家教"
-        />
-      )}
-    </aside>
+  const agentWorkspace = (
+    <div className={styles.agentWorkspace}>
+      <div className={styles.agentWorkspaceBody}>
+        {agentKnowledgeBase ? (
+          <AgentPanel
+            contextLabel={agentContext}
+            joinedSpaceIds={availableSpaces.map((space) => space.id)}
+            knowledgeBase={agentKnowledgeBase}
+            onOpenCitation={openAgentCitation}
+            readableVaultScopes={knowledgeBases.map((knowledgeBase) => ({
+              spaceId: selectedSpace.id,
+              knowledgeBaseId: knowledgeBase.id,
+            }))}
+            space={selectedSpace}
+          />
+        ) : (
+          <KnowledgeEmptyState
+            description="选择或创建知识库后，Workspace Agent 会跟随当前学习上下文。"
+            title="Workspace Agent"
+          />
+        )}
+      </div>
+    </div>
   );
   const layoutName =
     breakpoint === "desktop"
-      ? "library-center-tutor"
+      ? "library-center-agent"
       : breakpoint === "tablet"
         ? "library-center"
         : "center-drawers";
@@ -416,19 +596,27 @@ export function WorkspaceShell({
         {breakpoint === "desktop" ? (
           <Group
             className={styles.panelGroup}
-            defaultLayout={{ library: 20, center: 55, tutor: 25 }}
+            defaultLayout={{ library: 18, center: 26, agent: 56 }}
             orientation="horizontal"
           >
             <Panel className={styles.libraryPanelSlot} id="library" maxSize="32%" minSize="16%">
               {librarySidebar}
             </Panel>
             <Separator aria-label="调整知识库和学习内容宽度" className={styles.separator} />
-            <Panel className={styles.centerPanelSlot} id="center" minSize="36%">
+            <Panel className={styles.centerPanelSlot} id="center" minSize="22%">
               {centralWorkspace}
             </Panel>
-            <Separator aria-label="调整学习内容和 AI 家教宽度" className={styles.separator} />
-            <Panel className={styles.tutorPanelSlot} id="tutor" maxSize="36%" minSize="20%">
-              {tutorWorkspace}
+            <Separator
+              aria-label="调整学习内容和 Workspace Agent 宽度"
+              className={styles.separator}
+            />
+            <Panel
+              className={styles.agentPanelSlot}
+              id="agent"
+              maxSize="62%"
+              minSize="40%"
+            >
+              {agentWorkspace}
             </Panel>
           </Group>
         ) : showsInlineLibrary ? (
@@ -483,33 +671,33 @@ export function WorkspaceShell({
           )
         : null}
 
-      {showsTutorDrawer && portalTarget
+      {showsAgentDrawer && portalTarget
         ? createPortal(
-            <div className={styles.drawerLayer} hidden={!isTutorDrawerOpen}>
+            <div className={styles.drawerLayer} hidden={!isAgentDrawerOpen}>
               <button
-                aria-label="关闭 AI 家教抽屉背景"
+                aria-label="关闭 Workspace Agent 抽屉背景"
                 className={styles.drawerBackdrop}
-                onClick={closeTutorDrawer}
+                onClick={closeAgentDrawer}
                 type="button"
               />
               <section
-                aria-label="AI 家教抽屉"
+                aria-label="Workspace Agent 抽屉"
                 aria-modal="true"
-                className={`${styles.drawer} ${styles.drawerRight}`}
+                className={`${styles.drawer} ${styles.drawerRight} ${styles.agentDrawer}`}
                 role="dialog"
               >
                 <header className={styles.drawerHeader}>
-                  <strong>AI 家教</strong>
+                  <strong>Workspace Agent</strong>
                   <button
-                    aria-label="关闭 AI 家教抽屉"
-                    onClick={closeTutorDrawer}
-                    ref={tutorDrawerCloseRef}
+                    aria-label="关闭 Workspace Agent 抽屉"
+                    onClick={closeAgentDrawer}
+                    ref={agentDrawerCloseRef}
                     type="button"
                   >
                     关闭
                   </button>
                 </header>
-                <div className={styles.drawerBody}>{tutorWorkspace}</div>
+                <div className={styles.drawerBody}>{agentWorkspace}</div>
               </section>
             </div>,
             portalTarget,
@@ -660,9 +848,7 @@ function ActivePanel({
   graphKnowledgeBase,
   selectedKnowledgeBase,
   selectedSpace,
-  citationRequest,
   noteRequest,
-  onCitationRequestHandled,
   onNoteRequestHandled,
   onOpenGraph,
   onOpenGraphNote,
@@ -673,9 +859,7 @@ function ActivePanel({
   graphKnowledgeBase: KnowledgeBase | null;
   selectedKnowledgeBase: KnowledgeBase | null;
   selectedSpace: SpaceSummary;
-  citationRequest?: CitationOpenRequest;
   noteRequest?: NoteOpenRequest;
-  onCitationRequestHandled: (requestId: number) => void;
   onNoteRequestHandled: (requestId: number) => void;
   onOpenGraph: (knowledgeBase: KnowledgeBase) => void;
   onOpenGraphNote: (knowledgeBase: KnowledgeBase, noteId: string) => void;
@@ -694,10 +878,8 @@ function ActivePanel({
     case "knowledge":
       return selectedKnowledgeBase ? (
         <KnowledgePanel
-          citationRequest={citationRequest}
           initialNoteId={noteRequest?.noteId}
           knowledgeBase={selectedKnowledgeBase}
-          onCitationRequestHandled={onCitationRequestHandled}
           onInitialNoteHandled={() => noteRequest && onNoteRequestHandled(noteRequest.requestId)}
           onOpenGraph={() => onOpenGraph(selectedKnowledgeBase)}
           spaceName={selectedSpace.name}
@@ -737,7 +919,7 @@ function KnowledgeEmptyState({ title, description }: { title: string; descriptio
   );
 }
 
-function getTutorContext(activeTab: WorkspaceTab, knowledgeBase: KnowledgeBase | null): string {
+function getAgentContext(activeTab: WorkspaceTab, knowledgeBase: KnowledgeBase | null): string {
   if (activeTab.kind === "graph") return `关联图：${activeTab.label}`;
   if (activeTab.kind === "practice") return "题库练习";
   if (activeTab.kind === "knowledge") return knowledgeBase ? `知识库：${knowledgeBase.name}` : "知识库";

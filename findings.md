@@ -516,3 +516,46 @@ Per the user-approved three-strike rule, stop here before a fourth repair and re
 The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
 
 Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.
+## 2026-08-29 · AI 助教无法运行的根因与恢复边界
+
+- **根因已定位：** 当前 `WorkspaceShell` 挂载 `AgentPanel`，请求 `/api/v1/agent` 后进入 Host Claudian Runtime；Runtime 当前只注册 `ClaudeProvider`。这条链路与用户要求的 Faro → Gemini 3.7 Flash 不一致。
+- **直接故障点：** `apps/api/src/tutor_api/tutor/router.py` 把 Tutor 创建会话和发消息接口改成 `410 Gone`，`/api/v1/tutor/status` 被移除；`main.py` 也不再创建 `FaroOpenAICompatibleAdapter` 和 `tutor_semaphore`。因此 API/Docker health 为 healthy 并不表示 AI 助教聊天写链路存在。
+- **Faro 配置仍保留：** `compose.yaml`、`.env.example`、`core/config.py`、`llm/faro.py`、`worker_main.py` 仍包含 Faro 配置；默认模型为 `gemini-3.7-flash-tiered`。Worker 的语义索引仍可能使用 Faro，但当前聊天 UI 不使用它。
+- **可复用实现：** Git HEAD 仍有完整 Faro Tutor router/service/schemas/main、前端 TutorPanel/tutor-api 与测试，可作为恢复参考。
+- **必须保留的新增能力：** 当前 Tutor service/router 新增 legacy 会话列表/读取；citation schema 已扩展 knowledge/web 类型及 `knowledge_base_id`、`knowledge_base_name`、`space_id`、`url`。不能简单 checkout HEAD 覆盖。
+- **产品/UI方向：** AI 助教默认区域只保留聊天、引用、输入框、状态摘要和“设置”按钮；设置使用统一暖白/浅紫 tokens，二级页签为“会话记录”和“服务设置”；服务页只读显示 Faro、Gemini 模型、配置/连接状态，不显示 Key，不提供 Claude 选项。
+- **测试解释：** 2026-08-29 运行的 Web 聚焦测试为 3 files / 21 tests passed，但当前测试仍接受 Agent cutover 和只读 Tutor 历史，因此不是目标功能验收。API 聚焦测试在用户中断前只产生部分通过标记，无最终结论。
+- **工作树风险：** 当前约 95 个修改/未跟踪条目，包含 Claudian Runtime、Agent API、Vault、迁移和大量测试；任何恢复操作必须限制路径并审查 diff。
+## 2026-08-30 · AI 助教 Faro/Gemini 最终结论
+
+- **最终根因：** 旧活跃链路虽然使用 Agent API，但 Runtime 只注册 `ClaudeProvider`；Faro 配置只存在于环境和其他 worker 路径，没有进入 AI 助教聊天链路。8765 端口一度还运行重启前旧构建，所以仅看容器/API 健康无法发现此问题。
+- **最终架构：** `AgentPanel → /api/v1/agent → Agent Runtime → Faro OpenAI-compatible /chat/completions → gemini-3.7-flash-tiered`。Runtime provider registry 不再包含 Claude。
+- **配置边界：** 活跃会话固定 `provider=faro`、`model=gemini-3.7-flash-tiered`、`context_window=32000`。数据库中的旧 Claude 或错误 Faro 设置不能覆盖固定配置；API 拒绝错误更新。
+- **兼容策略：** 旧 Claude/Fable 会话只读保留，避免历史丢失；对旧会话发起新 turn 返回明确的 `409 agent_session_provider_retired`，不会送入 Runtime。
+- **UI 决策：** AI 助教主区域只承担对话；会话记录与服务设置进入设置弹层二级页签。Provider、模型与上下文窗口只读，密钥只显示 configured/not-configured 状态。视觉沿用现有暖白/浅紫、细边框、圆角与轻阴影。
+- **验收证据：** Runtime diagnostics 仅报告 `faro` 且为 `ok`；真实 Faro smoke 两次成功并收到非空 `model_text_delta`；API 119 项、Web 232 项、Runtime 86 项测试全部通过，Web lint/build 与 Runtime typecheck/build 通过。
+- **运行状态：** Host Runtime PID `35704`；API/Web/PostgreSQL/Redis healthy，Worker/MinIO running；API health 为 `ok`，Web 入口 HTTP 200。
+- **安全约束：** 验证过程未打印 Faro key、Runtime token 或 Capability secret；没有 reset/clean、删除卷、覆盖其他未提交改动或恢复退休 Tutor 写接口。
+
+## 2026-08-30 · 最终稳定性收尾调查
+
+- 正常 Markdown 已真实验证上传、Worker 完成、手动刷新到“可搜索”，说明状态 API 与基础 Worker 链路不是全面失效。
+- 已确认 Web 存在双状态源缺陷：workspace 轮询只更新 `workspaceDocuments`，不会按 `document_id + document_version_id` 把权威 `processing_state` 合并到 `uploadsByKnowledgeBase`，所以“原始资料”可已就绪而“当前任务”仍停留在处理中。
+- `knowledgeApi.workspace()` 与 `documentStatus()` 的易变 GET 未显式 `cache: no-store`，存在复用旧状态的风险。
+- 数据库中发现两条真实 PDF 失败：一条 parse_document 最终为 `DataError/worker_unhandled_error`，一条为 `ParseError/invalid_format`；需安全重放定位，禁止泄露正文和异常敏感细节。
+- 用户补充最终缺陷范围：会话记录无法返回旧聊天、四个会话功能无效、Capabilities 四按钮不可操作、知识库无删除入口；这些均纳入本轮收尾。
+
+## 2026-08-30 · Runtime mutation contract blocker
+
+- 真实分叉 400 的根因是 API RuntimeClient 未发送 Runtime 对 stop/rewind/fork 强制要求的 `Idempotency-Key` 与 `X-Workspace-Capability`。
+- fork 请求还缺少预生成的 `fork_session_id`；Runtime 返回体包含该 `session_id` 与 `native_session_id`，API 数据库必须使用相同 session UUID，避免双端会话 ID 分裂。
+- resume 使用完整 RuntimeStartRequest，是另一套合同；前端目前明确禁用继续，本轮不把它伪装成可用能力。
+- 调查中一次误用 `apps/runtime/src` 路径失败；真实 Runtime 路径为 `apps/agent-runtime/src`，后续已改用正确路径。
+
+## 2026-08-30 · Vault 删除真实 E2E 与最终取舍
+
+- 用户明确表示分叉功能不是必需项，因此最终收尾不再为分叉增加新能力；已经完成并通过的修复保留，避免无收益改动。
+- 使用全新隔离账号和个人知识库执行真实删除，不接触用户主知识库；在 Worker 实际 gent_vault_root 下创建 cleanup-proof.md 后调用删除接口。
+- 验收结果：DELETE /api/v1/knowledge-bases/{id} 返回 204；Worker 第一次 500ms 轮询前已清理 <vault_root>/spaces/<space_id>/<knowledge_base_id>；随后详情 GET 返回 404。
+- 这证明数据库硬删除、durable object-deletion outbox、Worker 领取任务与本地 Vault scope 清理已在真实 Compose/PostgreSQL 环境闭环。
+- 第一次隔离注册使用了过长用户名并收到 422；改用符合长度约束的短用户名后一次通过。该失败属于验收数据不符合既有校验，不是产品缺陷。

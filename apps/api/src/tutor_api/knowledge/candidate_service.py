@@ -29,6 +29,7 @@ from tutor_api.knowledge.models import (
     MarkdownRevision,
     MarkdownRevisionState,
 )
+from tutor_api.vault.migration import mirror_legacy_published_revision
 
 
 def _conflict(detail: str) -> HTTPException:
@@ -299,6 +300,12 @@ def confirm_candidate_batch(
         session.add(revision)
         revision_by_key[candidate.candidate_key] = revision
     session.flush()
+    for candidate in accepted_notes:
+        mirror_legacy_published_revision(
+            session,
+            formal_by_key[candidate.candidate_key],
+            revision_by_key[candidate.candidate_key],
+        )
 
     link_ordinal_by_source: dict[str, int] = {}
     for child in accepted_notes:

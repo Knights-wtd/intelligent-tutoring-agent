@@ -1,0 +1,374 @@
+{
+    "schemaVersion":  1,
+    "upstreamRepository":  "https://github.com/YishenTu/claudian",
+    "upstreamVersion":  "2.2.4",
+    "upstreamCommit":  "d190786d11cc0b067475dcffbf8c334ee565d208",
+    "upstreamTreeSha256":  "abc305a71cdf700b7b7721aae0dd9d9c5bface24d6b5d40f24c993ab869933c8",
+    "vendorDate":  "2026-08-28",
+    "files":  [
+                  {
+                      "path":  "src/core/execution/index.ts",
+                      "sha256":  "73c96a5c5dc192adfd627cbd570f80d54392625052d7d4091965c64af1ffc0bd"
+                  },
+                  {
+                      "path":  "src/core/execution/ProviderExecutionBackend.ts",
+                      "sha256":  "4c5164eeffdf660998834bc56bfab40876d0627a6d5d68d85ffb103b7055ed83"
+                  },
+                  {
+                      "path":  "src/core/execution/ProviderExecutionEvent.ts",
+                      "sha256":  "4d35afba76cef7e5cae562a93388c63d783489cc40cddfd0c29d6234500de8eb"
+                  },
+                  {
+                      "path":  "src/core/execution/ProviderExecutionLifecycleRegistry.ts",
+                      "sha256":  "8978d9594a4b0701548eb9afcee144f9a69f7c4b4e236fad2be023ebf4f1240e"
+                  },
+                  {
+                      "path":  "src/core/execution/ProviderExecutionRequest.ts",
+                      "sha256":  "c74e383990f8841e7aafaaaa6ee56b0f2e8022aba9072fc34293ee0e41c19066"
+                  },
+                  {
+                      "path":  "src/core/execution/ProviderExecutionSession.ts",
+                      "sha256":  "6a53eec71266ae4aa8ca811943dd823ad8cad3d18948bbebd15a3e355b41badb"
+                  },
+                  {
+                      "path":  "src/core/execution/ProviderInteractionPort.ts",
+                      "sha256":  "88e794df2a78a655b5f8091f604892275d3d83f6faea12f645ddb229566918f4"
+                  },
+                  {
+                      "path":  "src/core/execution/ProviderSessionSnapshot.ts",
+                      "sha256":  "c25239aa7456e8bcdcc7b0f5f1f62c8444afdae6b207d76849176092c2f10adf"
+                  },
+                  {
+                      "path":  "src/core/execution/RewindableExecutionSession.ts",
+                      "sha256":  "b7f99c2c89484e3f8b04bdfb02be21a16d91202995a4ff11f8d7f1326426b82f"
+                  },
+                  {
+                      "path":  "src/core/process/ManagedStdioProcess.ts",
+                      "sha256":  "903987d073e08a8de5518723f6c8e4f616f50e53fee8f7f8f0363ac0af1324fe"
+                  },
+                  {
+                      "path":  "src/core/prompt/inlineEdit.ts",
+                      "sha256":  "88bb0437cee71fc6174a5605855cf3d81d9849fd273342cc5515619f80ef8fb7"
+                  },
+                  {
+                      "path":  "src/core/prompt/instructionRefine.ts",
+                      "sha256":  "e19280eb2eac2ba899d1deaf414adf303dfc108a50e4b1c553ceb5ee87514e8f"
+                  },
+                  {
+                      "path":  "src/core/prompt/mainAgent.ts",
+                      "sha256":  "3e98d2ed6f84a93490862be18d10c8216378a16793b09ead6c404c3ae75ded24"
+                  },
+                  {
+                      "path":  "src/core/prompt/titleGeneration.ts",
+                      "sha256":  "515e8bbf8d1c87211c1b04336fa32445ac7140dc32b4c7fbd854013005c9f23f"
+                  },
+                  {
+                      "path":  "src/core/providers/agents/StoredAgentMentionProvider.ts",
+                      "sha256":  "94805c69598cbbd3c1a9ca240571a43596a161536559c895873d2f0d91b8035a"
+                  },
+                  {
+                      "path":  "src/core/providers/cli/CachedProviderCliResolver.ts",
+                      "sha256":  "701b4a0c519558919445e9b41ad8900823a4a47c785b29f98169020cb4a2eeeb"
+                  },
+                  {
+                      "path":  "src/core/providers/cli/CliPathFingerprintInputs.ts",
+                      "sha256":  "8c101bd708388af3d481fa34c3337f3cd979cc92547a7421df2406bcdbe2d11d"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/hiddenCommands.ts",
+                      "sha256":  "093cad745d2b706ebb10a145c329fe0032a855b3a2c2f04895c972a50876ccf8"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/ProviderCommandCatalog.ts",
+                      "sha256":  "67f0c5d09b44441b814d9bdf1d75fcffaca9a1e2be5dcbf5b1533f09c6000887"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/ProviderCommandDiscoveryResult.ts",
+                      "sha256":  "d9c50a1e34d8bdf3be2fc819f0c44ba8624183bbb240347b1a629218393e1ddf"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/ProviderCommandDiscoveryStore.ts",
+                      "sha256":  "cc5a7cda6603606654d0d133e8d4e3885ffabe6f7de6c84f9babed42977ca8f1"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/ProviderCommandEntry.ts",
+                      "sha256":  "7029dab3ec76f6a7cb98ea67b9e5da202ae4eb93ea7058fe9137a4e15d1e6d35"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/ProviderVaultEntryRepository.ts",
+                      "sha256":  "f0e3cdc042feee955eaf8877970ce5fc9708c96a38a8aba6403b5b3351079cdf"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/RuntimeCommandCatalog.ts",
+                      "sha256":  "1c6c4d9d9f07586dee4cd374aad7ba9b2550a26ed0bdbeefee711da614e7c29b"
+                  },
+                  {
+                      "path":  "src/core/providers/commands/RuntimeCommandLoader.ts",
+                      "sha256":  "32ee94ee7bb3e15c57d99b8b8e794b4eea131132cd58aafe2d9784416908b9e8"
+                  },
+                  {
+                      "path":  "src/core/providers/conversationModel.ts",
+                      "sha256":  "da6cf55bb61ab0be400cd554b5b44b089b192c34a647b519b81dcd6b8b03be5e"
+                  },
+                  {
+                      "path":  "src/core/providers/metadata/OwnedProbeRegistry.ts",
+                      "sha256":  "c7189e7d2570eef1d05ffe4f496d8be4c2b8067be9becf81f1691016ee91665c"
+                  },
+                  {
+                      "path":  "src/core/providers/metadata/ProviderTransitionFence.ts",
+                      "sha256":  "874ead7ef1a717b2e89c965708a7b33e03db17698387b63b7a796ee78c7468a0"
+                  },
+                  {
+                      "path":  "src/core/providers/modelRouting.ts",
+                      "sha256":  "f17b32bfb562a4c7ea01a371002dd313983b027410ac0df6af36dd10fc677bf5"
+                  },
+                  {
+                      "path":  "src/core/providers/modelSelection.ts",
+                      "sha256":  "922bb87c5c58b0dbc16e3f575f8f75c7a8b13f69562ae585da0ed5bd93cf62aa"
+                  },
+                  {
+                      "path":  "src/core/providers/NoopTaskResultInterpreter.ts",
+                      "sha256":  "c6e287c94b5ec775cccf6d5be83afd8e665d7ce6a31a08a35f106201edbd0074"
+                  },
+                  {
+                      "path":  "src/core/providers/providerConfig.ts",
+                      "sha256":  "2edbefed7273bcffd20ac90ad9f0a035e9ddb7ebbcda5d4c5d97e53b42cd8fe8"
+                  },
+                  {
+                      "path":  "src/core/providers/providerEnvironment.ts",
+                      "sha256":  "ccb3b6b880dc7680c2224fa0cd7d9e5be1d2e98e39d980a18f181dc8e127f6b4"
+                  },
+                  {
+                      "path":  "src/core/providers/ProviderHost.ts",
+                      "sha256":  "18709b7524b4ce3ca5d0b1a5fa05328af9df51cd846947aae0e83d67a6caf3c7"
+                  },
+                  {
+                      "path":  "src/core/providers/ProviderInitializationBoundary.ts",
+                      "sha256":  "c10a2b5b06cd36ee68062eb5f0830f0070b774c994f8bcdc5aefa19c05dafbba"
+                  },
+                  {
+                      "path":  "src/core/providers/ProviderRegistry.ts",
+                      "sha256":  "674bd96d57b304e36392e185b50b32998d87a364b16ee31f6a34384ba1b67656"
+                  },
+                  {
+                      "path":  "src/core/providers/ProviderSettingsCoordinator.ts",
+                      "sha256":  "e91eb74216d355d2d053b89f7e92632d3d3af44b06f36fb6ec20d0aae28ced8e"
+                  },
+                  {
+                      "path":  "src/core/providers/providerState.ts",
+                      "sha256":  "ad3dfbd37692bc5fff733b3799295116b1eaa0115464fd395491298d5731dc67"
+                  },
+                  {
+                      "path":  "src/core/providers/ProviderWorkspaceRegistry.ts",
+                      "sha256":  "ce34c62bbe16b376aea08642d0ac5c43a69ec2e2e508db52e3a04ac265a0b4db"
+                  },
+                  {
+                      "path":  "src/core/providers/reasoning.ts",
+                      "sha256":  "e531912cc3765a72ab55eca21bb64796ef804d89da149ad1e12985c547a5f55a"
+                  },
+                  {
+                      "path":  "src/core/providers/settings/HostnameStringMap.ts",
+                      "sha256":  "eff702f2518edd95fc9d0b13d8a1349d3c1955340bb88a781c8f1280cc89f1c1"
+                  },
+                  {
+                      "path":  "src/core/providers/settings/ProviderProjectionMap.ts",
+                      "sha256":  "a29a18bf3a945f7cd6eb03c57d5b2e4804ebfe7b940e686fb60ba337243c7bfa"
+                  },
+                  {
+                      "path":  "src/core/providers/settings/RuntimeInputFingerprint.ts",
+                      "sha256":  "3e6c387c93277f3df78a142f52cd238f034883f6655e4ad7a51b6c9e55f8a193"
+                  },
+                  {
+                      "path":  "src/core/providers/settings/storedSettings.ts",
+                      "sha256":  "4c7b63c6fa750a5d7056ea7fb6c8b3ae8863181b071f8f0a1e4a007974c41f26"
+                  },
+                  {
+                      "path":  "src/core/providers/types.ts",
+                      "sha256":  "4c8d00782a58c645854854918ce37283d7c0aeb572d8d1d87aeedf671db2f5e7"
+                  },
+                  {
+                      "path":  "src/core/security/approvalRules.ts",
+                      "sha256":  "57e06f80a1c5eaf0bfaeab3da9adcf20118e3cac1bf4b08ca0b984ce6488a3b5"
+                  },
+                  {
+                      "path":  "src/core/skills/AgentSkill.ts",
+                      "sha256":  "b70827a01c92610140573cc1653561af35c0a0bd840374e0be9bd4b7ae802387"
+                  },
+                  {
+                      "path":  "src/core/skills/AgentSkillCodec.ts",
+                      "sha256":  "3f8bcae29dc518614a2037013329f3c4a93a1f80be75637d264122878380b984"
+                  },
+                  {
+                      "path":  "src/core/skills/AgentSkillRepository.ts",
+                      "sha256":  "54364cd5ab9faec15fad876d00434bd7cfa0291aad08ee2b825ece0018f98249"
+                  },
+                  {
+                      "path":  "src/core/skills/validateAgentSkill.ts",
+                      "sha256":  "81da9383d5c29033bfa211f85fe3a2bc52d4a371868faa5284486c43a03d93fc"
+                  },
+                  {
+                      "path":  "src/core/storage/VaultFileAdapter.ts",
+                      "sha256":  "b3e6058ea6f065466d9711a2530b8c540e89fbd6a75c761c28b0f39829dc8119"
+                  },
+                  {
+                      "path":  "src/core/tools/todo.ts",
+                      "sha256":  "866541cbdfbf6b969a9191dccd58f6a3bbb4bb1f1cf29540deb5b13638f56d9a"
+                  },
+                  {
+                      "path":  "src/core/tools/toolIcons.ts",
+                      "sha256":  "bd1b2b13334fb3b0bb4f63083cc1d8ba315b652c3e419395c01499ad4e28b44c"
+                  },
+                  {
+                      "path":  "src/core/tools/toolInput.ts",
+                      "sha256":  "581fee8ea9b8333481c0496dc2bcfdf27ae5e1fb09e63f81214f668acee6f0b5"
+                  },
+                  {
+                      "path":  "src/core/tools/toolNames.ts",
+                      "sha256":  "4df5b73e890f25f3cb8eb84f5d60f897f601e41908960f44ebc3a2d77935bf80"
+                  },
+                  {
+                      "path":  "src/core/tools/toolProviderPayload.ts",
+                      "sha256":  "27471c4f551cc930ebc4a6e97552444021bf19ddd2dcf64d3a78cb4014b0efeb"
+                  },
+                  {
+                      "path":  "src/core/tools/toolResultContent.ts",
+                      "sha256":  "d5101af839422396b6702045828fb16997a4be3f9e3b18a889d505e5ffa36a32"
+                  },
+                  {
+                      "path":  "src/providers/claude/execution/ClaudeExecutionBackend.ts",
+                      "sha256":  "a0ab85649c2c060310d7299abf84557faa8c898d76d85d06aacf94af973d5049"
+                  },
+                  {
+                      "path":  "src/providers/claude/execution/ClaudeExecutionEventNormalizer.ts",
+                      "sha256":  "e002c68fa4fa3f50a0b7c829c1a5a159fa14b42e78fdf9c4642d0ae3f32b3786"
+                  },
+                  {
+                      "path":  "src/providers/claude/execution/ClaudeExecutionRequestEncoder.ts",
+                      "sha256":  "03b88cb73226087f634221d99769fc4c51e24f46eb766d1afbae048d7fd08e6b"
+                  },
+                  {
+                      "path":  "src/providers/claude/execution/ClaudeExecutionSession.ts",
+                      "sha256":  "5f98bddcc79620f8468a28c23947da1e32ca66cd1f0d1247212f79bc8cf77312"
+                  },
+                  {
+                      "path":  "src/providers/claude/execution/ClaudeExecutionStrategies.ts",
+                      "sha256":  "82a874075c1a60bccecf92e13a6026322bad288ef967878def5382a0bc909b64"
+                  },
+                  {
+                      "path":  "src/providers/claude/execution/ClaudeInteractionHandler.ts",
+                      "sha256":  "f126d3039f9a1295e797c76b23e4ed27d1a43a4bfda860d7f0edcc8e4f7400be"
+                  },
+                  {
+                      "path":  "src/providers/claude/execution/index.ts",
+                      "sha256":  "8204bd35df4feb19fecd72d93049d4b2dfc07774d82fbd5d64486173f41be387"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/ClaudeConversationHistoryService.ts",
+                      "sha256":  "0c15694ea16c850bae625bce3aad7c7c5375b4e4dd7f6501ceb58d13cf4ddfef"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/ClaudeHistoryStore.ts",
+                      "sha256":  "3cbafdb1f32b3baf005eb133116b9eb82d8ff9065ea4b94bc1564fc35af45653"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/ClaudeSessionRecovery.ts",
+                      "sha256":  "48470e7dd9459eb2ad0671331d90620c03456162be415a9b568562832f9001fd"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/ClaudeSubagentHistoryService.ts",
+                      "sha256":  "fd06b1214e800bcc8b1111bbde0136710a20bce94351f8238a5650fd541a3c48"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/sdkAsyncSubagent.ts",
+                      "sha256":  "b01891dcbe4bb66d8009777eaf235ffa9f8aaaa0bcb1b85337f2145fb65c50e4"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/sdkBranchFilter.ts",
+                      "sha256":  "f5e37d02032b64c6892c7dd6a424b5c1ca63953e5e15648bd50831a1396735b4"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/sdkHistoryTypes.ts",
+                      "sha256":  "c90bd944885acd47df365837fa52a27a725052795f0f3fe0d13ab156314623ca"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/sdkMessageParsing.ts",
+                      "sha256":  "3311ebc305889d5910ef7ce902055bbe20fa1220f3478df17b8a9068e1f09bf4"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/sdkSessionPaths.ts",
+                      "sha256":  "bfd7866c58cb68c245523de2f7e22df6a57858befdaa49ff563c3cebd1de1f15"
+                  },
+                  {
+                      "path":  "src/providers/claude/history/sdkSubagentSidecar.ts",
+                      "sha256":  "201a5bb37e67910d3ba215f2ed3ec6c43e84810466cfed2aec46c9702275ee93"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/ClaudeCliResolver.ts",
+                      "sha256":  "f0d47962d8d6e53d9f484d9e7cb645185f58b9e2aace833358b4f91723109dc1"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/claudeColdStartQuery.ts",
+                      "sha256":  "d335cc345e24565459a51c05fd07cdeee20c3c60a07deebbf1c405ae623a6d8d"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/ClaudeMessageChannel.ts",
+                      "sha256":  "1b629ea60484f681b1c2a3df4ebc2916f44b3005a21c3ab611edddec420b1540"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/ClaudeRewindService.ts",
+                      "sha256":  "a4b248a4a3549d780e44dbb1fb86288d4b3000775a1c6646c250f9c41bb57946"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/ClaudeSessionManager.ts",
+                      "sha256":  "df01b31c78ebc161a1ec9e8aea6795fe8414f2d18849a0a8280a391446dfa492"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/ClaudeTaskResultInterpreter.ts",
+                      "sha256":  "fcd0baf85f53ccb704bf44119636bd9687c8a48039f8cd248ee1deb1f6c7dd0f"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/ClaudeUserMessageFactory.ts",
+                      "sha256":  "336f121fd33e1b6f86b483207576878344265316bd535e80a85effb4a13408cb"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/customSpawn.ts",
+                      "sha256":  "2677cf847c7205235adfce3b4b73a48838366e54020a250b87b47d134562c4d5"
+                  },
+                  {
+                      "path":  "src/providers/claude/runtime/types.ts",
+                      "sha256":  "e71477edb1a92ec537b5fd11d65eeea50d9ed398cd42e3a92eeb48c65d84bf37"
+                  },
+                  {
+                      "path":  "src/providers/claude/security/ClaudePermissionUpdates.ts",
+                      "sha256":  "bd8664ae21b55e423a7813d8543c1687c6c78b8c32b268a7585ee245d5dd377e"
+                  },
+                  {
+                      "path":  "src/providers/claude/storage/AgentVaultStorage.ts",
+                      "sha256":  "cacaa349013e0d0717fdd2cf4ff934c3c4d639f8ed9d81a58512e7d1b2760dea"
+                  },
+                  {
+                      "path":  "src/providers/claude/storage/CCSettingsStorage.ts",
+                      "sha256":  "e1e63a9a5db993d7149edfad70d76de8429f07c1cd0918563929cd6e73a6437e"
+                  },
+                  {
+                      "path":  "src/providers/claude/storage/ClaudianSettingsStorage.ts",
+                      "sha256":  "a53355a6cd26d2e042d0022b7106f3f18e0da908703c18391adb04c805543aba"
+                  },
+                  {
+                      "path":  "src/providers/claude/storage/LegacyMcpConfigCleanup.ts",
+                      "sha256":  "5c46eb76e0bb1bcb99a78578b0efa2f49471651ff43367c5fc97670672ea40ab"
+                  },
+                  {
+                      "path":  "src/providers/claude/storage/SkillStorage.ts",
+                      "sha256":  "71fdee97590e2c39256d75426c2372f00e1cb11e742f1623480a5dbfe3a4dd3d"
+                  },
+                  {
+                      "path":  "src/providers/claude/storage/SlashCommandStorage.ts",
+                      "sha256":  "d95da6d5cf7bf290a98727a5b0a7ebc2f8a1387be4327b128bcd2d606ce743f5"
+                  },
+                  {
+                      "path":  "src/providers/claude/storage/StorageService.ts",
+                      "sha256":  "51632f1e3dc89bd1859382650192ca4368ba7fd79825ac2292f8448cea4e6368"
+                  }
+              ]
+}

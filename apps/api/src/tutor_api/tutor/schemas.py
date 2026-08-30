@@ -1,18 +1,19 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
-
-
-class TutorStatusResponse(BaseModel):
-    configured: bool
-    model: str
+from pydantic import BaseModel, ConfigDict, HttpUrl
 
 
 class TutorCitationResponse(BaseModel):
     id: str
+    kind: Literal["knowledge", "web"] = "knowledge"
     source_name: str
     page_number: int | None
+    knowledge_base_id: UUID | None = None
+    knowledge_base_name: str | None = None
+    space_id: UUID | None = None
+    url: HttpUrl | None = None
 
 
 class TutorMessageResponse(BaseModel):
@@ -20,7 +21,6 @@ class TutorMessageResponse(BaseModel):
 
     id: UUID
     role: str
-    kind: str
     content: str
     citations: list[TutorCitationResponse]
     created_at: datetime
@@ -35,9 +35,3 @@ class TutorConversationResponse(BaseModel):
     messages: list[TutorMessageResponse]
     created_at: datetime
     updated_at: datetime
-
-
-class TutorSendRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prompt: str

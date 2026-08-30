@@ -1,1221 +1,292 @@
-from collections.abc import Sequence
+from __future__ import annotations
+
+import inspect
+from collections.abc import Generator
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import event
+from sqlalchemy.orm import sessionmaker
 
+import tutor_api.agent.models  # noqa: F401
 import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.identity.models  # noqa: F401
 import tutor_api.knowledge.models  # noqa: F401
 import tutor_api.spaces.models  # noqa: F401
+import tutor_api.vault.models  # noqa: F401
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
-from tutor_api.knowledge.indexing import (
-    _embedding_contract_signature,
-    content_sha256,
-    normalize_lexical_terms,
-)
-from tutor_api.knowledge.models import (
-    Chunk,
-    Document,
-    DocumentState,
-    DocumentVersion,
-    DocumentVersionState,
-    IndexVersion,
-    IndexVersionState,
-    KnowledgeBase,
-)
-from tutor_api.llm.ports import (
-    LlmCompletion,
-    LlmProviderError,
-    LlmUsage,
-    TutorChatMessage,
-)
-from tutor_api.llm.prompt_library import (
-    TUTOR_CLARIFY_MARKER,
-    TUTOR_FORCED_ANSWER_SYSTEM_PROMPT,
-    TUTOR_GROUNDED_SYSTEM_PROMPT,
-    TUTOR_NO_EVIDENCE_SYSTEM_PROMPT,
-)
+from tutor_api.identity.router import get_current_user
+from tutor_api.knowledge.models import KnowledgeBase
 from tutor_api.main import create_app
 from tutor_api.spaces.models import Space, SpaceKind
-from tutor_api.tutor.models import (
-    TutorConversation,
-    TutorMessage,
-    TutorMessageKind,
-    TutorMessageRole,
-)
-from tutor_api.tutor.schemas import TutorSendRequest
-from tutor_api.tutor.service import (
-    MAX_TUTOR_EVIDENCE_CHARACTERS,
-    MAX_TUTOR_HISTORY_MESSAGES,
-    MAX_TUTOR_SOURCES,
-    TutorServiceError,
-    send_tutor_message,
-)
+from tutor_api.tutor.models import TutorConversation, TutorMessage, TutorMessageRole
+from tutor_api.tutor.schemas import TutorCitationResponse
 
-
-class FixedEmbeddingAdapter:
-    def __init__(
-        self,
-        vectors: dict[str, list[float]] | None = None,
-        *,
-        backend: str = "hash",
-        model: str = "feature-hash-v1",
-        dimension: int = 8,
-        signature: str = "hash:feature-hash-v1:8",
-    ) -> None:
-        self.vectors = vectors or {}
-        self.backend = backend
-        self.model = model
-        self.dimension = dimension
-        self.signature = signature
-
-    def embed(self, text: str) -> list[float]:
-        return self.vectors.get(text, [1.0] + [0.0] * (self.dimension - 1))
-
-
-class RecordingTutorAdapter:
-    def __init__(self, response_text: str) -> None:
-        self.response_text = response_text
-        self.messages: tuple[TutorChatMessage, ...] = ()
-        self.system_prompts: list[str] = []
-
-    def complete_tutor(
-        self, messages: Sequence[TutorChatMessage], *, system_prompt: str
-    ) -> LlmCompletion:
-        self.messages = tuple(messages)
-        self.system_prompts.append(system_prompt)
-        return LlmCompletion(
-            text=self.response_text,
-            request_id="tutor-test",
-            usage=LlmUsage(10, 5, 15),
-        )
-
-
-class FailingTutorAdapter:
-    def __init__(self, code: str, detail: str = "provider body secret") -> None:
-        self.code = code
-        self.detail = detail
-
-    def complete_tutor(
-        self, messages: Sequence[TutorChatMessage], *, system_prompt: str
-    ) -> LlmCompletion:
-        del messages, system_prompt
-        error = LlmProviderError(self.code)
-        error.add_note(self.detail)
-        raise error
+_RETIRED = {
+    "code": "legacy_tutor_retired",
+    "replacement": "/api/v1/agent",
+}
 
 
 @pytest.fixture
-def session() -> Session:
+def legacy_context(
+    tmp_path: Path,
+) -> Generator[tuple[TestClient, dict[str, object]], None, None]:
     engine = create_engine_from_url("sqlite://", app_env="test")
+    event.listen(
+        engine,
+        "connect",
+        lambda connection, _: connection.execute("PRAGMA foreign_keys=ON"),
+    )
     Base.metadata.create_all(engine)
-    with sessionmaker(bind=engine)() as database_session:
-        yield database_session
+    factory = sessionmaker(bind=engine)
+    created_at = datetime(2026, 8, 28, 8, 30, tzinfo=UTC)
+
+    with factory.begin() as db:
+        owner = User(
+            email="legacy-owner@example.com",
+            username="legacy-owner",
+            password_hash="hash",
+        )
+        outsider = User(
+            email="legacy-outsider@example.com",
+            username="legacy-outsider",
+            password_hash="hash",
+        )
+        db.add_all([owner, outsider])
+        db.flush()
+        space = Space(owner_id=owner.id, kind=SpaceKind.PERSONAL, name="Legacy Tutor")
+        outsider_space = Space(
+            owner_id=outsider.id,
+            kind=SpaceKind.PERSONAL,
+            name="Legacy outsider",
+        )
+        db.add_all([space, outsider_space])
+        db.flush()
+        knowledge_base = KnowledgeBase(
+            space_id=space.id,
+            owner_user_id=owner.id,
+            created_by_user_id=owner.id,
+            name="Legacy KB",
+        )
+        other_knowledge_base = KnowledgeBase(
+            space_id=space.id,
+            owner_user_id=owner.id,
+            created_by_user_id=owner.id,
+            name="Other KB",
+        )
+        db.add_all([knowledge_base, other_knowledge_base])
+        db.flush()
+        conversation = TutorConversation(
+            user_id=owner.id,
+            space_id=space.id,
+            knowledge_base_id=knowledge_base.id,
+            title="Legacy path loss conversation",
+            created_at=created_at,
+            updated_at=created_at + timedelta(minutes=1),
+        )
+        db.add(conversation)
+        db.flush()
+        db.add_all(
+            [
+                TutorMessage(
+                    conversation_id=conversation.id,
+                    user_id=owner.id,
+                    space_id=space.id,
+                    knowledge_base_id=knowledge_base.id,
+                    role=TutorMessageRole.USER,
+                    content="What is path loss?",
+                    citations=[],
+                    created_at=created_at,
+                ),
+                TutorMessage(
+                    conversation_id=conversation.id,
+                    user_id=owner.id,
+                    space_id=space.id,
+                    knowledge_base_id=knowledge_base.id,
+                    role=TutorMessageRole.ASSISTANT,
+                    content="A legacy grounded answer.",
+                    citations=[
+                        {
+                            "id": "legacy-citation",
+                            "source_name": "wireless.pdf",
+                            "page_number": 9,
+                        }
+                    ],
+                    created_at=created_at + timedelta(seconds=1),
+                ),
+            ]
+        )
+        ids = {
+            "owner_id": owner.id,
+            "outsider_id": outsider.id,
+            "knowledge_base_id": knowledge_base.id,
+            "other_knowledge_base_id": other_knowledge_base.id,
+            "conversation_id": conversation.id,
+        }
+
+    app = create_app(
+        Settings(
+            app_env="test",
+            agent_runtime_url="http://127.0.0.1:8765",
+            agent_runtime_token="runtime-token",
+            agent_capability_secret="capability-secret-capability-secret",
+            agent_vault_root=str(tmp_path / "vault"),
+            agent_sidecar_root=str(tmp_path / "sidecars"),
+        ),
+        factory,
+    )
+
+    def current_user() -> User:
+        with factory() as db:
+            user = db.get(User, ids["owner_id"])
+            assert user is not None
+            db.expunge(user)
+            return user
+
+    app.dependency_overrides[get_current_user] = current_user
+    with TestClient(app) as client:
+        ids.update({"app": app, "factory": factory})
+        yield client, ids
     engine.dispose()
 
 
-def seed_searchable_knowledge_base(session: Session) -> tuple[User, KnowledgeBase]:
-    owner = User(
-        email="tutor-owner@example.com",
-        username="tutor-owner",
-        password_hash="not-used",
-    )
-    session.add(owner)
-    session.flush()
-    space = Space(owner_id=owner.id, kind=SpaceKind.PERSONAL, name="Tutor owner")
-    session.add(space)
-    session.flush()
-    knowledge_base = KnowledgeBase(
-        space_id=space.id,
-        owner_user_id=owner.id,
-        created_by_user_id=owner.id,
-        name="Wireless textbook",
-    )
-    session.add(knowledge_base)
-    session.flush()
-    document = Document(
-        space_id=space.id,
-        knowledge_base_id=knowledge_base.id,
-        owner_user_id=owner.id,
-        created_by_user_id=owner.id,
-        title="wireless.pdf",
-        source_kind="upload",
-        source_key="wireless.pdf",
-        state=DocumentState.ACTIVE,
-    )
-    session.add(document)
-    session.flush()
-    text = "path loss increases as wireless transmission distance increases"
-    version = DocumentVersion(
-        space_id=space.id,
-        knowledge_base_id=knowledge_base.id,
-        document_id=document.id,
-        version_number=1,
-        content_sha256=content_sha256(text),
-        object_key="objects/wireless.pdf",
-        content_type="application/pdf",
-        state=DocumentVersionState.READY,
-        created_by_user_id=owner.id,
-    )
-    session.add(version)
-    session.flush()
-    from tutor_api.knowledge.models import Page
+def test_legacy_history_list_and_get_remain_read_only(
+    legacy_context: tuple[TestClient, dict[str, object]],
+) -> None:
+    client, context = legacy_context
+    knowledge_base_id = context["knowledge_base_id"]
+    conversation_id = context["conversation_id"]
 
-    page = Page(
-        space_id=space.id,
-        document_version_id=version.id,
-        page_number=7,
-        source_pointer="wireless.pdf#page=7",
-        content_sha256=content_sha256(text),
-        source_metadata={},
+    nested_list = client.get(f"/api/v1/knowledge-bases/{knowledge_base_id}/tutor/conversations")
+    global_list = client.get("/api/v1/tutor/conversations")
+    nested_get = client.get(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/tutor/conversations/{conversation_id}"
     )
-    session.add(page)
-    session.flush()
-    embedding = FixedEmbeddingAdapter()
-    index = IndexVersion(
-        space_id=space.id,
-        knowledge_base_id=knowledge_base.id,
-        version_number=1,
-        state=IndexVersionState.ACTIVE,
-        parser_signature="parser:1",
-        ocr_signature="ocr:1",
-        chunking_signature="chunking:1",
-        embedding_backend=embedding.backend,
-        embedding_model=embedding.model,
-        embedding_dimension=embedding.dimension,
-        embedding_contract_signature=_embedding_contract_signature(embedding),
-        index_signature="index:1",
-        created_by_user_id=owner.id,
-        completed_at=datetime.now(UTC),
-        activated_at=datetime.now(UTC),
-    )
-    session.add(index)
-    session.flush()
-    session.add(
-        Chunk(
-            space_id=space.id,
-            knowledge_base_id=knowledge_base.id,
-            index_version_id=index.id,
-            document_version_id=version.id,
-            page_id=page.id,
-            block_id=None,
-            ordinal=0,
-            source_pointer="wireless.pdf#page=7#chunk=0",
-            content_sha256=content_sha256(text),
-            content=text,
-            lexical_terms=normalize_lexical_terms(text),
-            embedding_dimension=embedding.dimension,
-            index_signature=index.index_signature,
-            embedding=embedding.embed(text),
-        )
-    )
-    session.commit()
-    return owner, knowledge_base
+    global_get = client.get(f"/api/v1/tutor/conversations/{conversation_id}")
 
-
-def test_send_message_retrieves_sources_and_persists_both_roles(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    adapter = RecordingTutorAdapter("Path loss grows with distance. [1]")
-
-    result = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="  path loss  ",
-        conversation_id=None,
-        adapter=adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert [message.role for message in result.messages] == [
-        TutorMessageRole.USER,
-        TutorMessageRole.ASSISTANT,
-    ]
-    assert result.messages[0].content == "path loss"
-    assistant = result.messages[-1]
-    assert assistant.citations == [
+    assert nested_list.status_code == 200
+    assert global_list.status_code == 200
+    assert nested_list.json() == global_list.json()
+    assert [item["id"] for item in nested_list.json()] == [str(conversation_id)]
+    assert nested_get.status_code == 200
+    assert global_get.status_code == 200
+    assert nested_get.json() == global_get.json()
+    body = global_get.json()
+    assert [message["role"] for message in body["messages"]] == ["user", "assistant"]
+    assert body["messages"][1]["citations"] == [
         {
-            "id": assistant.citations[0]["id"],
+            "id": "legacy-citation",
+            "kind": "knowledge",
             "source_name": "wireless.pdf",
-            "page_number": 7,
+            "page_number": 9,
+            "knowledge_base_id": None,
+            "knowledge_base_name": None,
+            "space_id": None,
+            "url": None,
         }
     ]
-    assert str(assistant.citations[0]["id"]).startswith("cite_")
-    assert assistant.provider_request_id == "tutor-test"
-    assert (assistant.prompt_tokens, assistant.completion_tokens) == (10, 5)
-    assert adapter.messages[-1].role == "user"
-    assert "untrusted" in adapter.messages[-1].content.casefold()
-    assert "[1]" in adapter.messages[-1].content
-    assert "wireless.pdf" in adapter.messages[-1].content
-    assert session.scalar(select(func.count()).select_from(TutorMessage)) == 2
-
-
-def test_provider_call_is_bounded_by_concurrency_semaphore(session: Session) -> None:
-    import threading
-
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    entered = threading.Event()
-    release = threading.Event()
-    completion = LlmCompletion(text="ok", request_id="r", usage=LlmUsage(1, 1, 2))
-
-    class BlockingTutorAdapter:
-        def complete_tutor(
-            self, messages: Sequence[TutorChatMessage], *, system_prompt: str
-        ) -> LlmCompletion:
-            del messages, system_prompt
-            entered.set()
-            assert release.wait(timeout=10), "adapter was never released"
-            return completion
-
-    semaphore = threading.Semaphore(1)
-    failures: list[BaseException] = []
-
-    def worker() -> None:
-        try:
-            send_tutor_message(
-                session,
-                owner,
-                knowledge_base.id,
-                prompt="path loss",
-                conversation_id=None,
-                adapter=BlockingTutorAdapter(),
-                embedding_adapter=FixedEmbeddingAdapter(),
-                citation_secret="test-secret",
-                concurrency_semaphore=semaphore,
-            )
-        except BaseException as error:  # noqa: BLE001 - re-raised for the test
-            failures.append(error)
-
-    thread = threading.Thread(target=worker)
-    thread.start()
-    assert entered.wait(timeout=10), "provider call never started"
-    # While the provider call is in flight the semaphore must be held, so a
-    # second concurrent call would queue instead of hitting the provider.
-    assert not semaphore.acquire(blocking=False), "semaphore not held during provider call"
-    release.set()
-    thread.join(timeout=10)
-    assert not thread.is_alive()
-    assert failures == []
-    # ...and released once the call returns.
-    assert semaphore.acquire(blocking=False)
-    semaphore.release()
-
-
-def test_provider_call_runs_after_read_transaction_is_committed(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import threading
-
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    commit_seen = threading.Event()
-    completion = LlmCompletion(text="ok", request_id="r", usage=LlmUsage(1, 1, 2))
-    original_commit = session.commit
-
-    def recording_commit() -> None:
-        original_commit()
-        commit_seen.set()
-
-    monkeypatch.setattr(session, "commit", recording_commit)
-
-    class OrderingAdapter:
-        def complete_tutor(
-            self, messages: Sequence[TutorChatMessage], *, system_prompt: str
-        ) -> LlmCompletion:
-            del messages, system_prompt
-            assert commit_seen.wait(timeout=5), (
-                "provider call started before the read transaction was committed"
-            )
-            return completion
-
-    result = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="path loss",
-        conversation_id=None,
-        adapter=OrderingAdapter(),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert commit_seen.is_set()
-    assert len(result.messages) == 2
-    assert session.scalar(select(func.count()).select_from(TutorMessage)) == 2
-
-
-def test_app_state_exposes_tutor_semaphore_from_settings() -> None:
-    import threading
-
-    active_client, _, engine, _ = make_tutor_client(False)
-    try:
-        semaphore = active_client.app.state.tutor_semaphore
-        assert isinstance(semaphore, threading.Semaphore)
-        assert semaphore._value == Settings(app_env="test").faro_max_concurrency
-    finally:
-        active_client.close()
-        engine.dispose()
-
-
-def test_existing_conversation_requires_exact_scope_and_authorizes_first(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    outsider = User(email="outsider@example.com", username="outsider", password_hash="x")
-    session.add(outsider)
-    session.commit()
-    conversation = TutorConversation(
-        user_id=owner.id,
-        space_id=knowledge_base.space_id,
-        knowledge_base_id=knowledge_base.id,
-        title="Scope",
-    )
-    session.add(conversation)
-    session.commit()
-    loads: list[object] = []
-    original_get = session.get
-
-    def recording_get(entity: object, key: object):
-        if entity is TutorConversation:
-            loads.append(key)
-        return original_get(entity, key)
-
-    monkeypatch.setattr(session, "get", recording_get)
-
-    with pytest.raises(HTTPException) as error:
-        send_tutor_message(
-            session,
-            outsider,
-            knowledge_base.id,
-            prompt="private",
-            conversation_id=conversation.id,
-            adapter=RecordingTutorAdapter("never"),
-            embedding_adapter=FixedEmbeddingAdapter(),
-            citation_secret="test-secret",
-        )
-
-    assert error.value.status_code == 404
-    assert loads == []
-
-
-def test_mismatched_conversation_is_stable_not_found(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    other_user = User(email="other@example.com", username="other", password_hash="x")
-    session.add(other_user)
-    session.flush()
-    conversation = TutorConversation(
-        user_id=other_user.id,
-        space_id=knowledge_base.space_id,
-        knowledge_base_id=knowledge_base.id,
-        title="Wrong owner",
-    )
-    session.add(conversation)
-    session.commit()
-
-    with pytest.raises(TutorServiceError) as error:
-        send_tutor_message(
-            session,
-            owner,
-            knowledge_base.id,
-            prompt="path loss",
-            conversation_id=conversation.id,
-            adapter=RecordingTutorAdapter("never"),
-            embedding_adapter=FixedEmbeddingAdapter(),
-            citation_secret="test-secret",
-        )
-
-    assert error.value.code == "tutor_conversation_not_found"
-
-
-def test_next_send_reads_previous_user_before_assistant(
-    session: Session,
-) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    first = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="first question",
-        conversation_id=None,
-        adapter=RecordingTutorAdapter("first answer"),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-    assert first.messages[0].created_at < first.messages[1].created_at
-    session.commit()
-    second_adapter = RecordingTutorAdapter("second answer")
-
-    send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="second question",
-        conversation_id=first.conversation.id,
-        adapter=second_adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert [(message.role, message.content) for message in second_adapter.messages[:2]] == [
-        ("user", "first question"),
-        ("assistant", "first answer"),
-    ]
-    assert second_adapter.messages[-1].role == "user"
-    assert "second question" in second_adapter.messages[-1].content
-
-
-def test_appending_message_advances_conversation_updated_at(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    first = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="first question",
-        conversation_id=None,
-        adapter=RecordingTutorAdapter("first answer"),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-    session.commit()
-    session.refresh(first.conversation)
-    original_updated_at = first.conversation.updated_at
-
-    second = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="second question",
-        conversation_id=first.conversation.id,
-        adapter=RecordingTutorAdapter("second answer"),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-    session.flush()
-    session.refresh(first.conversation)
-    session.refresh(second.messages[-1])
-
-    def as_utc(value: datetime) -> datetime:
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-
-    assert as_utc(first.conversation.updated_at) > as_utc(original_updated_at)
-    assert as_utc(first.conversation.updated_at) >= as_utc(second.messages[-1].created_at)
-
-
-def test_history_is_bounded_and_ordered_before_current_grounded_prompt(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    conversation = TutorConversation(
-        user_id=owner.id,
-        space_id=knowledge_base.space_id,
-        knowledge_base_id=knowledge_base.id,
-        title="History",
-    )
-    session.add(conversation)
-    session.flush()
-    for ordinal in range(MAX_TUTOR_HISTORY_MESSAGES + 2):
-        session.add(
-            TutorMessage(
-                conversation_id=conversation.id,
-                user_id=owner.id,
-                space_id=knowledge_base.space_id,
-                knowledge_base_id=knowledge_base.id,
-                role=(
-                    TutorMessageRole.USER
-                    if ordinal % 2 == 0
-                    else TutorMessageRole.ASSISTANT
-                ),
-                content=f"history-{ordinal:02d}",
-                citations=[],
-                created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=ordinal),
-            )
-        )
-        session.flush()
-    session.commit()
-    adapter = RecordingTutorAdapter("answer")
-
-    send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="path loss",
-        conversation_id=conversation.id,
-        adapter=adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert [message.content for message in adapter.messages[:-1]] == [
-        f"history-{ordinal:02d}" for ordinal in range(2, 12)
-    ]
-    assert adapter.messages[-1].content.startswith("The following textbook excerpts")
-    assert len(adapter.messages) == MAX_TUTOR_HISTORY_MESSAGES + 1
-
-
-def test_prompt_is_nonempty(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-
-    with pytest.raises(TutorServiceError) as error:
-        send_tutor_message(
-            session,
-            owner,
-            knowledge_base.id,
-            prompt="   ",
-            conversation_id=None,
-            adapter=RecordingTutorAdapter("never"),
-            embedding_adapter=FixedEmbeddingAdapter(),
-            citation_secret="test-secret",
-        )
-
-    assert error.value.code == "tutor_prompt_invalid"
-
-
-def test_prompt_at_retrieval_limit_is_accepted(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-
-    result = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="x" * 500,
-        conversation_id=None,
-        adapter=RecordingTutorAdapter("answer"),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert result.messages[0].content == "x" * 500
-
-
-def test_prompt_above_retrieval_limit_is_rejected(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-
-    with pytest.raises(TutorServiceError) as error:
-        send_tutor_message(
-            session,
-            owner,
-            knowledge_base.id,
-            prompt="x" * 501,
-            conversation_id=None,
-            adapter=RecordingTutorAdapter("never"),
-            embedding_adapter=FixedEmbeddingAdapter(),
-            citation_secret="test-secret",
-        )
-
-    assert error.value.code == "tutor_prompt_invalid"
-
-
-def test_search_uses_exact_source_limit(session: Session, monkeypatch: pytest.MonkeyPatch) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    observed: dict[str, int] = {}
-
-    def fake_search(*args: object, limit: int, **kwargs: object) -> list[object]:
-        del args, kwargs
-        observed["limit"] = limit
-        return []
-
-    monkeypatch.setattr("tutor_api.tutor.service.search_knowledge", fake_search)
-
-    send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="path loss",
-        conversation_id=None,
-        adapter=RecordingTutorAdapter("No evidence available."),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert observed == {"limit": MAX_TUTOR_SOURCES}
-
-
-def test_empty_search_still_calls_adapter_with_no_evidence_instruction(
-    session: Session,
-) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    session.query(IndexVersion).delete()
-    session.commit()
-    adapter = RecordingTutorAdapter("The textbook evidence is unavailable.")
-
-    result = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="path loss",
-        conversation_id=None,
-        adapter=adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert "evidence is unavailable" in adapter.messages[-1].content.casefold()
-    assert result.messages[-1].citations == []
 
 
 @pytest.mark.parametrize(
-    ("provider_code", "service_code"),
+    ("url", "payload"),
     [
-        ("llm_timeout", "tutor_provider_timeout"),
-        ("llm_rate_limited", "tutor_provider_rate_limited"),
-        ("llm_unauthorized", "tutor_provider_key_invalid"),
-        ("llm_provider_error", "tutor_provider_unavailable"),
+        ("/api/v1/tutor/conversations", {"prompt": "new"}),
+        ("/api/v1/tutor/messages", {"content": "new"}),
     ],
 )
-def test_provider_errors_are_safe_and_atomic(
-    session: Session, provider_code: str, service_code: str
+def test_global_legacy_mutations_return_gone(
+    legacy_context: tuple[TestClient, dict[str, object]],
+    url: str,
+    payload: dict[str, str],
 ) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-
-    with pytest.raises(TutorServiceError) as error:
-        send_tutor_message(
-            session,
-            owner,
-            knowledge_base.id,
-            prompt="path loss",
-            conversation_id=None,
-            adapter=FailingTutorAdapter(provider_code),
-            embedding_adapter=FixedEmbeddingAdapter(),
-            citation_secret="test-secret",
-        )
-
-    assert error.value.code == service_code
-    assert "provider body secret" not in str(error.value)
-    assert session.scalar(select(func.count()).select_from(TutorConversation)) == 0
-    assert session.scalar(select(func.count()).select_from(TutorMessage)) == 0
+    client, _ = legacy_context
+    response = client.post(url, json=payload)
+    assert response.status_code == 410
+    assert response.json() == _RETIRED
 
 
-def test_send_schema_rejects_extra_fields() -> None:
-    with pytest.raises(ValueError):
-        TutorSendRequest(prompt="path loss", provider_api_key="must-not-be-client-controlled")
-
-def register(client: TestClient, username: str) -> dict[str, object]:
-    response = client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": f"{username}@example.com",
-            "username": username,
-            "password": "Correct horse battery staple 9",
-        },
-    )
-    assert response.status_code == 201
-    return response.json()
-
-
-def create_knowledge_base(client: TestClient, space_id: str) -> dict[str, object]:
-    response = client.post(
-        f"/api/v1/spaces/{space_id}/knowledge-bases",
-        json={"name": f"Tutor textbook {uuid4().hex}"},
-    )
-    assert response.status_code == 201
-    return response.json()
-
-
-def seed_http_knowledge_base(
-    engine: object,
-    registration: dict[str, object],
-    knowledge_base_data: dict[str, object],
+def test_nested_legacy_mutations_return_gone(
+    legacy_context: tuple[TestClient, dict[str, object]],
 ) -> None:
-    from tutor_api.knowledge.models import Page
+    client, context = legacy_context
+    knowledge_base_id = context["knowledge_base_id"]
+    conversation_id = context["conversation_id"]
 
-    with sessionmaker(bind=engine)() as database_session:
-        owner = database_session.get(User, UUID(str(registration["user"]["id"])))
-        knowledge_base = database_session.get(
-            KnowledgeBase, UUID(str(knowledge_base_data["id"]))
-        )
-        assert owner is not None
-        assert knowledge_base is not None
-        text = "path loss increases as wireless transmission distance increases"
-        document = Document(
-            space_id=knowledge_base.space_id,
-            knowledge_base_id=knowledge_base.id,
-            owner_user_id=owner.id,
-            created_by_user_id=owner.id,
-            title="wireless.pdf",
-            source_kind="upload",
-            source_key="wireless.pdf",
-            state=DocumentState.ACTIVE,
-        )
-        database_session.add(document)
-        database_session.flush()
-        version = DocumentVersion(
-            space_id=knowledge_base.space_id,
-            knowledge_base_id=knowledge_base.id,
-            document_id=document.id,
-            version_number=1,
-            content_sha256=content_sha256(text),
-            object_key="objects/wireless.pdf",
-            content_type="application/pdf",
-            state=DocumentVersionState.READY,
-            created_by_user_id=owner.id,
-        )
-        database_session.add(version)
-        database_session.flush()
-        page = Page(
-            space_id=knowledge_base.space_id,
-            document_version_id=version.id,
-            page_number=7,
-            source_pointer="wireless.pdf#page=7",
-            content_sha256=content_sha256(text),
-            source_metadata={},
-        )
-        database_session.add(page)
-        database_session.flush()
-        embedding = FixedEmbeddingAdapter()
-        index = IndexVersion(
-            space_id=knowledge_base.space_id,
-            knowledge_base_id=knowledge_base.id,
-            version_number=1,
-            state=IndexVersionState.ACTIVE,
-            parser_signature="parser:1",
-            ocr_signature="ocr:1",
-            chunking_signature="chunking:1",
-            embedding_backend=embedding.backend,
-            embedding_model=embedding.model,
-            embedding_dimension=embedding.dimension,
-            embedding_contract_signature=_embedding_contract_signature(embedding),
-            index_signature="index:1",
-            created_by_user_id=owner.id,
-            completed_at=datetime.now(UTC),
-            activated_at=datetime.now(UTC),
-        )
-        database_session.add(index)
-        database_session.flush()
-        database_session.add(
-            Chunk(
-                space_id=knowledge_base.space_id,
-                knowledge_base_id=knowledge_base.id,
-                index_version_id=index.id,
-                document_version_id=version.id,
-                page_id=page.id,
-                block_id=None,
-                ordinal=0,
-                source_pointer="wireless.pdf#page=7#chunk=0",
-                content_sha256=content_sha256(text),
-                content=text,
-                lexical_terms=normalize_lexical_terms(text),
-                embedding_dimension=embedding.dimension,
-                index_signature=index.index_signature,
-                embedding=embedding.embed(text),
-            )
-        )
-        database_session.commit()
-
-def make_tutor_client(
-    configured: bool,
-    *,
-    adapter: object | None = None,
-    faro_api_key: str | None = None,
-) -> tuple[TestClient, dict[str, object], object, object]:
-    engine = create_engine_from_url("sqlite://", app_env="test")
-    Base.metadata.create_all(engine)
-    active_adapter = adapter or RecordingTutorAdapter(
-        "Grounded answer from textbook evidence. [1]"
+    created = client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/tutor/conversations",
+        json={"prompt": "new"},
     )
-    settings = Settings(
-        app_env="test",
-        faro_api_key=SecretStr(
-            faro_api_key if faro_api_key is not None else ("sk-test" if configured else "")
-        ),
+    sent = client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/tutor/conversations/{conversation_id}/messages",
+        json={"prompt": "new"},
     )
-    app = create_app(settings, sessionmaker(bind=engine))
-    app.state.tutor_adapter = active_adapter
-    app.state.embedding_adapter = FixedEmbeddingAdapter()
-    client = TestClient(app)
-    registration = register(client, "tutor-http")
-    knowledge_base = create_knowledge_base(client, str(registration["personal_space"]["id"]))
-    seed_http_knowledge_base(engine, registration, knowledge_base)
-    return client, knowledge_base, engine, active_adapter
+
+    assert created.status_code == 410
+    assert created.json() == _RETIRED
+    assert sent.status_code == 410
+    assert sent.json() == _RETIRED
 
 
-@pytest.fixture
-def client() -> TestClient:
-    active_client, _, engine, _ = make_tutor_client(False)
-    try:
-        yield active_client
-    finally:
-        active_client.close()
-        engine.dispose()
-
-
-@pytest.fixture
-def configured_client() -> tuple[TestClient, dict[str, object], object]:
-    active_client, knowledge_base, engine, adapter = make_tutor_client(True)
-    try:
-        yield active_client, knowledge_base, adapter
-    finally:
-        active_client.close()
-        engine.dispose()
-
-
-def test_tutor_status_reports_missing_key_without_secrets(client: TestClient) -> None:
-    response = client.get("/api/v1/tutor/status")
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "configured": False,
-        "model": "gemini-3.7-flash-tiered",
-    }
-    for secret_name in ("api_key", "base_url", "secret"):
-        assert secret_name not in response.text.casefold()
-
-
-def test_tutor_status_reports_configured_model(
-    configured_client: tuple[TestClient, dict[str, object], object],
+def test_legacy_conversation_acl_remains_stable_not_found(
+    legacy_context: tuple[TestClient, dict[str, object]],
 ) -> None:
-    active_client, _, _ = configured_client
-    response = active_client.get("/api/v1/tutor/status")
+    client, context = legacy_context
+    app = context["app"]
+    factory = context["factory"]
+    conversation_id = context["conversation_id"]
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "configured": True,
-        "model": "gemini-3.7-flash-tiered",
-    }
-
-
-def test_placeholder_api_key_reports_unconfigured_and_never_calls_adapter() -> None:
-    active_client, knowledge_base, engine, adapter = make_tutor_client(
-        False, faro_api_key="placeholder-faro-key"
+    cross_base = client.get(
+        f"/api/v1/knowledge-bases/{context['other_knowledge_base_id']}/tutor/conversations/{conversation_id}"
     )
-    try:
-        status = active_client.get("/api/v1/tutor/status")
-        assert status.status_code == 200
-        assert status.json()["configured"] is False
+    assert cross_base.status_code == 404
+    assert cross_base.json() == {"detail": "tutor_conversation_not_found"}
 
-        response = active_client.post(
-            f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
-            json={"prompt": "path loss"},
-        )
-        assert response.status_code == 503
-        assert response.json() == {"detail": "tutor_provider_unavailable"}
-        assert adapter.messages == ()
-    finally:
-        active_client.close()
-        engine.dispose()
+    def outsider() -> User:
+        with factory() as db:
+            user = db.get(User, context["outsider_id"])
+            assert user is not None
+            db.expunge(user)
+            return user
 
-
-def test_unconfigured_create_is_safe_and_does_not_call_adapter(client: TestClient) -> None:
-    personal_space_id = client.get("/api/v1/auth/me").json()["personal_space"]["id"]
-    knowledge_base = create_knowledge_base(client, personal_space_id)
-    adapter = client.app.state.tutor_adapter
-
-    response = client.post(
-        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
-        json={"prompt": "path loss"},
-    )
-
-    assert response.status_code == 503
-    assert response.json() == {"detail": "tutor_provider_unavailable"}
-    assert adapter.messages == ()
+    app.dependency_overrides[get_current_user] = outsider
+    hidden = client.get(f"/api/v1/tutor/conversations/{conversation_id}")
+    assert hidden.status_code == 404
+    assert hidden.json() == {"detail": "tutor_conversation_not_found"}
 
 
-def test_create_get_and_send_conversation_returns_only_public_messages(
-    configured_client: tuple[TestClient, dict[str, object], object],
+def test_tutor_status_and_legacy_execution_wiring_are_removed(
+    legacy_context: tuple[TestClient, dict[str, object]],
 ) -> None:
-    active_client, knowledge_base, _ = configured_client
-    created = active_client.post(
-        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
-        json={"prompt": "explain path loss"},
+    client, context = legacy_context
+    app = context["app"]
+    signature = inspect.signature(create_app)
+    web_search_path = Path(__file__).parents[1] / "src" / "tutor_api" / "tutor" / "web_search.py"
+
+    assert client.get("/api/v1/tutor/status").status_code == 404
+    assert "tutor_adapter" not in signature.parameters
+    assert "tutor_web_search_adapter" not in signature.parameters
+    assert not hasattr(app.state, "tutor_adapter")
+    assert not hasattr(app.state, "tutor_semaphore")
+    assert not hasattr(app.state, "tutor_web_search_adapter")
+    assert not web_search_path.exists()
+
+
+def test_tutor_citation_schema_accepts_legacy_knowledge_citation_json() -> None:
+    citation = TutorCitationResponse.model_validate(
+        {
+            "id": "legacy-citation",
+            "source_name": "legacy.pdf",
+            "page_number": 9,
+        }
     )
 
-    assert created.status_code == 201
-    body = created.json()
-    assert [message["role"] for message in body["messages"]] == ["user", "assistant"]
-    assert body["messages"][-1]["content"] == "Grounded answer from textbook evidence. [1]"
-    assert body["messages"][-1]["citations"][0]["source_name"] == "wireless.pdf"
-    for hidden in ("api_key", "base_url", "provider body", "untrusted textbook excerpt"):
-        assert hidden not in created.text.casefold()
-
-    conversation_url = (
-        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations/{body['id']}"
-    )
-    loaded = active_client.get(conversation_url)
-    assert loaded.status_code == 200
-    assert loaded.json() == body
-
-    sent = active_client.post(conversation_url + "/messages", json={"prompt": "and distance?"})
-    assert sent.status_code == 200
-    assert [message["role"] for message in sent.json()["messages"]] == [
-        "user",
-        "assistant",
-        "user",
-        "assistant",
-    ]
-
-
-def test_conversation_is_hidden_across_users_and_knowledge_bases(
-    configured_client: tuple[TestClient, dict[str, object], object],
-) -> None:
-    owner, knowledge_base, _ = configured_client
-    created = owner.post(
-        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
-        json={"prompt": "private question"},
-    ).json()
-    other_base = create_knowledge_base(
-        owner, owner.get("/api/v1/auth/me").json()["personal_space"]["id"]
-    )
-    cross_base_url = (
-        f"/api/v1/knowledge-bases/{other_base['id']}/tutor/conversations/{created['id']}"
-    )
-    assert owner.get(cross_base_url).status_code == 404
-    assert owner.post(cross_base_url + "/messages", json={"prompt": "steal"}).status_code == 404
-
-    outsider = TestClient(owner.app)
-    try:
-        register(outsider, f"outsider-{uuid4().hex[:8]}")
-        original_url = (
-            f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations/{created['id']}"
-        )
-        assert outsider.get(original_url).status_code == 404
-        hidden_send = outsider.post(
-            original_url + "/messages", json={"prompt": "steal"}
-        )
-        assert hidden_send.status_code == 404
-    finally:
-        outsider.close()
-
-
-@pytest.mark.parametrize(
-    ("provider_code", "expected_status"),
-    [
-        ("llm_timeout", 503),
-        ("llm_unauthorized", 503),
-        ("llm_provider_error", 503),
-        ("llm_network_error", 503),
-        ("llm_rate_limited", 429),
-    ],
-)
-def test_provider_errors_have_stable_safe_http_mapping(
-    provider_code: str, expected_status: int
-) -> None:
-    active_client, knowledge_base, engine, _ = make_tutor_client(
-        True, adapter=FailingTutorAdapter(provider_code)
-    )
-    try:
-        response = active_client.post(
-            f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
-            json={"prompt": "path loss"},
-        )
-        assert response.status_code == expected_status
-        expected_detail = {
-            "llm_rate_limited": "tutor_provider_rate_limited",
-            "llm_timeout": "tutor_provider_timeout",
-            "llm_unauthorized": "tutor_provider_key_invalid",
-        }.get(provider_code, "tutor_provider_unavailable")
-        assert response.json() == {"detail": expected_detail}
-        assert "provider body secret" not in response.text
-    finally:
-        active_client.close()
-        engine.dispose()
-
-
-def test_http_validation_does_not_echo_grounded_prompt_or_secrets(
-    configured_client: tuple[TestClient, dict[str, object], object],
-) -> None:
-    active_client, knowledge_base, _ = configured_client
-    response = active_client.post(
-        f"/api/v1/knowledge-bases/{knowledge_base['id']}/tutor/conversations",
-        json={"provider_api_key": "sk-client-secret"},
-    )
-
-    assert response.status_code == 422
-    assert "sk-client-secret" not in response.text
-    assert "untrusted textbook excerpt" not in response.text.casefold()
-
-def test_clarify_rounds_are_marked_then_forced_to_answer(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    clarify_text = (
-        f"{TUTOR_CLARIFY_MARKER}\n"
-        "1. 你问的是远场还是近场路径损耗？这决定使用的公式。\n"
-        "➡️ 推荐按远场理解，摘录 [1] 讨论的是远场传播。"
-    )
-    adapter = RecordingTutorAdapter(clarify_text)
-
-    first = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="路径损耗怎么算？",
-        conversation_id=None,
-        adapter=adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-    conversation_id = first.conversation.id
-    assert first.messages[-1].kind is TutorMessageKind.CLARIFY
-    assert adapter.system_prompts == [TUTOR_GROUNDED_SYSTEM_PROMPT]
-
-    second = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="远场",
-        conversation_id=conversation_id,
-        adapter=RecordingTutorAdapter(clarify_text),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-    del second
-
-    # 连续两轮追问后预算耗尽:即使模型仍输出追问标记,也按最终作答落库。
-    forced_adapter = RecordingTutorAdapter(
-        f"{TUTOR_CLARIFY_MARKER}\n还想追问,但预算已用完。"
-    )
-    third = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="还是不明白",
-        conversation_id=conversation_id,
-        adapter=forced_adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-    assert third.messages[-1].kind is TutorMessageKind.ANSWER
-    assert forced_adapter.system_prompts == [TUTOR_FORCED_ANSWER_SYSTEM_PROMPT]
-
-
-def test_retrieval_query_anchors_to_conversation_context(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    observed_queries: list[str] = []
-
-    def fake_search(
-        *args: object, query: str, limit: int, **kwargs: object
-    ) -> list[object]:
-        del args, limit, kwargs
-        observed_queries.append(query)
-        return []
-
-    monkeypatch.setattr("tutor_api.tutor.service.search_knowledge", fake_search)
-
-    first = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="无线传播模型有哪些",
-        conversation_id=None,
-        adapter=RecordingTutorAdapter("第一条回答"),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-    send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="为什么？",
-        conversation_id=first.conversation.id,
-        adapter=RecordingTutorAdapter("第二条回答"),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert observed_queries[0] == "无线传播模型有哪些"
-    assert "为什么？" in observed_queries[1]
-    assert "无线传播模型有哪些" in observed_queries[1]
-
-
-def test_no_evidence_uses_dedicated_system_prompt(session: Session) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    session.query(IndexVersion).delete()
-    session.commit()
-    adapter = RecordingTutorAdapter("当前教材没有相关证据。")
-
-    result = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="完全无关的问题",
-        conversation_id=None,
-        adapter=adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert adapter.system_prompts == [TUTOR_NO_EVIDENCE_SYSTEM_PROMPT]
-    assert "evidence is unavailable" in adapter.messages[-1].content.casefold()
-    assert result.messages[-1].kind is TutorMessageKind.ANSWER
-    assert result.messages[-1].citations == []
-
-
-def test_search_feeds_full_knowledge_base_content_to_tutor(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-    observed: dict[str, object] = {}
-
-    def fake_search(*args: object, limit: int, **kwargs: object) -> list[object]:
-        del args
-        observed["limit"] = limit
-        observed.update(kwargs)
-        return []
-
-    monkeypatch.setattr("tutor_api.tutor.service.search_knowledge", fake_search)
-
-    send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="path loss",
-        conversation_id=None,
-        adapter=RecordingTutorAdapter("No evidence available."),
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    assert observed["limit"] == MAX_TUTOR_SOURCES
-    # 导师拿到的是知识库完整原文块,而不是检索摘要切片。
-    assert observed["full_content"] is True
-    assert MAX_TUTOR_SOURCES > 5
-
-
-def test_evidence_budget_truncates_tail_but_keeps_first_hit(
-    session: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from tutor_api.knowledge.retrieval import SearchCitation, SearchHit
-
-    owner, knowledge_base = seed_searchable_knowledge_base(session)
-
-    def make_hit(ordinal: int) -> SearchHit:
-        return SearchHit(
-            excerpt="证据" * 600,  # 1200 字符
-            citation=SearchCitation(
-                id=f"cite-{ordinal}", source_name=f"doc-{ordinal}.pdf", page_number=ordinal
-            ),
-        )
-
-    total_hits = 20
-    monkeypatch.setattr(
-        "tutor_api.tutor.service.search_knowledge",
-        lambda *args, **kwargs: [make_hit(ordinal) for ordinal in range(total_hits)],
-    )
-    adapter = RecordingTutorAdapter("Based on the excerpts. [1]")
-
-    result = send_tutor_message(
-        session,
-        owner,
-        knowledge_base.id,
-        prompt="总结这一章",
-        conversation_id=None,
-        adapter=adapter,
-        embedding_adapter=FixedEmbeddingAdapter(),
-        citation_secret="test-secret",
-    )
-
-    prompt = adapter.messages[-1].content
-    citations = result.messages[-1].citations
-    # 1200 + 160 开销 = 1360/块;预算 18000 内最多 13 块,第 14 块起截断。
-    assert len(citations) < total_hits
-    assert citations[0]["id"] == "cite-0"
-    assert len(citations) * (1200 + 160) <= MAX_TUTOR_EVIDENCE_CHARACTERS
-    assert f"[{len(citations)}]" in prompt
-    assert f"[{len(citations) + 1}]" not in prompt
-    # 引用列表与提示词中的摘录一一对应,导师引用不会越界。
-    assert prompt.count("doc-") == len(citations)
+    assert citation.kind == "knowledge"
+    assert citation.knowledge_base_id is None
+    assert citation.knowledge_base_name is None
+    assert citation.space_id is None
+    assert citation.url is None

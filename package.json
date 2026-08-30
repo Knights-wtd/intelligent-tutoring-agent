@@ -6,9 +6,14 @@
   },
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "test:agent-protocol": "pnpm --dir packages/agent-protocol test",
+    "typecheck:agent-protocol": "pnpm --dir packages/agent-protocol typecheck",
+    "test:agent-runtime": "pnpm --dir apps/agent-runtime test",
+    "typecheck:agent-runtime": "pnpm --dir apps/agent-runtime typecheck",
     "dev:web": "pnpm --dir apps/web dev",
     "test:web": "pnpm --dir apps/web test",
     "lint:web": "pnpm --dir apps/web lint",
-    "build:web": "pnpm --dir apps/web build"
+    "build:web": "pnpm --dir apps/web build",
+    "check:web-artifacts": "pnpm --dir apps/web check:agent-artifacts"
   }
 }

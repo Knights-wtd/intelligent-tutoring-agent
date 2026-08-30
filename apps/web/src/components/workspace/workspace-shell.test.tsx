@@ -9,6 +9,7 @@ import { WorkspaceShell } from "./workspace-shell";
 const mockKnowledgeApi = vi.hoisted(() => ({
   list: vi.fn(),
   create: vi.fn(),
+  remove: vi.fn(),
   upload: vi.fn(),
   search: vi.fn(),
   pagePreview: vi.fn(),
@@ -27,14 +28,18 @@ const mockClassroomApi = vi.hoisted(() => ({
   create: vi.fn(),
   join: vi.fn(),
 }));
-const mockTutorApi = vi.hoisted(() => ({
-  status: vi.fn(),
-  createConversation: vi.fn(),
-  getConversation: vi.fn(),
-  sendMessage: vi.fn(),
-}));
 const mockBreakpoint = vi.hoisted(() => ({
   value: "desktop" as "desktop" | "tablet" | "compact" | "mobile",
+}));
+const mockAgentPanel = vi.hoisted(() => ({
+  citation: {
+    spaceId: "class-space",
+    knowledgeBaseId: "kb-functions",
+    vaultFileId: "file-function",
+    path: "概念/函数.md",
+    heading: "定义",
+  },
+  runtimeUnavailable: false,
 }));
 
 vi.mock("@/lib/knowledge-api", async (importOriginal) => {
@@ -43,12 +48,28 @@ vi.mock("@/lib/knowledge-api", async (importOriginal) => {
 });
 vi.mock("@/lib/question-bank-api", () => ({ questionBankApi: mockQuestionBankApi }));
 vi.mock("@/lib/classrooms-api", () => ({ classroomApi: mockClassroomApi }));
-vi.mock("@/lib/tutor-api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/tutor-api")>();
-  return { ...actual, tutorApi: mockTutorApi };
-});
 vi.mock("./use-workspace-breakpoint", () => ({
   useWorkspaceBreakpoint: () => mockBreakpoint.value,
+}));
+vi.mock("./agent-panel", () => ({
+  AgentPanel: ({
+    contextLabel,
+    knowledgeBase,
+    onOpenCitation,
+  }: {
+    contextLabel: string;
+    knowledgeBase: KnowledgeBase;
+    onOpenCitation: (citation: typeof mockAgentPanel.citation) => void;
+  }) => (
+    <section aria-label="Workspace Agent" role="region">
+      <p>Agent 上下文：{contextLabel}</p>
+      <p>Agent 知识库：{knowledgeBase.name}</p>
+      {mockAgentPanel.runtimeUnavailable ? <p role="alert">Runtime unavailable</p> : null}
+      <button onClick={() => onOpenCitation(mockAgentPanel.citation)} type="button">
+        打开 Agent Vault 引用
+      </button>
+    </section>
+  ),
 }));
 
 const personalSpace = { id: "personal", kind: "personal" as const, name: "我的空间" };
@@ -65,15 +86,30 @@ const digital: KnowledgeBase = {
   id: "kb-digital",
   name: "数字通信",
 };
+const classroomSpace = { id: "class-space", kind: "classroom" as const, name: "函数班" };
+const functionsKnowledgeBase: KnowledgeBase = {
+  ...wireless,
+  id: "kb-functions",
+  space_id: "class-space",
+  name: "函数知识库",
+};
 
 beforeEach(() => {
   localStorage.clear();
   mockBreakpoint.value = "desktop";
+  mockAgentPanel.runtimeUnavailable = false;
+  mockAgentPanel.citation = {
+    spaceId: "class-space",
+    knowledgeBaseId: "kb-functions",
+    vaultFileId: "file-function",
+    path: "概念/函数.md",
+    heading: "定义",
+  };
   for (const mock of Object.values(mockKnowledgeApi)) mock.mockReset();
   for (const mock of Object.values(mockQuestionBankApi)) mock.mockReset();
   for (const mock of Object.values(mockClassroomApi)) mock.mockReset();
-  for (const mock of Object.values(mockTutorApi)) mock.mockReset();
   mockKnowledgeApi.list.mockResolvedValue([wireless, digital]);
+  mockKnowledgeApi.remove.mockResolvedValue(undefined);
   mockKnowledgeApi.graph.mockResolvedValue({ nodes: [], edges: [] });
   mockKnowledgeApi.workspace.mockImplementation((knowledgeBaseId: string) =>
     Promise.resolve({
@@ -95,22 +131,22 @@ beforeEach(() => {
   });
   mockQuestionBankApi.listQuestions.mockResolvedValue([]);
   mockQuestionBankApi.listReviewItems.mockResolvedValue({ items: [], next_cursor: null });
-  mockTutorApi.status.mockResolvedValue({ configured: false, model: "" });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("WorkspaceShell", () => {
-  it("renders knowledge bases at far left and the tutor at right", async () => {
+  it("mounts Workspace Agent as the only AI workspace experience", async () => {
     render(<WorkspaceShell spaces={[personalSpace]} />);
 
     expect(await screen.findByRole("navigation", { name: "知识库" })).toBeInTheDocument();
-    expect(screen.getByRole("main")).toHaveAttribute("data-layout", "library-center-tutor");
-    expect(screen.getByLabelText("AI 家教")).toBeInTheDocument();
-    expect(screen.queryByText("服务正常")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("MVP 功能说明")).not.toBeInTheDocument();
+    expect(screen.getByRole("main")).toHaveAttribute("data-layout", "library-center-agent");
+    expect(screen.getByRole("region", { name: "Workspace Agent" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("AI 家教")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "AI 家教" })).not.toBeInTheDocument();
   });
 
   it("opens and reuses the requested graph tab without changing library selection", async () => {
@@ -127,10 +163,69 @@ describe("WorkspaceShell", () => {
       "aria-current",
       "page",
     );
-    expect(screen.getByLabelText("AI 家教")).toHaveTextContent("关联图：数字通信");
+    expect(screen.getByRole("region", { name: "Workspace Agent" })).toHaveTextContent("关联图：数字通信");
 
     await user.click(screen.getByRole("button", { name: "打开数字通信关联图" }));
     expect(screen.getAllByRole("tab", { name: "关联图 · 数字通信" })).toHaveLength(1);
+  });
+
+  it("clears deleted knowledge-base tabs, previews, preferences, and Agent context", async () => {
+    mockAgentPanel.citation = {
+      spaceId: "personal",
+      knowledgeBaseId: digital.id,
+      vaultFileId: "file-digital",
+      path: "数字通信.md",
+      heading: "调制",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            vault_file_id: "file-digital",
+            relative_path: "数字通信.md",
+            markdown: "# 数字通信",
+          }),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    await user.click(await screen.findByRole("button", { name: "选择数字通信" }));
+    await user.click(screen.getByRole("button", { name: "打开数字通信关联图" }));
+    expect(screen.getByRole("tab", { name: "关联图 · 数字通信" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "打开 Agent Vault 引用" }));
+    expect(await screen.findByRole("region", { name: "Vault 文件" })).toHaveTextContent("数字通信.md");
+
+    await user.click(screen.getByRole("button", { name: "删除数字通信" }));
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "输入知识库名称数字通信以确认" }),
+      { target: { value: "数字通信" } },
+    );
+    expect(screen.getByRole("textbox", { name: "输入知识库名称数字通信以确认" })).toHaveValue("数字通信");
+    expect(screen.getByRole("button", { name: "永久删除数字通信" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "永久删除数字通信" }));
+
+    await waitFor(() =>
+      expect(mockKnowledgeApi.remove).toHaveBeenCalledWith(digital.id, expect.any(AbortSignal)),
+    );
+    expect(screen.queryByRole("button", { name: "选择数字通信" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "关联图 · 数字通信" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Vault 文件" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择无线通信" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("region", { name: "Workspace Agent" })).toHaveTextContent(
+      "Agent 知识库：无线通信",
+    );
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("workspace:personal") ?? "null")).toMatchObject({
+        selectedKnowledgeBaseId: wireless.id,
+      }),
+    );
+    expect(localStorage.getItem("workspace:personal")).not.toContain(digital.id);
   });
 
   it("opens a graph from the knowledge page without embedding it below the file explorer", async () => {
@@ -302,30 +397,25 @@ describe("WorkspaceShell", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("keeps tutor draft state mounted while its compact drawer is closed", async () => {
+  it("uses an accessible Workspace Agent drawer in compact layouts", async () => {
     mockBreakpoint.value = "compact";
-    mockTutorApi.status.mockResolvedValue({ configured: true, model: "faro" });
     const user = userEvent.setup();
     render(<WorkspaceShell spaces={[personalSpace]} />);
 
-    const trigger = screen.getByRole("button", { name: "打开 AI 家教" });
+    const trigger = screen.getByRole("button", { name: "打开 Workspace Agent" });
     await user.click(trigger);
-    expect(screen.getByRole("dialog", { name: "AI 家教抽屉" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "关闭 AI 家教抽屉" })).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Workspace Agent 抽屉" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "关闭 Workspace Agent 抽屉" })).toHaveFocus();
+    expect(screen.getByRole("region", { name: "Workspace Agent" })).toBeInTheDocument();
 
-    const prompt = await screen.findByLabelText("向 AI 导师提问");
-    await waitFor(() => expect(prompt).toBeEnabled());
-    await user.type(prompt, "请解释香农定理");
-    await user.click(screen.getByRole("button", { name: "关闭 AI 家教抽屉" }));
+    await user.click(screen.getByRole("button", { name: "关闭 Workspace Agent 抽屉" }));
     expect(trigger).toHaveFocus();
-
     await user.click(trigger);
-    expect(screen.getByLabelText("向 AI 导师提问")).toHaveValue("请解释香农定理");
-    await user.click(screen.getByRole("button", { name: "关闭 AI 家教抽屉背景" }));
+    await user.click(screen.getByRole("button", { name: "关闭 Workspace Agent 抽屉背景" }));
     expect(trigger).toHaveFocus();
   });
 
-  it("keeps the library inline and moves only the tutor into a tablet drawer", async () => {
+  it("keeps the library inline and moves only Workspace Agent into a tablet drawer", async () => {
     mockBreakpoint.value = "tablet";
     const user = userEvent.setup();
     render(<WorkspaceShell spaces={[personalSpace]} />);
@@ -334,8 +424,8 @@ describe("WorkspaceShell", () => {
     expect(screen.queryByRole("button", { name: "打开知识库" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("separator")).toHaveLength(1);
 
-    await user.click(screen.getByRole("button", { name: "打开 AI 家教" }));
-    expect(screen.getByRole("dialog", { name: "AI 家教抽屉" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "打开 Workspace Agent" }));
+    expect(screen.getByRole("dialog", { name: "Workspace Agent 抽屉" })).toBeInTheDocument();
   });
 
   it("keeps the real classroom entry in the knowledge sidebar footer", async () => {
@@ -347,87 +437,85 @@ describe("WorkspaceShell", () => {
     expect(screen.getByLabelText("班级名称")).toBeInTheDocument();
     expect(screen.getByLabelText("邀请码")).toBeInTheDocument();
   });
-  it("opens a Tutor citation in the matching knowledge preview", async () => {
-    mockBreakpoint.value = "compact";
-    mockTutorApi.status.mockResolvedValue({ configured: true, model: "faro" });
-    mockTutorApi.createConversation.mockResolvedValue({
-      id: "conversation-1",
-      knowledge_base_id: "kb-wireless",
-      title: "路径损耗",
-      messages: [
-        {
-          id: "message-user",
-          role: "user",
-          kind: "answer",
-          content: "解释路径损耗",
-          citations: [],
-          created_at: "2026-08-26T00:00:00Z",
-        },
-        {
-          id: "message-assistant",
-          role: "assistant",
-          kind: "answer",
-          content: "路径损耗随距离增加而增大。",
-          citations: [
-            {
-              id: "citation-wireless",
-              source_name: "无线通信.txt",
-              page_number: 1,
-            },
-          ],
-          created_at: "2026-08-26T00:00:01Z",
-        },
-      ],
-      created_at: "2026-08-26T00:00:00Z",
-      updated_at: "2026-08-26T00:00:01Z",
+  it.each(["tablet", "compact"] as const)(
+    "opens Workspace Agent as the only assistant inside the %s drawer",
+    async (breakpoint) => {
+      mockBreakpoint.value = breakpoint;
+      const user = userEvent.setup();
+      render(<WorkspaceShell spaces={[personalSpace]} />);
+
+      const trigger = await screen.findByRole("button", { name: "打开 Workspace Agent" });
+      await user.click(trigger);
+      expect(screen.getByRole("dialog", { name: "Workspace Agent 抽屉" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Workspace Agent" })).toBeInTheDocument();
+      expect(screen.queryByText("AI 家教")).not.toBeInTheDocument();
+    },
+  );
+
+  it("opens an Agent Vault citation after switching space and loading its knowledge base", async () => {
+    mockKnowledgeApi.list.mockImplementation((spaceId: string) =>
+      Promise.resolve(spaceId === "class-space" ? [functionsKnowledgeBase] : [wireless, digital]),
+    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        vault_file_id: "file-function",
+        relative_path: "概念/函数.md",
+        markdown: "# 函数\n\n函数是集合之间的映射。",
+      }),
     });
-    mockKnowledgeApi.pagePreview.mockResolvedValue({
-      blob: new Blob(["路径损耗随距离增加而增大。"], { type: "text/plain" }),
-      contentType: "text/plain; charset=utf-8",
-    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace, classroomSpace]} />);
+
+    await user.click(await screen.findByRole("button", { name: "打开 Agent Vault 引用" }));
+
+    await waitFor(() => expect(mockKnowledgeApi.list).toHaveBeenCalledWith(
+      "class-space",
+      expect.any(AbortSignal),
+    ));
+    expect(await screen.findByRole("button", { name: "选择函数知识库" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/knowledge-bases/kb-functions/vault/files/file-function"),
+      expect.objectContaining({ credentials: "include" }),
+    ));
+    expect(await screen.findByRole("region", { name: "Vault 文件" })).toHaveTextContent(
+      "函数是集合之间的映射。",
+    );
+    expect(screen.getByRole("region", { name: "Vault 文件" })).toHaveTextContent("概念/函数.md");
+  });
+
+  it("shows only a generic unavailable message when a Vault citation fails ACL", async () => {
+    mockKnowledgeApi.list.mockImplementation((spaceId: string) =>
+      Promise.resolve(spaceId === "class-space" ? [functionsKnowledgeBase] : [wireless, digital]),
+    );
+    mockAgentPanel.citation = {
+      ...mockAgentPanel.citation,
+      path: "机密/不可见方案.md",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace, classroomSpace]} />);
+
+    await user.click(await screen.findByRole("button", { name: "打开 Agent Vault 引用" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("资源不可用");
+    expect(screen.queryByText(/机密\/不可见方案/)).not.toBeInTheDocument();
+  });
+
+  it("keeps knowledge workspace controls usable when Agent Runtime returns 503", async () => {
+    mockAgentPanel.runtimeUnavailable = true;
     const user = userEvent.setup();
     render(<WorkspaceShell spaces={[personalSpace]} />);
 
-    await waitFor(() => {
-      expect(localStorage.getItem("workspace:personal")).not.toBeNull();
-    });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    await user.click(screen.getByRole("button", { name: "打开 AI 家教" }));
-    const prompt = screen.getByLabelText("向 AI 导师提问");
-    await waitFor(() => expect(prompt).toBeEnabled());
-    const form = prompt.closest("form");
-    expect(form).not.toBeNull();
-    fireEvent.change(prompt, { target: { value: "解释路径损耗" } });
-    expect(prompt).toHaveValue("解释路径损耗");
-    fireEvent.submit(form!);
-    await waitFor(() => {
-      expect(mockTutorApi.createConversation).toHaveBeenCalledWith(
-        "kb-wireless",
-        "解释路径损耗",
-        expect.any(AbortSignal),
-      );
-    });
-    expect(await screen.findByText("路径损耗随距离增加而增大。")).toBeInTheDocument();
-    await user.click(await screen.findByRole("button", { name: "打开引用：无线通信.txt，第 1 页" }));
-    expect(screen.queryByRole("dialog", { name: "AI 家教抽屉" })).not.toBeInTheDocument();
-
-    expect(screen.getByRole("tab", { name: "知识库" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-    await waitFor(() => {
-      expect(mockKnowledgeApi.pagePreview).toHaveBeenCalledWith(
-        "kb-wireless",
-        "citation-wireless",
-        expect.any(AbortSignal),
-      );
-    });
-    expect(await screen.findByRole("region", { name: "引用原页预览" })).toHaveTextContent(
-      "路径损耗随距离增加而增大。",
-    );
-
-    await user.click(screen.getByRole("tab", { name: "今日任务" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Runtime unavailable");
     await user.click(screen.getByRole("tab", { name: "知识库" }));
-    expect(mockKnowledgeApi.pagePreview).toHaveBeenCalledTimes(1);
+    expect(await screen.findByLabelText("知识库面板")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Workspace Agent" })).toBeInTheDocument();
+    expect(screen.queryByText("AI 家教")).not.toBeInTheDocument();
   });
+
 });

@@ -209,101 +209,16 @@
 .graphDetails ul { display: grid; gap: 5px; padding-left: 18px; }
 @media (max-width: 767px) { .knowledgeGraphPanel { padding: 16px; } .graphWorkspace { grid-template-columns: 1fr; } }
 
-.tutorPanel { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 14px; overflow: auto; padding: 20px 22px 28px; color: var(--text, #2e2a52); background: #faf8fe; }
-.tutorHeader { display: flex; align-items: start; justify-content: space-between; gap: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--line, #e7e4ec); }
-.tutorHeader h2 { margin: 3px 0; color: var(--text, #2e2a52); }
-.tutorHeader p, .tutorModel { margin: 0; color: #7a74a0; font-size: 13px; line-height: 1.5; }
-.tutorModel { padding: 7px 10px; border-radius: 999px; background: #efeafd; color: #5549aa; white-space: nowrap; }
-.tutorMessages { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.tutorMessageUser, .tutorMessageAssistant { display: grid; max-width: 88%; gap: 6px; padding: 12px 14px; border: 1px solid var(--line, #e7e4ec); border-radius: 12px; background: #faf8fe; }
-.tutorMessageUser { justify-self: end; border-color: #d9d2f5; background: #f2eefd; }
-.tutorMessageAssistant { justify-self: start; }
-.tutorMessageUser p, .tutorMessageAssistant p { margin: 0; line-height: 1.6; white-space: pre-wrap; }
-.tutorRich { display: grid; gap: 6px; min-width: 0; }
-.tutorRichHeading1 { margin: 6px 0 0; color: var(--text, #2e2a52); font-size: 16px; font-weight: 700; line-height: 1.4; }
-.tutorRichHeading2 { margin: 5px 0 0; color: #3f3694; font-size: 14.5px; font-weight: 700; line-height: 1.4; }
-.tutorRichHeading3 { margin: 4px 0 0; color: #4c4488; font-size: 13.5px; font-weight: 700; line-height: 1.4; }
-.tutorRichParagraph { margin: 0; line-height: 1.65; white-space: pre-wrap; }
-.tutorRichList { display: grid; gap: 4px; margin: 0; padding-left: 20px; line-height: 1.65; }
-.tutorRichStrong { color: #3f3694; font-weight: 700; }
-.tutorRichCode { padding: 1px 5px; border-radius: 5px; background: #efeafd; color: #5549aa; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }
-.choiceList { display: grid; gap: 8px; }
-.choiceOption { display: flex; align-items: baseline; gap: 9px; padding: 10px 12px; border: 1px solid #d9d2f5; border-radius: 9px; background: #fff; cursor: pointer; line-height: 1.55; }
-.choiceOption:hover { border-color: #b6a9ec; background: #f7f4ff; }
-.choiceOption:has(input:checked) { border-color: var(--purple-deep, #6558c9); background: #f2eefd; }
-.choiceOption input { accent-color: var(--purple-deep, #6558c9); }
-.choiceKey { color: #5549aa; font-weight: 700; }
-.choiceOption:has(input:checked) .choiceKey { color: #493f9e; }
-.revealedAnswer { color: #3f3694 !important; font-weight: 700; }
-.explanation { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid #ded6f6; border-radius: 9px; background: #fff; }
-.explanation strong { color: #4c4488; font-size: 13px; }
-.chunkViewer { display: grid; gap: 10px; margin-top: 4px; }
-.chunkViewer > strong { color: #463f80; font-size: 14px; }
-.chunkCard { display: grid; gap: 7px; padding: 12px 14px; border: 1px solid #e3dcf7; border-radius: 10px; background: #fff; }
-.chunkMeta { color: #7a74a0; font-size: 12px; font-weight: 700; }
-.searchResultContent { min-width: 0; }
-.tutorMessageRole { color: #6558c9; font-size: 12px; font-weight: 700; }
-.tutorMessageClarify { border-color: #b7a8f0; background: #f4f0ff; }
-.tutorClarify { display: grid; gap: 8px; }
-.tutorClarifyHint { margin: 0; color: #6558c9; font-size: 12px; line-height: 1.5; }
-.tutorClarifyQuestions { display: grid; gap: 7px; }
-.tutorClarifyQuestions button { min-height: 0; padding: 8px 11px; text-align: left; font-weight: 400; line-height: 1.55; white-space: pre-wrap; }
-.tutorClarifyQuestions button:hover { border-color: var(--purple, #6558c9); background: #fff; }
-.tutorCitations { display: flex; flex-wrap: wrap; gap: 7px; }
-.tutorPanel button { min-height: 40px; padding: 8px 12px; border: 1px solid #d4cee9; border-radius: 8px; background: #faf8fe; color: #524b8a; font: inherit; font-weight: 700; cursor: pointer; }
-.tutorCitations button { min-height: 34px; padding: 6px 9px; border-color: #d8d0f4; background: #f3f0fc; color: #5549aa; font-size: 12px; }
-.tutorForm { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px 10px; margin-top: auto; }
-.tutorForm label { grid-column: 1 / -1; color: #655e9c; font-size: 12px; font-weight: 700; }
-.tutorForm textarea { min-height: 82px; box-sizing: border-box; padding: 10px 11px; resize: vertical; border: 1px solid #d3cde8; border-radius: 9px; background: #faf8fe; color: var(--text, #2e2a52); font: inherit; line-height: 1.5; }
-.tutorForm button { border-color: var(--purple, #6558c9); background: var(--purple, #6558c9); color: #faf8fe; }
-.tutorPanel button:disabled, .tutorForm textarea:disabled { cursor: not-allowed; opacity: .58; }
-.tutorPanel button:focus-visible, .tutorForm textarea:focus-visible { outline: 3px solid #c3b5f4; outline-offset: 2px; }
-.tutorError { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border: 1px solid #ecc9cf; border-radius: 9px; background: #fff7f8; color: #9a3445; }
-.tutorError p { margin: 0; }
+/* Question reveal and full-content search results */
+.choiceList { display: grid; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+.choiceOption { display: flex; min-height: 42px; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #d3cde8; border-radius: 9px; background: #faf8fe; color: var(--text, #2e2a52); cursor: pointer; }
+.choiceOption:hover { border-color: var(--purple, #6558c9); background: #f2eefd; }
+.choiceKey { display: grid; width: 24px; height: 24px; flex: none; place-items: center; border: 1px solid #d4cbf2; border-radius: 999px; background: #f2eefd; color: #5549aa; font-size: 12px; font-weight: 750; }
+.revealedAnswer { margin: 8px 0 0; padding: 10px 12px; border: 1px solid #bfe3d2; border-radius: 9px; background: #f0faf5; color: #167c59; font-weight: 700; }
+.explanation { margin: 8px 0 0; padding: 10px 12px; border: 1px solid #d9d2f5; border-radius: 9px; background: #f4f0ff; color: #3d3870; line-height: 1.6; }
+.explanation strong { color: #3f3694; }
+.searchResultContent { margin: 4px 0 0; color: var(--text, #2e2a52); font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
 
-/* Account panel (recharge / balance) */
-.accountBalanceCard { display: grid; gap: 4px; padding: 14px 16px; border: 1px solid #d9d2f5; border-radius: 12px; background: linear-gradient(135deg, #f2eefd, #faf8fe); }
-.accountBalanceLabel { color: #655e9c; font-size: 12px; font-weight: 700; }
-.accountBalanceValue { color: var(--text, #2e2a52); font-size: 28px; line-height: 1.2; }
-.accountBalanceUnit { font-size: 13px; font-weight: 400; color: #7a74a0; }
-.accountBalanceHint { color: #7a74a0; font-size: 12px; }
-.accountRechargeForm { display: grid; gap: 12px; }
-.accountFieldset { display: grid; gap: 8px; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line, #e7e4ec); border-radius: 10px; }
-.accountFieldset legend { padding: 0 6px; color: #6558c9; font-size: 12px; font-weight: 700; }
-.accountAmountChips { display: flex; flex-wrap: wrap; gap: 8px; }
-.accountAmountChips button { min-height: 36px; padding: 7px 13px; border: 1px solid #d4cee9; border-radius: 999px; background: #faf8fe; color: #524b8a; font: inherit; font-weight: 700; cursor: pointer; }
-.accountAmountChips button[aria-pressed="true"] { border-color: var(--purple, #6558c9); background: var(--purple, #6558c9); color: #faf8fe; }
-.accountCustomLabel { color: #655e9c; font-size: 12px; font-weight: 700; }
-.accountRechargeForm input[type="number"] { box-sizing: border-box; width: 100%; padding: 9px 11px; border: 1px solid #d3cde8; border-radius: 9px; background: #faf8fe; color: var(--text, #2e2a52); font: inherit; }
-.accountProviderRow { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.accountProviderOption { padding: 7px 13px; border: 1px solid var(--purple, #6558c9); border-radius: 999px; background: #f2eefd; color: var(--purple, #6558c9); font-size: 13px; font-weight: 700; }
-.accountProviderDisabled { color: #9a96b8; font-size: 13px; }
-.accountError { margin: 0; }
-.accountRechargeForm .accountError { color: #9a3445; font-size: 13px; }
-.accountRechargeForm .accountSubmitButton { min-height: 42px; justify-self: stretch; border: 1px solid var(--purple, #6558c9); border-radius: 9px; background: var(--purple, #6558c9); color: #faf8fe; }
-.accountRechargeForm .accountSubmitButton:hover:not(:disabled) { border-color: #5145ad; background: #5145ad; color: #faf8fe; }
-.accountRechargeForm .accountSubmitButton:disabled { cursor: not-allowed; opacity: .48; }
-.accountAwaiting { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid #d9d2f5; border-radius: 10px; background: #f4f0ff; }
-.accountAwaiting p { margin: 0; line-height: 1.55; }
-.accountAwaiting button { min-height: 0; align-self: start; padding: 7px 12px; border: 1px solid #d4cee9; border-radius: 8px; background: #faf8fe; color: #524b8a; font: inherit; font-weight: 700; cursor: pointer; }
-.accountPayLink { padding: 7px 12px; border: 1px solid var(--purple, #6558c9); border-radius: 8px; background: var(--purple, #6558c9); color: #faf8fe; font: inherit; font-size: 14px; font-weight: 700; text-decoration: none; justify-self: start; }
-.accountQrBlock { display: grid; justify-items: center; gap: 8px; padding: 10px; border: 1px solid #d9d2f5; border-radius: 10px; background: #fff; justify-self: start; }
-.accountQrImage { width: 200px; height: 200px; }
-.accountQrPlaceholder { margin: 0; min-height: 200px; display: grid; place-items: center; color: #7a74a0; font-size: 13px; }
-.accountQrBlock .accountQrHint { margin: 0; color: #655e9c; font-size: 12px; }
-.accountSuccess { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border: 1px solid #bfe3d2; border-radius: 10px; background: #f0faf5; color: #167c59; }
-.accountSuccess p { margin: 0; }
-.accountSuccess button { min-height: 0; padding: 7px 12px; border: 1px solid #bfe3d2; border-radius: 8px; background: #fff; color: #167c59; font: inherit; font-weight: 700; cursor: pointer; }
-.accountHistory { display: grid; gap: 8px; }
-.accountHistory h3 { margin: 0; color: var(--text, #2e2a52); font-size: 14px; }
-.accountHistoryEmpty { margin: 0; color: #7a74a0; font-size: 13px; }
-.accountHistoryList { display: grid; gap: 6px; margin: 0; max-height: 200px; overflow: auto; padding: 0; list-style: none; }
-.accountHistoryRow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line, #e7e4ec); border-radius: 8px; background: #faf8fe; font-size: 13px; }
-.accountEntryType { color: #6558c9; font-weight: 700; }
-.accountEntryAmount { flex: 1; color: var(--text, #2e2a52); font-variant-numeric: tabular-nums; }
-.accountEntryTime { color: #7a74a0; font-size: 12px; }
-@media (max-width: 767px) { .tutorPanel { padding: 16px; } .tutorHeader { flex-direction: column; } .tutorMessageUser, .tutorMessageAssistant { max-width: 100%; } .tutorForm { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { .tutorPanel * { scroll-behavior: auto; transition-duration: .01ms !important; } }
 /* Workspace knowledge library sidebar */
 .knowledgeLibrary { display: flex; min-height: 0; height: 100%; flex-direction: column; color: var(--text, #2e2a52); background: #f8f6fd; }
 .knowledgeLibraryHeader { display: grid; gap: 12px; padding: 18px 16px 14px; border-bottom: 1px solid var(--line, #e7e4ec); }
@@ -321,14 +236,26 @@
 .knowledgeLibraryStatus { margin: 0; padding: 16px 10px; color: #7a74a0; font-size: 13px; line-height: 1.5; text-align: center; }
 .knowledgeLibraryError { display: grid; gap: 10px; margin: 4px; padding: 12px; border: 1px solid #ecc9cf; border-radius: 9px; background: #fff7f8; color: #9a3445; }
 .knowledgeLibraryError p { margin: 0; font-size: 13px; line-height: 1.5; }
-.knowledgeBaseList { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
-.knowledgeBaseRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: stretch; gap: 3px; }
-.knowledgeBaseName, .knowledgeGraphButton, .knowledgeLibraryFooter button { min-height: 36px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #59519a; font: inherit; cursor: pointer; }
+.knowledgeBaseList { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.knowledgeBaseItem { display: grid; gap: 6px; }
+.knowledgeBaseRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px 46px; align-items: stretch; gap: 3px; }
+.knowledgeBaseName, .knowledgeGraphButton, .knowledgeDeleteButton, .knowledgeLibraryFooter button { min-height: 36px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #514d60; font: inherit; cursor: pointer; }
 .knowledgeBaseName { min-width: 0; padding: 7px 9px; overflow: hidden; font-size: 13px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .knowledgeBaseName[aria-current="page"] { border-color: #d4cbf2; background: #eeeafd; color: #493f9e; font-weight: 750; }
 .knowledgeGraphButton { display: grid; width: 36px; place-items: center; padding: 0; color: #7a74a0; }
 .knowledgeGraphButton svg { width: 17px; height: 17px; stroke: currentColor; stroke-width: 1.7; }
-.knowledgeBaseName:hover, .knowledgeGraphButton:hover, .knowledgeLibraryFooter button:hover { background: #efecf7; color: #493f9e; }
+.knowledgeDeleteButton { width: 46px; padding: 0 5px; color: #8f4050; font-size: 11px; font-weight: 750; }
+.knowledgeBaseName:hover, .knowledgeGraphButton:hover, .knowledgeLibraryFooter button:hover { background: #f1eff5; color: #493f9e; }
+.knowledgeDeleteButton:hover { border-color: #ecc9cf; background: #fff2f4; color: #a22f45; }
+.knowledgeDeleteConfirm { display: grid; gap: 8px; margin: 0 2px 5px; padding: 11px; border: 1px solid #e8c6cd; border-radius: 9px; background: #fff8f9; color: #653b45; }
+.knowledgeDeleteConfirm strong { color: #8d2f42; font-size: 12px; }
+.knowledgeDeleteConfirm p { margin: 0; font-size: 11px; line-height: 1.5; }
+.knowledgeDeleteConfirm label { color: #625763; font-size: 11px; font-weight: 700; }
+.knowledgeDeleteConfirm input { min-height: 34px; box-sizing: border-box; padding: 6px 8px; border: 1px solid #d8c8cc; border-radius: 7px; background: #fff; color: var(--text, #282733); font: inherit; }
+.knowledgeDeleteError { color: #9a3445; }
+.knowledgeDeleteActions { display: flex; justify-content: flex-end; gap: 7px; }
+.knowledgeDeleteActions button { min-height: 34px; padding: 6px 9px; border: 1px solid #d0c8cc; border-radius: 7px; background: #fff; color: #5f5962; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.knowledgeDeleteActions button[type="submit"] { border-color: #a83d52; background: #a83d52; color: #fff; }
 .knowledgeLibraryFooter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 10px 8px 12px; border-top: 1px solid var(--line, #e7e4ec); }
 .knowledgeLibraryFooter button { padding: 7px 8px; font-size: 12px; text-align: left; }
 .knowledgeLibraryFooter button:nth-last-child(1):nth-child(odd) { grid-column: 1 / -1; }
@@ -355,11 +282,14 @@
 /* Workspace Task 5 approved desktop shell */
 .shell { display: block; height: 100dvh; min-width: 0; overflow: hidden; background: var(--bg); }
 .desktopWorkspace { width: 100%; height: 100%; min-width: 0; min-height: 0; }
-.libraryPanelSlot, .centerPanelSlot, .tutorPanelSlot { min-width: 0; min-height: 0; overflow: hidden; }
+.libraryPanelSlot, .centerPanelSlot, .agentPanelSlot { min-width: 0; min-height: 0; overflow: hidden; }
 .centralWorkspace { display: flex; height: 100%; min-width: 0; min-height: 0; flex-direction: column; background: var(--panel-deep); }
-.centralContent { display: flex; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
-.tutorWorkspace { display: flex; height: 100%; min-width: 0; min-height: 0; overflow: hidden; background: #faf8fe; }
-.workspaceTabBar { display: flex; min-width: 0; min-height: 48px; align-items: end; gap: 2px; overflow-x: auto; padding: 7px 10px 0; border-bottom: 1px solid var(--line); background: #f4f2fb; }
+.centralContent { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
+.agentWorkspace { display: flex; height: 100%; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: #fdfcff; }
+.agentWorkspaceBody { min-width: 0; min-height: 0; flex: 1; overflow: auto; }
+.agentWorkspaceBody > * { box-sizing: border-box; min-height: 100%; }
+.agentWorkspaceBody > [aria-label="Workspace Agent"] { padding: 16px; }
+.workspaceTabBar { display: flex; min-width: 0; min-height: 48px; align-items: end; gap: 2px; overflow-x: auto; padding: 7px 10px 0; border-bottom: 1px solid var(--line); background: #f7f6fa; }
 .workspaceTabItem { display: flex; min-width: 0; align-items: center; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; }
 .workspaceTabItem:has(.workspaceTabActive) { border-color: var(--line); background: #faf8fe; }
 .workspaceTabItem > [role="tab"] { min-height: 39px; padding: 8px 12px; border: 0; background: transparent; color: #716ba8; font: inherit; font-weight: 700; white-space: nowrap; cursor: pointer; }
@@ -386,8 +316,9 @@
 .drawer { position: fixed; z-index: 41; top: 0; bottom: 0; display: flex; width: min(88vw, 380px); min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--line); background: #faf8fe; box-shadow: 0 24px 64px rgb(35 31 54 / 24%); }
 .drawerLeft { left: 0; border-left: 0; }
 .drawerRight { right: 0; border-right: 0; }
-.drawerHeader { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px 9px 16px; border-bottom: 1px solid var(--line); background: #faf8fe; }
-.drawerHeader strong { color: #3d3870; font-size: 14px; }
+.agentDrawer { width: min(96vw, 1100px); }
+.drawerHeader { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px 9px 16px; border-bottom: 1px solid var(--line); background: #fff; }
+.drawerHeader strong { color: #353341; font-size: 14px; }
 .drawerBody { min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
 .drawerBody > * { height: 100%; }
 
@@ -617,4 +548,93 @@
   background: #fff;
   color: inherit;
   cursor: pointer;
+}
+
+
+.citationNavigationNotice {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid #e3b6be;
+  border-radius: 10px;
+  background: #fff7f8;
+  color: #8f2f41;
+  box-shadow: 0 10px 28px rgb(49 34 67 / 12%);
+}
+
+.citationNavigationNotice button,
+.vaultFileViewer button {
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.vaultFileViewer {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  padding: 22px;
+  background: #fdfcff;
+}
+
+.vaultFileViewer header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.vaultFileViewer h2,
+.vaultFileViewer p {
+  margin: 0;
+}
+
+.vaultFileViewer h2 {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: #302e3a;
+  font-size: 20px;
+}
+
+.vaultFileViewer header p {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.vaultFileViewer pre {
+  flex: 1;
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f7f8fb;
+  color: var(--text);
+  font: 14px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 719px) {
+  .vaultFileViewer { padding: 14px; }
+  .vaultFileViewer header { flex-direction: column; }
 }

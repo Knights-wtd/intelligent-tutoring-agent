@@ -1,0 +1,35 @@
+{
+  "name": "@textbook-agent/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build:protocol": "pnpm --dir ../../packages/agent-protocol build",
+    "pretest": "pnpm run build:protocol",
+    "test": "jest --runInBand",
+    "pretypecheck": "pnpm run build:protocol",
+    "typecheck": "tsc --noEmit",
+    "prelint": "pnpm run build:protocol",
+    "lint": "tsc --noEmit",
+    "pretest:conformance": "pnpm run build:protocol",
+    "test:conformance": "jest --runInBand tests/conformance",
+    "build": "pnpm run build:protocol && tsc -p tsconfig.build.json",
+    "prestart": "pnpm run build",
+    "start": "node dist/index.js",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.226",
+    "@modelcontextprotocol/sdk": "~1.30.0",
+    "@textbook-agent/agent-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/jest": "30.0.0",
+    "@types/node": "25.5.2",
+    "jest": "30.3.0",
+    "ts-jest": "29.4.9",
+    "typescript": "6.0.2"
+  }
+}

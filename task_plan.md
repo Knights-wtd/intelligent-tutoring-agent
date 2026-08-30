@@ -361,3 +361,72 @@ Per the user-approved three-strike rule, stop here before a fourth repair and re
 The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
 
 Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.
+
+<!-- ACTIVE-AI-TUTOR-RECOVERY:START -->
+## Completed Recovery Task — 2026-08-30：AI 助教恢复 Faro / Gemini
+
+### Objective
+
+保留现有 `AgentPanel → /api/v1/agent → Agent Runtime` 架构，将唯一活跃聊天供应商从 Claude 切换为 Faro OpenAI-compatible 中转站的 `gemini-3.7-flash-tiered`；主界面只保留聊天，“会话记录 / 服务设置”收纳到统一风格的设置浮层。
+
+### Work Items
+
+- [x] 定位根因：Agent Runtime 原来只注册 Claude，Faro 配置虽存在却未进入 Agent 聊天链路；API/数据库旧 provider 设置还可能继续覆盖为 Claude。
+- [x] 新增 Faro Runtime provider 并将 Runtime 注册表切为 Faro；API/Compose 默认切为 `faro / gemini-3.7-flash-tiered / 32000`。
+- [x] Web：完成聊天主视图 + 设置浮层二级页签，服务页固定只读 Faro/Gemini，并更新交互测试。
+- [x] Runtime：补 Faro provider 单测、代理/超时/错误处理和 session history/fork 行为，完成 test/typecheck/build。
+- [x] API：只接受并应用 provider=faro 的固定设置，拒绝错误 provider/model/context，补齐聚焦测试和旧 Claude 会话退休保护。
+- [x] 定向修正本机 `.env` 中非敏感 AGENT_PROVIDER / AGENT_MODEL / AGENT_CONTEXT_WINDOW 值，未读取或输出密钥。
+- [x] 重启 Agent Runtime 与 API/Web/Worker，验证 diagnostics 仅有 provider=faro，并通过 Agent API 完成两次真实最小对话。
+- [x] 完成 Web test/lint/build、Runtime test/typecheck/build、API 聚焦 pytest，并记录验证结果。
+
+### Constraints Preserved
+
+- 未输出 `.env` 全文、API Key、Runtime Token 或 Capability Secret。
+- 未执行 `git reset`、`git clean`、Docker 卷删除或提交操作。
+- 未恢复已退休 Tutor 写接口；活跃 AI 助教继续走 Agent API，唯一 Provider 为 Faro。
+- UI 保持现有暖白/浅紫、细边框、圆角、轻阴影；AI 助教区域不再常驻设置卡片。
+
+### Final Status
+
+- 工作区：`E:\项目\知识库课本\.worktrees\platform-foundation`
+- 分支：`feature/platform-foundation-wip`
+- Host Runtime：PID `35704`，`/v1/diagnostics` 为 `ok`，仅注册 `faro`，详情为 `Faro · gemini-3.7-flash-tiered`。
+- Docker：API/Web/PostgreSQL/Redis 健康，Worker 与 MinIO 正常运行；API `/api/v1/health` 返回 `ok`，Web `http://127.0.0.1:3100` 返回 `200`。
+- 真实 Faro 验收：两次均通过；事件包含 `turn_started`、`user_message`、`model_text_delta`、`session_state`，最新模型文本非空。
+- 测试：API `119 passed`；Web `35 files / 232 tests passed`、ESLint 与 production build 通过；Runtime `25 suites / 86 tests passed`、typecheck 与 build 通过。
+<!-- ACTIVE-AI-TUTOR-RECOVERY:END -->
+
+## 2026-08-30 · 最终稳定性收尾（当前执行）
+
+### 目标
+
+在不回归 Faro/Gemini AI 助教、知识库检索上下文、知识候选生成、UUID 标签隐藏和消息正文隔离的前提下，完成以下最终缺陷：
+
+- [x] 上传后“当前任务”处理状态与数据库权威 workspace 状态自动同步，手动刷新不受缓存影响。
+- [x] 真实 PDF 处理失败的 DataError/invalid_format 根因修复或明确、安全地呈现终态。
+- [x] AI 助教会话记录可实际切回历史聊天；四个会话操作不再是无效控件。
+- [x] 服务设置 Capabilities 四项可操作且有明确持久化语义，不改变固定 Faro/Gemini 供应商约束。
+- [x] 知识库提供安全删除入口，包含权限、活动任务、关系数据和对象存储处理边界。
+- [x] 完成知识候选生成与 AI 助教连接的真实回归，并运行 Web/API/Runtime 自动化验证。
+
+### 执行策略
+
+1. 先为每个可复现缺陷补回归测试，再做最小修复。
+2. Web AI 助教、API PDF Worker、数据库删除审计分开并行，避免写集冲突。
+3. 每批修改后先跑聚焦测试，最后集中跑全量 Web、API 聚焦/全量可行集、Runtime 全量与真实浏览器验收。
+4. 不切换 Claude，不暴露密钥，不删除用户数据做试验，不使用强推。
+
+### 状态
+
+- **Status:** in_progress
+
+## 2026-08-30 · 最终交付验收
+
+- [x] Runtime stop/rewind/fork mutation 合同与 204 空响应处理完成；用户确认分叉非必需，不再继续扩展。
+- [x] 知识库刷新、候选生成、Faro/Gemini AI 助教、会话切换/归档/停止、Capabilities 与删除功能完成回归。
+- [x] 隔离用户真实 Vault 删除 E2E：删除接口 204、Worker 首次轮询即清理目录、详情接口 404。
+- [x] Web、API、Agent Runtime 自动化测试及构建通过，Compose 服务健康，迁移位于 0018 head。
+- [x] 完成最终差异审查，并提交推送到 github-collab/feature/platform-foundation-wip。
+
+- **Status:** complete

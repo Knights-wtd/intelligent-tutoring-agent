@@ -601,3 +601,109 @@ Per the user-approved three-strike rule, stop here before a fourth repair and re
 The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
 
 Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.
+## 2026-08-29 · AI 助教 Faro/Gemini 恢复任务
+
+- 已读取 `systematic-debugging`、`subagent-driven-development` 与 `planning-with-files` skill 指引。
+- 已确认工作区/分支和 Docker 服务状态，并检查关键 Tutor/Agent 文件与 Git HEAD 参考实现。
+- 已向两个已有子代理请求最新结果：Faro 调用链只读调查、TutorPanel UI 实现。
+- 已形成单一根因假设并由代码证据支持：活跃 UI/API 已被切到 Claude Agent，Faro Tutor 写链路被退休，故“连不上”不是单纯外部 API 超时。
+- Web 基线命令完成：`pnpm --dir apps/web exec vitest run src/lib/tutor-api.test.ts src/components/workspace/workspace-shell.test.tsx src/components/workspace/agent-cutover.test.tsx` → 3 files / 21 tests passed（仅表示当前行为自洽）。
+- API 基线命令启动：`pytest apps/api/tests/test_tutor.py apps/api/tests/test_llm_faro.py -q`；运行过程中被用户中断，只有部分通过标记，需重新执行。
+- `session-catchup.py` 首次因系统没有全局 `python` 命令失败；改用 `apps/api/.venv/Scripts/python.exe` 后成功、无额外输出。
+- 下一步：等待并审查 TutorPanel 子代理结果；语义合并恢复 Faro Tutor 后端与 Web API；切回 TutorPanel；运行完整聚焦测试、类型检查、构建与 Docker 实测。
+
+## 2026-08-30 · AI 助教 Faro/Gemini 并行修复恢复
+
+- 恢复上下文后确认继续采用 AgentPanel → Agent API → Agent Runtime 架构，不再恢复已退休 Tutor 写接口。
+- 已启动 Web、Runtime、API 三个互不冲突的子代理；主线程负责环境修正、服务重启和真实连接验收。
+- 安全检查只判断配置是否存在：Faro API key 已设置；本机非敏感 Agent provider/model/context 仍为旧值。
+- 当前 8765 Runtime 健康但运行的是重启前构建，必须在代码和测试完成后重启。
+## 2026-08-30 · AI 助教 Faro/Gemini 修复完成
+
+### 已交付
+
+- Runtime 新增并唯一注册 Faro OpenAI-compatible provider，模型固定为 `gemini-3.7-flash-tiered`，上下文窗口固定为 `32000`；不再注册或回退 Claude。
+- Agent API 固定新会话与设置为 `faro / gemini-3.7-flash-tiered / 32000`，拒绝错误 provider/model/context；旧 Claude/Fable 会话保留历史但写操作返回 `409 agent_session_provider_retired`。
+- Web 的 AI 助教默认区域只保留聊天主界面；右上角设置按钮打开统一风格弹层，二级页签为“会话记录”和“服务设置”。服务配置只读展示 Faro/Gemini/32000，不显示密钥。
+- 旧 Claude/Fable 会话在 Web 中标为只读，不建立实时连接，不允许继续、停止、回退、分叉或发送；仅有旧会话时自动创建新的 Faro 会话。
+- 本机 `.env` 仅定向更新非敏感 Agent provider/model/context；Runtime 与 Docker API/Web/Worker 已按新构建重启。
+
+### 验证记录
+
+- API 聚焦测试：`119 passed`。
+- Web：`35 test files passed / 232 tests passed`；ESLint 通过；Next production build 通过。
+- Runtime：`25 test suites passed / 86 tests passed`；typecheck 通过；build 通过。首次与 Web build 并行时仅 `tests/package.test.ts` 触发 5 秒资源竞争超时，取消并行后全套通过，无需业务代码修复。
+- Host Runtime PID：`35704`。本轮再次运行 `scripts/smoke-agent-runtime.ps1` 通过：Node `24.18.0`、pnpm `11.19.0`、protocol `1.0`。
+- 鉴权 diagnostics：`status=ok`，providers 仅含 `faro`，状态 `ok`，详情 `Faro · gemini-3.7-flash-tiered`；未出现 Claude provider。
+- API `/api/v1/health` 返回 `{"status":"ok","service":"textbook-tutor-api"}`；Web 返回 HTTP `200`；Docker API/Web/PostgreSQL/Redis healthy，Worker 与 MinIO running。
+- 真实 Agent API → Runtime → Faro 对话连续两次通过：POST turn 返回 `202`，事件序列包含 `turn_started`、`user_message`、`model_text_delta`、`session_state`，cursor 匹配，最终 Runtime 状态 `completed`；最新 `model_text_delta` 非空。
+
+### 结论
+
+AI 助教“连接不上”的根因已修复。当前实际聊天链路为 `AgentPanel → /api/v1/agent → Agent Runtime → Faro → Gemini 3.7 Flash`，并已由真实模型响应验证，不再使用 Claude。
+
+## 2026-08-30 · 最终稳定性收尾启动
+
+- [x] 恢复 planning-with-files 上下文并确认工作树仅有既存 `.tmp/` 未跟踪文件。
+- [x] 真实复现正常 Markdown 上传状态链路；确认前端 workspace 与当前上传任务状态不同步。
+- [x] 获取只读子代理报告，确认状态 URL/字段合同正确，建议补 snapshot 同步与 no-store 测试。
+- [x] 将会话历史/Capabilities、PDF Worker、知识库删除与最终回归审计拆成不冲突并行任务。
+- [ ] 主线程：实现上传状态同步与 no-store 回归测试。
+- [ ] 主线程：依据删除审计实现安全知识库删除。
+- [ ] 集成 AI 助教设置修复和 PDF Worker 修复。
+- [ ] 重建并完成真实页面、候选生成、AI 连接和全量测试回归。
+
+## 2026-08-30 · 上传处理状态前端修复
+
+- [x] 先新增 2 个失败测试，分别覆盖 workspace 权威状态自动同步为 `searchable` 与 `failed`，证实旧实现会让“当前任务”永久停留在“处理中”。
+- [x] `knowledge-panel.tsx` 按 `document_id + document_version_id` 将 workspace snapshot 合并到当前知识库的 accepted upload entry；不会影响无 response 的上传中任务或其他知识库。
+- [x] 手动刷新采用单调终态合并，避免迟到的 `processing` 响应把已确认的 `searchable/failed` 回退。
+- [x] workspace/status GET 与 Next 同源代理 GET/HEAD 显式使用 `cache: no-store`，代理响应写入 `Cache-Control: no-store`。
+- [x] 聚焦 Web 回归：3 files / 28 tests passed。
+
+## 2026-08-30 · 最终收尾续跑记录
+
+- AI 会话/Capabilities 子代理已完成：历史选择后关闭设置并回到聊天；归档改用 DELETE；停止按 204 处理；分叉按 checkpoint 合同调用；继续/回退在当前 Faro 合同不支持时明确禁用并说明；Capabilities 改为按知识库保存在当前浏览器，固定 Faro/Gemini/32000 不变。
+- Web 聚焦回归：6 files / 61 tests passed（会话、设置、AgentPanel、上传状态、knowledge API、Next API proxy）。
+- Parser + Worker 并行聚焦测试中 Parser/绝大多数 Worker 用例通过，但 `test_successful_semantic_sibling_does_not_overwrite_failed_change_set` 失败；运行时后端删除子代理正在改 apps/api，stderr 显示临时 IntegrityError，故该结果不作为稳定基线，待代理结束后串行重跑并诊断，避免重复并发测试。
+- 已启动两个互不冲突子代理：后端安全硬删除/outbox；前端删除确认与状态清理。
+- 2026-08-30：第一次通过 PowerShell 管道调用 `apply_patch` 因补丁参数编码不是 UTF-8 失败；改用项目 Python 以 UTF-8 定向替换，未重复同一失败方式。
+- Agent Runtime 全量回归串行通过：25 suites / 92 tests；typecheck 通过；build 通过。
+- 同时修正 `apps/web/src/lib/agent-api.ts` 的遗留 REST 合同：归档改为真实 DELETE，stop/resume/rewind 正确处理 204，branch payload 改为 `checkpoint_id`；对应 Agent API/会话/AgentPanel 3 files / 42 tests passed。
+
+## 2026-08-30 · 最终收尾主线程复核（续）
+
+- 恢复工作树并确认分支 `feature/platform-foundation-wip`、HEAD `06189d0`，既存 `.tmp/` 保留未动；初始 `git diff --check` 通过。
+- Web 聚焦回归：10 files / 113 tests passed。
+- API 聚焦回归（删除、outbox、Parser、Worker、知识库、schema、vault watcher）：225 tests passed；先前并发失败的 Worker 用例本次串行通过。
+- Web 全量：35 files / 261 tests passed；Next production build passed。ESLint 仅发现会话侧栏 2 个未使用参数 warning，已交由前端专项审查消除。
+- Agent Runtime：25 suites / 92 tests passed；typecheck、build passed。
+- API 全量首次直接运行受本机真实 `.env` 影响，health 测试尝试连接 Docker 内部主机名；用显式非敏感 development 测试覆盖后 `test_health.py` 5 passed。另发现 compose 安全测试仍期待旧 context window `1000000`，与当前固定 `32000` 合同不符，已交由后端专项审查修正。未读取或改写 `.env`。
+- 修改文件 Ruff 聚焦检查通过；Docker 旧构建当前 API/Web/PostgreSQL/Redis healthy，Worker/MinIO running，待代码审查完成后重建。
+
+## 2026-08-30 · 最终收尾继续
+
+- 已复核真实浏览器分叉失败日志和 Runtime server 合同，确认当前关键路径为修复 API stop/rewind/fork mutation 元数据与 fork ID 一致性。
+- 已将测试文件的并行补强交给现有子代理，生产代码由主任务独立修改，避免写入冲突。
+- 错误记录：当前 PowerShell 环境未提供全局 `python` 命令；已改用项目虚拟环境 `apps/api/.venv/Scripts/python.exe` 完成同一编辑与语法检查，未再依赖全局 Python。
+- Runtime mutation 生产代码已完成：Client 发送 mutation headers，fork 请求携带预生成 UUID，Runtime 返回 UUID 受模型校验且必须与请求一致，DB fork session 使用同一 UUID；stop/rewind/fork 路由均签发绑定源会话的 workspace capability。
+- Ruff lint 通过；格式检查首次指出 RuntimeClient 单行签名格式，已用 Ruff formatter 修复。
+- API 聚焦测试 32 项通过；API 全量 pytest 通过，Ruff lint 通过。
+- Runtime 25 suites / 92 tests、typecheck、build 全部通过。
+- 额外执行全仓 `ruff format --check` 时发现 69 个既有文件不符合当前 formatter（与本轮改动无关）；为避免制造大范围无关 diff，没有全仓自动格式化。本轮 Agent 相关 12 个文件的 Ruff format check 已通过。
+- 浏览器真实分叉已成功：从主会话创建 `a1aae3a9-2207-4316-a170-c268f8522a38`，URL 切换到新会话，且新会话可经 Faro 返回 `FORK_OK_20260830`。
+- 第一次用全局“分叉”按钮定位触发 strict-mode 多匹配错误；改为按当前 session test id 精确定位后成功。
+- 运行中停止仍出现 HTTP 500。结合 Runtime stop 的 204 合同，怀疑 RuntimeClient 对 204 空响应仍强制 `response.json()`，需要日志确认并补修，防止把已成功的空响应误报为失败。
+- API 日志确认 stop 500 是 `json.decoder.JSONDecodeError`：Runtime 已按合同返回 204，但 RuntimeClient 对所有成功响应都强制解析 JSON。
+- 已修复 RuntimeClient：204 直接返回空对象；其他成功响应若不是有效 JSON/dict，则稳定转换为 `runtime_response_invalid` 502，避免裸异常成为 500。
+- mutation client 测试已改用真实状态码：stop/rewind=204、fork=201；聚焦 32 项测试、Ruff lint/format 均通过。
+
+## 2026-08-30 · Vault 删除真实验收完成
+
+- 按用户最新优先级停止继续扩展分叉功能；现有分叉修复和测试结果保留。
+- 首次 E2E 注册因测试用户名超过接口允许长度返回 422；已改用短用户名继续，未修改产品校验。
+- 隔离 E2E 账号成功创建个人知识库 d99c4390-efc5-4280-a1e5-ee2bf3ccb322，在 Worker 实际 Vault scope 创建证明文件后执行删除。
+- 真实结果：删除 HTTP 204；Vault 目录在第一次轮询时已不存在；知识库详情 HTTP 404。未删除或修改用户现有知识库。
+- 最终已知验证基线：API Agent 聚焦 32 passed、API 全量 pytest 与 Ruff lint 通过；Runtime 25 suites / 92 tests、typecheck、build 通过；Web 35 files / 267 tests、ESLint、production build 通过。
+- Compose 当前 API/Web/PostgreSQL/Redis healthy，Worker/MinIO running；数据库迁移为  018_object_deletion_outbox (head)。
+- 项目修复提交 db9e1b9 fix: complete knowledge and tutor stability 已成功推送至 github-collab/feature/platform-foundation-wip；.tmp/ 保留在本地且未提交，未暂存 .env 或密钥文件。

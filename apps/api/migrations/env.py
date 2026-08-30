@@ -5,6 +5,7 @@ import sqlalchemy as sa
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+import tutor_api.agent.models  # noqa: F401
 import tutor_api.billing.models  # noqa: F401
 import tutor_api.classrooms.models  # noqa: F401
 import tutor_api.identity.models  # noqa: F401
@@ -13,6 +14,7 @@ import tutor_api.providers.models  # noqa: F401
 import tutor_api.question_bank.models  # noqa: F401
 import tutor_api.spaces.models  # noqa: F401
 import tutor_api.tutor.models  # noqa: F401
+import tutor_api.vault.models  # noqa: F401
 from tutor_api.core.database import Base
 
 config = context.config

@@ -4,18 +4,20 @@ import re
 import tempfile
 import unicodedata
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import PurePath
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from tutor_api.identity.models import User
 from tutor_api.knowledge import indexing
 from tutor_api.knowledge.access import (
+    get_deletable_knowledge_base,
     get_readable_knowledge_base,
     get_writable_knowledge_base,
     require_space_read_access,
@@ -42,9 +44,12 @@ from tutor_api.knowledge.models import (
     IngestionJobKind,
     IngestionJobState,
     KnowledgeBase,
+    KnowledgeBaseState,
     KnowledgeUploadRequest,
+    ObjectDeletionOutbox,
     Page,
 )
+from tutor_api.knowledge.object_deletion import build_vault_scope_deletion_key
 from tutor_api.knowledge.parsers import ParsedBlock, ParsedBlockKind, ParsedDocument
 from tutor_api.knowledge.storage import (
     ObjectAlreadyExistsError,
@@ -104,7 +109,10 @@ def list_knowledge_bases(
     return list(
         session.scalars(
             select(KnowledgeBase)
-            .where(KnowledgeBase.space_id == space_id)
+            .where(
+                KnowledgeBase.space_id == space_id,
+                KnowledgeBase.state == KnowledgeBaseState.ACTIVE,
+            )
             .order_by(KnowledgeBase.created_at, KnowledgeBase.id)
         )
     )
@@ -116,122 +124,91 @@ def get_knowledge_base(
     return get_readable_knowledge_base(session, user, knowledge_base_id)
 
 
-@dataclass(frozen=True, slots=True)
-class KnowledgeDocumentSummary:
-    document_id: UUID
-    document_version_id: UUID
-    source_name: str
-    processing_state: str
-    created_at: object
-
-
-def list_knowledge_documents(
-    session: Session, user: User, knowledge_base_id: UUID
-) -> list[KnowledgeDocumentSummary]:
-    """List a knowledge base's active documents with their latest-version state.
-
-    The upload UI keeps its in-session list only per mount, so it needs this to
-    restore previously uploaded documents after a reload or knowledge-base switch.
-    """
-    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
-    documents = list(
-        session.scalars(
-            select(Document)
-            .where(
-                Document.knowledge_base_id == knowledge_base.id,
-                Document.space_id == knowledge_base.space_id,
-                Document.state == DocumentState.ACTIVE,
-            )
-            .order_by(Document.created_at, Document.id)
-        )
-    )
-    summaries: list[KnowledgeDocumentSummary] = []
-    for document in documents:
-        version = session.scalar(
-            select(DocumentVersion)
-            .where(
-                DocumentVersion.document_id == document.id,
-                DocumentVersion.knowledge_base_id == knowledge_base.id,
-                DocumentVersion.space_id == knowledge_base.space_id,
-            )
-            .order_by(DocumentVersion.created_at.desc(), DocumentVersion.id.desc())
-            .limit(1)
-        )
-        if version is None:
-            continue
-        summaries.append(
-            KnowledgeDocumentSummary(
-                document_id=document.id,
-                document_version_id=version.id,
-                source_name=document.source_key,
-                processing_state=get_document_processing_state(
-                    session,
-                    user,
-                    knowledge_base.id,
-                    document.id,
-                    version.id,
-                ),
-                created_at=document.created_at,
-            )
-        )
-    return summaries
-
-
-@dataclass(frozen=True, slots=True)
-class KnowledgeDocumentChunk:
-    ordinal: int
-    content: str
-    page_number: int | None
-
-
-def list_document_chunks(
+def delete_knowledge_base(
     session: Session,
     user: User,
     knowledge_base_id: UUID,
-    document_id: UUID,
-) -> list[KnowledgeDocumentChunk]:
-    """返回一个文档在活动索引里的详细分块内容（完整原文，非检索摘要）。
-
-    学习者在资料查看器里阅读的就是这些分块；文档尚未完成索引时返回空列表。
-    """
-
-    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
-    version = session.scalar(
-        select(DocumentVersion)
-        .where(
-            DocumentVersion.document_id == document_id,
-            DocumentVersion.knowledge_base_id == knowledge_base.id,
-            DocumentVersion.space_id == knowledge_base.space_id,
-            DocumentVersion.state == DocumentVersionState.READY,
+) -> None:
+    knowledge_base = get_deletable_knowledge_base(session, user, knowledge_base_id)
+    jobs = list(
+        session.scalars(
+            select(IngestionJob)
+            .where(IngestionJob.knowledge_base_id == knowledge_base.id)
+            .with_for_update()
         )
-        .order_by(DocumentVersion.version_number.desc(), DocumentVersion.id.desc())
-        .limit(1)
     )
-    if version is None:
-        return []
-    rows = session.execute(
-        select(Chunk.ordinal, Chunk.content, Page.page_number)
-        .join(
-            IndexVersion,
-            and_(
-                IndexVersion.id == Chunk.index_version_id,
-                IndexVersion.state == IndexVersionState.ACTIVE,
-                IndexVersion.knowledge_base_id == knowledge_base.id,
-                IndexVersion.space_id == knowledge_base.space_id,
-            ),
+    if any(job.state == IngestionJobState.RUNNING for job in jobs):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="知识库仍有任务正在运行，请稍后重试",
         )
-        .outerjoin(Page, Page.id == Chunk.page_id)
-        .where(
-            Chunk.document_version_id == version.id,
-            Chunk.knowledge_base_id == knowledge_base.id,
-            Chunk.space_id == knowledge_base.space_id,
+
+    cancelled_at = datetime.now(UTC)
+    for job in jobs:
+        if job.state in {IngestionJobState.QUEUED, IngestionJobState.RETRY_WAIT}:
+            job.state = IngestionJobState.CANCELLED
+            job.lease_owner = None
+            job.lease_expires_at = None
+            job.completed_at = cancelled_at
+            job.last_error_code = "knowledge_base_deleted"
+            job.last_error_detail = None
+    session.flush()
+
+    keys = set(
+        session.scalars(
+            select(DocumentVersion.object_key).where(
+                DocumentVersion.knowledge_base_id == knowledge_base.id
+            )
         )
-        .order_by(Chunk.ordinal)
-    ).all()
-    return [
-        KnowledgeDocumentChunk(ordinal=ordinal, content=content, page_number=page_number)
-        for ordinal, content, page_number in rows
-    ]
+    )
+    page_keys = session.execute(
+        select(Page.text_object_key, Page.image_object_key)
+        .join(DocumentVersion, Page.document_version_id == DocumentVersion.id)
+        .where(DocumentVersion.knowledge_base_id == knowledge_base.id)
+    )
+    for text_key, image_key in page_keys:
+        if text_key:
+            keys.add(text_key)
+        if image_key:
+            keys.add(image_key)
+    if keys:
+        shared_keys = set(
+            session.scalars(
+                select(DocumentVersion.object_key).where(
+                    DocumentVersion.knowledge_base_id != knowledge_base.id,
+                    DocumentVersion.object_key.in_(keys),
+                )
+            )
+        )
+        shared_page_keys = session.execute(
+            select(Page.text_object_key, Page.image_object_key)
+            .join(DocumentVersion, Page.document_version_id == DocumentVersion.id)
+            .where(
+                DocumentVersion.knowledge_base_id != knowledge_base.id,
+                or_(
+                    Page.text_object_key.in_(keys),
+                    Page.image_object_key.in_(keys),
+                ),
+            )
+        )
+        for text_key, image_key in shared_page_keys:
+            if text_key in keys:
+                shared_keys.add(text_key)
+            if image_key in keys:
+                shared_keys.add(image_key)
+        keys.difference_update(shared_keys)
+
+    keys.add(
+        build_vault_scope_deletion_key(
+            knowledge_base.space_id,
+            knowledge_base.id,
+        )
+    )
+    session.add_all(
+        ObjectDeletionOutbox(object_key=object_key) for object_key in sorted(keys)
+    )
+    session.delete(knowledge_base)
+    session.flush()
 
 
 def get_document_processing_state(
@@ -281,42 +258,21 @@ def get_document_processing_state(
     if indexed is not None:
         return "searchable"
 
-    # Push the "did any FAILED job target this version" question into SQL
-    # instead of streaming every failed job of the knowledge base into Python:
-    # ingestion jobs are append-only audit rows, so the old full scan degraded
-    # linearly with the knowledge base's failure history.
-    version_id_text = str(version.id)
-    failed_build_targeting_version = session.scalar(
-        select(IngestionJob.id)
-        .where(
+    failed_jobs = session.scalars(
+        select(IngestionJob).where(
             IngestionJob.knowledge_base_id == knowledge_base.id,
             IngestionJob.space_id == knowledge_base.space_id,
             IngestionJob.state == IngestionJobState.FAILED,
-            IngestionJob.kind == IngestionJobKind.BUILD_INDEX,
-            IngestionJob.checkpoint["document_version_ids"].as_string().contains(
-                version_id_text
-            ),
         )
-        .limit(1)
     )
-    if failed_build_targeting_version is not None:
-        return "failed"
-    failed_parse_or_ocr = session.scalar(
-        select(IngestionJob.id)
-        .where(
-            IngestionJob.knowledge_base_id == knowledge_base.id,
-            IngestionJob.space_id == knowledge_base.space_id,
-            IngestionJob.state == IngestionJobState.FAILED,
-            IngestionJob.kind.in_(
-                (IngestionJobKind.PARSE_DOCUMENT, IngestionJobKind.OCR_PAGE)
-            ),
-            IngestionJob.document_id == document.id,
-            IngestionJob.document_version_id == version.id,
-        )
-        .limit(1)
-    )
-    if failed_parse_or_ocr is not None:
-        return "failed"
+    for job in failed_jobs:
+        if job.kind in {IngestionJobKind.PARSE_DOCUMENT, IngestionJobKind.OCR_PAGE}:
+            if job.document_id == document.id and job.document_version_id == version.id:
+                return "failed"
+        elif job.kind == IngestionJobKind.BUILD_INDEX:
+            version_ids = job.checkpoint.get("document_version_ids", [])
+            if str(version.id) in version_ids:
+                return "failed"
     return "processing"
 
 _UPLOAD_SOURCE_KIND = "upload"
@@ -877,6 +833,19 @@ def enqueue_index_build(
     )
     if existing is not None:
         return existing
+    checkpoint: dict[str, object] = {
+        "document_version_ids": [str(value) for value in request.document_version_ids],
+        "parser_signature": request.parser_signature,
+        "ocr_signature": request.ocr_signature,
+        "chunk_max_chars": request.chunking.max_chars,
+        "chunk_overlap_chars": request.chunking.overlap_chars,
+    }
+    if request.source_snapshot_hash is not None:
+        checkpoint["source_snapshot_hash"] = request.source_snapshot_hash
+    if request.source_change_set_id is not None:
+        checkpoint["source_change_set_id"] = str(request.source_change_set_id)
+    if request.semantic_plan_id is not None:
+        checkpoint["semantic_plan_id"] = str(request.semantic_plan_id)
     job = IngestionJob(
         space_id=request.space_id,
         knowledge_base_id=request.knowledge_base_id,
@@ -884,13 +853,7 @@ def enqueue_index_build(
         kind=IngestionJobKind.BUILD_INDEX,
         state=IngestionJobState.QUEUED,
         idempotency_key=idempotency_key,
-        checkpoint={
-            "document_version_ids": [str(value) for value in request.document_version_ids],
-            "parser_signature": request.parser_signature,
-            "ocr_signature": request.ocr_signature,
-            "chunk_max_chars": request.chunking.max_chars,
-            "chunk_overlap_chars": request.chunking.overlap_chars,
-        },
+        checkpoint=checkpoint,
         created_by_user_id=request.created_by_user_id,
     )
     session.add(job)
@@ -935,3 +898,128 @@ def persist_parsed_document_and_enqueue_build(
         embedding_adapter=embedding_adapter,
         knowledge_base_locked=True,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentSummary:
+    document_id: UUID
+    document_version_id: UUID
+    source_name: str
+    processing_state: str
+    created_at: object
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentChunk:
+    ordinal: int
+    content: str
+    page_number: int | None
+
+
+def list_knowledge_documents(
+    session: Session, user: User, knowledge_base_id: UUID
+) -> list[KnowledgeDocumentSummary]:
+    """List a knowledge base's active documents with their latest-version state.
+
+    The upload UI keeps its in-session list only per mount, so it needs this to
+    restore previously uploaded documents after a reload or knowledge-base switch.
+    """
+    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
+    documents = list(
+        session.scalars(
+            select(Document)
+            .where(
+                Document.knowledge_base_id == knowledge_base.id,
+                Document.space_id == knowledge_base.space_id,
+                Document.state == DocumentState.ACTIVE,
+            )
+            .order_by(Document.created_at, Document.id)
+        )
+    )
+    summaries: list[KnowledgeDocumentSummary] = []
+    for document in documents:
+        version = session.scalar(
+            select(DocumentVersion)
+            .where(
+                DocumentVersion.document_id == document.id,
+                DocumentVersion.knowledge_base_id == knowledge_base.id,
+                DocumentVersion.space_id == knowledge_base.space_id,
+            )
+            .order_by(DocumentVersion.created_at.desc(), DocumentVersion.id.desc())
+            .limit(1)
+        )
+        if version is None:
+            continue
+        summaries.append(
+            KnowledgeDocumentSummary(
+                document_id=document.id,
+                document_version_id=version.id,
+                source_name=document.source_key,
+                processing_state=get_document_processing_state(
+                    session,
+                    user,
+                    knowledge_base.id,
+                    document.id,
+                    version.id,
+                ),
+                created_at=document.created_at,
+            )
+        )
+    return summaries
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentChunk:
+    ordinal: int
+    content: str
+    page_number: int | None
+
+
+def list_document_chunks(
+    session: Session,
+    user: User,
+    knowledge_base_id: UUID,
+    document_id: UUID,
+) -> list[KnowledgeDocumentChunk]:
+    """返回一个文档在活动索引里的详细分块内容（完整原文，非检索摘要）。
+
+    学习者在资料查看器里阅读的就是这些分块；文档尚未完成索引时返回空列表。
+    """
+
+    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
+    version = session.scalar(
+        select(DocumentVersion)
+        .where(
+            DocumentVersion.document_id == document_id,
+            DocumentVersion.knowledge_base_id == knowledge_base.id,
+            DocumentVersion.space_id == knowledge_base.space_id,
+            DocumentVersion.state == DocumentVersionState.READY,
+        )
+        .order_by(DocumentVersion.version_number.desc(), DocumentVersion.id.desc())
+        .limit(1)
+    )
+    if version is None:
+        return []
+    rows = session.execute(
+        select(Chunk.ordinal, Chunk.content, Page.page_number)
+        .join(
+            IndexVersion,
+            and_(
+                IndexVersion.id == Chunk.index_version_id,
+                IndexVersion.state == IndexVersionState.ACTIVE,
+                IndexVersion.knowledge_base_id == knowledge_base.id,
+                IndexVersion.space_id == knowledge_base.space_id,
+            ),
+        )
+        .outerjoin(Page, Page.id == Chunk.page_id)
+        .where(
+            Chunk.document_version_id == version.id,
+            Chunk.knowledge_base_id == knowledge_base.id,
+            Chunk.space_id == knowledge_base.space_id,
+        )
+        .order_by(Chunk.ordinal)
+    ).all()
+    return [
+        KnowledgeDocumentChunk(ordinal=ordinal, content=content, page_number=page_number)
+        for ordinal, content, page_number in rows
+    ]

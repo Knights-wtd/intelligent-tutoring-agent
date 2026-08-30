@@ -122,18 +122,142 @@ describe("KnowledgePanel", () => {
     const first = render(
       <KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />,
     );
-    expect(await screen.findByText("restored.docx")).toBeInTheDocument();
+    expect(await screen.findAllByText("restored.docx")).toHaveLength(2);
     expect(screen.getByText("正在识别章、节、小节并生成候选…")).toBeInTheDocument();
     first.unmount();
 
     render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
-    expect(await screen.findByText("restored.docx")).toBeInTheDocument();
+    expect(await screen.findAllByText("restored.docx")).toHaveLength(2);
     expect(screen.getByText("正在识别章、节、小节并生成候选…")).toBeInTheDocument();
     expect(mockKnowledgeApi.workspace).toHaveBeenCalledTimes(2);
     expect(localStorage.length).toBe(0);
   });
 
+  it("restores searchable upload tasks after refresh and knowledge-base switches", async () => {
+    const user = userEvent.setup();
+    const scienceKnowledgeBase = {
+      ...knowledgeBase,
+      id: "kb-science",
+      name: "八年级物理",
+    };
+    mockKnowledgeApi.workspace.mockImplementation(async (knowledgeBaseId: string) => ({
+      knowledge_base_id: knowledgeBaseId,
+      documents:
+        knowledgeBaseId === knowledgeBase.id
+          ? [
+              {
+                document_id: "doc-searchable",
+                document_version_id: "version-searchable",
+                source_name: "searchable.md",
+                content_type: "text/markdown",
+                processing_state: "searchable",
+                created_at: "2026-08-30T00:00:00Z",
+                updated_at: "2026-08-30T00:00:01Z",
+              },
+            ]
+          : [
+              {
+                document_id: "doc-science",
+                document_version_id: "version-science",
+                source_name: "science.pdf",
+                content_type: "application/pdf",
+                processing_state: "processing",
+                created_at: "2026-08-30T00:00:00Z",
+                updated_at: "2026-08-30T00:00:01Z",
+              },
+            ],
+      candidate_batch: null,
+      notes: [],
+    }));
+    mockKnowledgeApi.startCandidateGeneration.mockResolvedValue({
+      id: "batch-searchable",
+      document_id: "doc-searchable",
+      document_version_id: "version-searchable",
+      generation_number: 1,
+      state: "processing",
+      failure_code: null,
+      notes: [],
+      links: [],
+      created_at: "2026-08-30T00:00:02Z",
+      updated_at: "2026-08-30T00:00:02Z",
+    });
+
+    let view = render(
+      <KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />,
+    );
+    let task = await screen.findByLabelText("当前上传任务");
+    expect(within(task).getByText("searchable.md")).toBeInTheDocument();
+    expect(within(task).getByText("可搜索")).toBeInTheDocument();
+
+    view.unmount();
+    view = render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+    task = await screen.findByLabelText("当前上传任务");
+    expect(within(task).getByRole("button", { name: "生成知识候选" })).toBeEnabled();
+
+    view.rerender(
+      <KnowledgePanel spaceName="八年级物理空间" knowledgeBase={scienceKnowledgeBase} />,
+    );
+    task = await screen.findByLabelText("当前上传任务");
+    expect(within(task).getByText("science.pdf")).toBeInTheDocument();
+    expect(within(task).getByText("处理中")).toBeInTheDocument();
+    expect(within(task).queryByText("searchable.md")).not.toBeInTheDocument();
+
+    view.rerender(
+      <KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />,
+    );
+    task = await screen.findByLabelText("当前上传任务");
+    const generateButton = within(task).getByRole("button", { name: "生成知识候选" });
+    expect(generateButton).toBeEnabled();
+    await user.click(generateButton);
+
+    expect(mockKnowledgeApi.startCandidateGeneration).toHaveBeenCalledWith(
+      knowledgeBase.id,
+      "version-searchable",
+      expect.stringMatching(/^candidate-version-searchable-/),
+    );
+  });
+
+  it("restores processing and failed upload states from the workspace snapshot", async () => {
+    const failedDocument = {
+      document_id: "doc-failed",
+      document_version_id: "version-failed",
+      source_name: "failed.pdf",
+      content_type: "application/pdf",
+      processing_state: "failed" as const,
+      created_at: "2026-08-30T00:00:00Z",
+      updated_at: "2026-08-30T00:00:01Z",
+    };
+    mockKnowledgeApi.workspace.mockResolvedValue({
+      knowledge_base_id: knowledgeBase.id,
+      documents: [
+        {
+          document_id: "doc-processing",
+          document_version_id: "version-processing",
+          source_name: "processing.docx",
+          content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          processing_state: "processing",
+          created_at: "2026-08-30T00:00:00Z",
+          updated_at: "2026-08-30T00:00:01Z",
+        },
+        failedDocument,
+      ],
+      candidate_batch: null,
+      notes: [],
+    });
+
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    const task = await screen.findByLabelText("当前上传任务");
+    const processingEntry = within(task).getByText("processing.docx").parentElement;
+    const failedEntry = within(task).getByText("failed.pdf").parentElement;
+    expect(processingEntry).not.toBeNull();
+    expect(failedEntry).not.toBeNull();
+    expect(within(processingEntry as HTMLElement).getByText("处理中")).toBeInTheDocument();
+    expect(within(failedEntry as HTMLElement).getByText("处理失败")).toBeInTheDocument();
+    expect(within(task).getAllByText("failed.pdf")).toHaveLength(1);
+    expect(within(task).queryByRole("button", { name: "生成知识候选" })).not.toBeInTheDocument();
+  });
   it("keeps a reconnectable message when background snapshot polling is interrupted", async () => {
     vi.useFakeTimers();
     mockKnowledgeApi.workspace
@@ -157,7 +281,7 @@ describe("KnowledgePanel", () => {
 
     render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
     await act(async () => Promise.resolve());
-    expect(screen.getByText("后台解析.docx")).toBeInTheDocument();
+    expect(screen.getAllByText("后台解析.docx")).toHaveLength(2);
 
     await act(async () => {
       vi.advanceTimersByTime(1800);
@@ -167,6 +291,86 @@ describe("KnowledgePanel", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("任务仍在后台执行，可重新连接");
     expect(mockKnowledgeApi.workspace).toHaveBeenCalledTimes(2);
+  });
+
+  it("synchronizes a completed workspace document into the current upload task", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse());
+    mockKnowledgeApi.workspace
+      .mockResolvedValueOnce({
+        knowledge_base_id: knowledgeBase.id,
+        documents: [],
+        candidate_batch: null,
+        notes: [],
+      })
+      .mockResolvedValueOnce({
+        knowledge_base_id: knowledgeBase.id,
+        documents: [
+          {
+            document_id: "doc-1",
+            document_version_id: "version-1",
+            source_name: "chapter.md",
+            content_type: "text/markdown",
+            processing_state: "searchable",
+            created_at: "2026-08-30T00:00:00Z",
+            updated_at: "2026-08-30T00:00:01Z",
+          },
+        ],
+        candidate_batch: null,
+        notes: [],
+      });
+
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["# chapter"], "chapter.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+
+    const task = await screen.findByLabelText("当前上传任务");
+    expect(await within(task).findByText("可搜索")).toBeInTheDocument();
+    expect(mockKnowledgeApi.documentStatus).not.toHaveBeenCalled();
+    expect(within(task).getByRole("button", { name: "生成知识候选" })).toBeEnabled();
+    expect(within(task).getAllByText("chapter.md")).toHaveLength(1);
+  });
+
+  it("synchronizes a failed workspace document into the current upload task", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse());
+    mockKnowledgeApi.workspace
+      .mockResolvedValueOnce({
+        knowledge_base_id: knowledgeBase.id,
+        documents: [],
+        candidate_batch: null,
+        notes: [],
+      })
+      .mockResolvedValueOnce({
+        knowledge_base_id: knowledgeBase.id,
+        documents: [
+          {
+            document_id: "doc-1",
+            document_version_id: "version-1",
+            source_name: "chapter.md",
+            content_type: "application/pdf",
+            processing_state: "failed",
+            created_at: "2026-08-30T00:00:00Z",
+            updated_at: "2026-08-30T00:00:01Z",
+          },
+        ],
+        candidate_batch: null,
+        notes: [],
+      });
+
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["%PDF"], "chapter.pdf", { type: "application/pdf" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+
+    const task = await screen.findByLabelText("当前上传任务");
+    expect(await within(task).findByText("处理失败")).toBeInTheDocument();
+    expect(mockKnowledgeApi.documentStatus).not.toHaveBeenCalled();
   });
 
   it("shows truthful bounded upload state, then a ready file state", async () => {
@@ -239,8 +443,9 @@ describe("KnowledgePanel", () => {
     render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
 
     const hierarchy = screen.getByLabelText("知识库内容层级");
-    expect(await within(hierarchy).findByText("restored.md")).toBeInTheDocument();
-    expect(within(hierarchy).getByText("可搜索")).toBeInTheDocument();
+    // 任务列表(状态操作)与原始资料目录(浏览)按设计同时呈现同一文档。
+    expect((await within(hierarchy).findAllByText("restored.md")).length).toBeGreaterThanOrEqual(1);
+    expect(within(hierarchy).getAllByText("可搜索").length).toBeGreaterThanOrEqual(1);
     expect(mockKnowledgeApi.workspace).toHaveBeenCalledWith(
       knowledgeBase.id,
       expect.anything(),
@@ -277,11 +482,10 @@ describe("KnowledgePanel", () => {
     const hierarchy = screen.getByLabelText("知识库内容层级");
     expect(await within(hierarchy).findByText("chapter.md")).toBeInTheDocument();
 
-    // In the workspace-explorer layout the session upload task list and the
-    // server-restored document list are separate sections; both may show the
-    // same document without the session entry being duplicated.
+    // 会话任务条目(chapter.md)与快照恢复条目(server-copy.md)各自渲染一次;
+    // 原始资料目录行与任务列表并存,同一 server 文档会出现在两个区域。
     expect(within(hierarchy).getAllByText("chapter.md")).toHaveLength(1);
-    await screen.findByText("server-copy.md");
+    expect((await screen.findAllByText("server-copy.md")).length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows failed upload state without internal details and retries the same file", async () => {

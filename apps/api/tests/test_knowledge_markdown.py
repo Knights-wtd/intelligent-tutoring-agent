@@ -136,6 +136,58 @@ def test_formula_candidate_requires_verification_and_preserves_textbook_symbols(
     assert formula.external_sources[0].url == "https://en.wikipedia.org/wiki/Link_budget"
 
 
+def test_empty_formula_verification_list_is_treated_as_no_verification() -> None:
+    candidates = parse_knowledge_candidates(
+        r'''
+        {
+          "notes":[
+            {"key":"concept-mseig","title":"MSEIG","kind":"concept",
+             "parent_key":null,"markdown":"# MSEIG","source_pointers":["page:1#0"],
+             "formula_verification":[]}
+          ],
+          "links":[]
+        }
+        '''
+    )
+
+    assert candidates.notes[0].formula_verification is None
+
+
+def test_formula_verification_list_is_aggregated_without_losing_formulas() -> None:
+    candidates = parse_knowledge_candidates(
+        r'''
+        {
+          "notes":[
+            {"key":"method-epdm","title":"EPDM","kind":"method",
+             "parent_key":null,"markdown":"# EPDM","source_pointers":["page:2#0"],
+             "formula_verification":[
+               {"status":"verified","textbook_expression":"X_1=Split(X)",
+                "normalized_expression":"X_1=\\operatorname{Split}(X)",
+                "variable_mapping":{"X":"input","X_1":"first branch"}},
+               {"status":"verified","textbook_expression":"Y=Concat(X_1,X_2)",
+                "normalized_expression":"Y=\\operatorname{Concat}(X_1,X_2)",
+                "variable_mapping":{"Y":"output","X_1":"first branch"}}
+             ]}
+          ],
+          "links":[]
+        }
+        '''
+    )
+
+    verification = candidates.notes[0].formula_verification
+    assert verification is not None
+    assert verification.status.value == "verified"
+    assert verification.textbook_expression == "X_1=Split(X)\nY=Concat(X_1,X_2)"
+    assert verification.normalized_expression == (
+        r"X_1=\operatorname{Split}(X)" "\n" r"Y=\operatorname{Concat}(X_1,X_2)"
+    )
+    assert [mapping.textbook_symbol for mapping in verification.variable_mapping] == [
+        "X",
+        "X_1",
+        "Y",
+    ]
+
+
 def test_reused_method_supports_term_link_relations() -> None:
     candidates = parse_knowledge_candidates(
         r"""
@@ -361,6 +413,47 @@ def test_candidate_results_merge_repeated_terms_to_one_canonical_note() -> None:
     assert [link.source_pointer for link in merged.links] == [
         "docx#block=150",
         "docx#block=980",
+    ]
+
+
+def test_candidate_merge_preserves_complementary_content_for_one_key() -> None:
+    first = parse_knowledge_candidates(
+        '{"notes":[{"key":"method-epdm","title":"EPDM","kind":"method",'
+        '"parent_key":null,"markdown":"# EPDM\\n\\n公式 A。",'
+        '"source_pointers":["docx#block=150"],'
+        '"formula_verification":{"status":"verified",'
+        '"textbook_expression":"A=X","normalized_expression":"A=X",'
+        '"variable_mapping":{"A":"branch output"}},'
+        '"external_sources":[{"title":"Source A","url":"https://example.com/a"}]'
+        '}],"links":[]}'
+    )
+    second = parse_knowledge_candidates(
+        '{"notes":[{"key":"method-epdm","title":"EPDM","kind":"method",'
+        '"parent_key":null,"markdown":"# EPDM\\n\\n公式 B。",'
+        '"source_pointers":["docx#block=980"],'
+        '"formula_verification":{"status":"verified",'
+        '"textbook_expression":"B=Y","normalized_expression":"B=Y",'
+        '"variable_mapping":{"B":"merged output"}},'
+        '"external_sources":[{"title":"Source B","url":"https://example.com/b"}]'
+        '}],"links":[]}'
+    )
+
+    merged = merge_knowledge_candidates((first, second))
+
+    assert len(merged.notes) == 1
+    note = merged.notes[0]
+    assert "公式 A。" in note.markdown
+    assert "公式 B。" in note.markdown
+    assert note.source_pointers == ("docx#block=150", "docx#block=980")
+    assert note.formula_verification is not None
+    assert note.formula_verification.textbook_expression == "A=X\nB=Y"
+    assert [mapping.textbook_symbol for mapping in note.formula_verification.variable_mapping] == [
+        "A",
+        "B",
+    ]
+    assert [source.url for source in note.external_sources] == [
+        "https://example.com/a",
+        "https://example.com/b",
     ]
 
 

@@ -330,10 +330,7 @@ def test_production_rejects_development_object_endpoints(
     object_storage_endpoint: str,
 ) -> None:
     settings = Settings(
-        **(
-            SAFE_PRODUCTION_SETTINGS
-            | {"object_storage_endpoint": object_storage_endpoint}
-        )
+        **(SAFE_PRODUCTION_SETTINGS | {"object_storage_endpoint": object_storage_endpoint})
     )
 
     assert (
@@ -350,10 +347,7 @@ def test_production_rejects_development_object_access_keys(
     object_storage_access_key: str,
 ) -> None:
     settings = Settings(
-        **(
-            SAFE_PRODUCTION_SETTINGS
-            | {"object_storage_access_key": object_storage_access_key}
-        )
+        **(SAFE_PRODUCTION_SETTINGS | {"object_storage_access_key": object_storage_access_key})
     )
 
     assert "OBJECT_STORAGE_ACCESS_KEY must be replaced" in settings.production_errors()
@@ -373,10 +367,7 @@ def test_production_rejects_invalid_object_access_key_lengths(
     object_storage_access_key: str,
 ) -> None:
     settings = Settings(
-        **(
-            SAFE_PRODUCTION_SETTINGS
-            | {"object_storage_access_key": object_storage_access_key}
-        )
+        **(SAFE_PRODUCTION_SETTINGS | {"object_storage_access_key": object_storage_access_key})
     )
 
     assert (
@@ -397,10 +388,7 @@ def test_production_rejects_placeholder_object_secrets(
     object_storage_secret_key: str,
 ) -> None:
     settings = Settings(
-        **(
-            SAFE_PRODUCTION_SETTINGS
-            | {"object_storage_secret_key": object_storage_secret_key}
-        )
+        **(SAFE_PRODUCTION_SETTINGS | {"object_storage_secret_key": object_storage_secret_key})
     )
 
     errors = settings.production_errors()
@@ -423,10 +411,7 @@ def test_production_rejects_invalid_object_secret_lengths(
     object_storage_secret_key: str,
 ) -> None:
     settings = Settings(
-        **(
-            SAFE_PRODUCTION_SETTINGS
-            | {"object_storage_secret_key": object_storage_secret_key}
-        )
+        **(SAFE_PRODUCTION_SETTINGS | {"object_storage_secret_key": object_storage_secret_key})
     )
 
     errors = settings.production_errors()
@@ -451,9 +436,7 @@ def test_production_accepts_minimum_length_object_credentials() -> None:
 
 
 def test_production_rejects_http_web_origin_one_fallback_at_a_time() -> None:
-    settings = Settings(
-        **(SAFE_PRODUCTION_SETTINGS | {"web_origin": "http://app.example.com"})
-    )
+    settings = Settings(**(SAFE_PRODUCTION_SETTINGS | {"web_origin": "http://app.example.com"}))
 
     assert settings.production_errors() == ["WEB_ORIGIN must use HTTPS"]
 
@@ -470,9 +453,7 @@ def test_settings_do_not_expose_url_credentials_in_repr_or_errors() -> None:
                     f"postgresql+psycopg://app:{database_password}@db.example.com/textbook"
                 ),
                 "redis_url": f"redis://app:{redis_password}@localhost:6379/0",
-                "object_storage_endpoint": (
-                    f"https://app:{object_password}@objects.example.com"
-                ),
+                "object_storage_endpoint": (f"https://app:{object_password}@objects.example.com"),
             }
         )
     )
@@ -497,12 +478,7 @@ def test_settings_do_not_expose_url_credentials_in_repr_or_errors() -> None:
 )
 def test_settings_reject_invalid_session_cookie_names(session_cookie_name: str) -> None:
     with pytest.raises(ValueError, match="SESSION_COOKIE_NAME"):
-        Settings(
-            **(
-                SAFE_PRODUCTION_SETTINGS
-                | {"session_cookie_name": session_cookie_name}
-            )
-        )
+        Settings(**(SAFE_PRODUCTION_SETTINGS | {"session_cookie_name": session_cookie_name}))
 
 
 @pytest.mark.parametrize("session_ttl_seconds", [3599, 2_592_001])
@@ -510,9 +486,77 @@ def test_settings_reject_session_ttl_outside_supported_range(
     session_ttl_seconds: int,
 ) -> None:
     with pytest.raises(ValueError, match="SESSION_TTL_SECONDS"):
-        Settings(
-            **(
-                SAFE_PRODUCTION_SETTINGS
-                | {"session_ttl_seconds": session_ttl_seconds}
-            )
-        )
+        Settings(**(SAFE_PRODUCTION_SETTINGS | {"session_ttl_seconds": session_ttl_seconds}))
+
+
+def test_agent_runtime_configuration_ignores_stale_claude_overrides() -> None:
+    settings = Settings(
+        _env_file=None,
+        agent_provider="claude",
+        agent_model="fable",
+        agent_context_window=1_000_000,
+    )
+
+    assert settings.agent_provider == "faro"
+    assert settings.agent_model == "gemini-3.7-flash-tiered"
+    assert settings.agent_context_window == 32_000
+
+
+def test_agent_defaults_target_faro_gemini_without_fixed_evidence_limits() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.agent_context_window == 32_000
+    assert settings.agent_provider == "faro"
+    assert settings.agent_model == "gemini-3.7-flash-tiered"
+    assert settings.agent_inline_event_bytes == 262_144
+    assert settings.agent_runtime_url == "http://host.docker.internal:8765"
+    assert not hasattr(settings, "agent_evidence_limit")
+    assert not hasattr(settings, "agent_history_messages")
+    assert not hasattr(settings, "agent_web_search_max_results")
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [
+        pytest.param("", (), id="blank"),
+        pytest.param(" skills/core , skills/local ", ("skills/core", "skills/local"), id="csv"),
+        pytest.param(("skills/core",), ("skills/core",), id="tuple"),
+    ],
+)
+def test_agent_path_lists_accept_blank_and_comma_separated_env_values(
+    raw_value: object, expected: tuple[str, ...]
+) -> None:
+    settings = Settings(
+        agent_mcp_config_paths=raw_value,
+        agent_skill_paths=raw_value,
+    )
+
+    assert settings.agent_mcp_config_paths == expected
+    assert settings.agent_skill_paths == expected
+
+
+def test_agent_secret_settings_are_secret_values() -> None:
+    settings = Settings(
+        agent_runtime_token="runtime-secret-value",
+        agent_capability_secret="capability-secret-value",
+    )
+
+    assert settings.agent_runtime_token.get_secret_value() == "runtime-secret-value"
+    assert settings.agent_capability_secret.get_secret_value() == "capability-secret-value"
+    assert "runtime-secret-value" not in repr(settings)
+    assert "capability-secret-value" not in repr(settings)
+
+
+def test_vault_watcher_intervals_are_configurable_and_positive() -> None:
+    settings = Settings(
+        agent_vault_watch_debounce_ms=125,
+        agent_vault_reconcile_interval_seconds=45,
+    )
+
+    assert settings.agent_vault_watch_debounce_ms == 125
+    assert settings.agent_vault_reconcile_interval_seconds == 45
+
+    with pytest.raises(ValueError):
+        Settings(agent_vault_watch_debounce_ms=0)
+    with pytest.raises(ValueError):
+        Settings(agent_vault_reconcile_interval_seconds=0)

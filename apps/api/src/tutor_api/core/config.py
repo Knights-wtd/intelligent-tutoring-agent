@@ -121,6 +121,26 @@ class Settings(BaseSettings):
     faro_context_window: int = 32_000
     faro_timeout_seconds: int = 60
     faro_max_concurrency: int = 2
+    agent_runtime_url: str = Field(default="http://host.docker.internal:8765", repr=False)
+    # Trusted host-reachable callback used by the host-native Runtime. Never derive
+    # this URL from a proxied request Host header (for example ``web:3000``).
+    agent_runtime_callback_url: str = Field(
+        default="http://127.0.0.1:8000/api/v1/agent/runtime/events", repr=False
+    )
+    agent_runtime_token: SecretStr = Field(default=SecretStr(""), repr=False)
+    agent_capability_secret: SecretStr = Field(default=SecretStr(""), repr=False)
+    agent_vault_root: str = ".agent-data/vault"
+    agent_vault_watch_debounce_ms: int = Field(default=500, ge=1, le=60_000)
+    agent_vault_reconcile_interval_seconds: int = Field(default=300, ge=1, le=86_400)
+    agent_sidecar_root: str = ".agent-data/sidecars"
+    agent_provider: str = "faro"
+    agent_model: str = "gemini-3.7-flash-tiered"
+    agent_context_window: int = Field(default=32_000, ge=1)
+    agent_inline_event_bytes: int = Field(default=262_144, ge=1)
+    agent_mcp_config_paths: Annotated[tuple[str, ...], NoDecode] = ()
+    agent_skill_paths: Annotated[tuple[str, ...], NoDecode] = ()
+    agent_subagent_concurrency: int = Field(default=4, ge=1)
+    agent_tool_concurrency: int = Field(default=8, ge=1)
     # Optional explicit egress proxy for provider calls, e.g.
     # http://host.docker.internal:7890 on container deployments where direct
     # TLS to the provider is unreliable. Empty means direct connection.
@@ -166,6 +186,7 @@ class Settings(BaseSettings):
     @property
     def effective_citation_hmac_secret(self) -> str:
         return (self.citation_hmac_secret or self.object_storage_secret_key).get_secret_value()
+
     provider_profiles: Annotated[tuple[ProviderProfileConfig, ...], NoDecode] = Field(
         default=(),
         validation_alias=AliasChoices("PROVIDER_PROFILES_JSON", "provider_profiles_json"),
@@ -199,6 +220,38 @@ class Settings(BaseSettings):
             raise ValueError("PROVIDER_PROFILES_JSON must not contain duplicate profile IDs")
         return value
 
+    @field_validator("agent_provider", mode="before")
+    @classmethod
+    def lock_agent_provider_to_faro(cls, value: Any) -> str:
+        del value
+        return "faro"
+
+    @field_validator("agent_model", mode="before")
+    @classmethod
+    def lock_agent_model_to_gemini(cls, value: Any) -> str:
+        del value
+        return "gemini-3.7-flash-tiered"
+
+    @field_validator("agent_context_window", mode="before")
+    @classmethod
+    def lock_agent_context_window(cls, value: Any) -> int:
+        del value
+        return 32_000
+
+    @field_validator("agent_mcp_config_paths", "agent_skill_paths", mode="before")
+    @classmethod
+    def parse_agent_path_lists(cls, value: Any) -> tuple[str, ...]:
+        if isinstance(value, str):
+            values = value.split(",") if value.strip() else ()
+        elif isinstance(value, (tuple, list)):
+            values = value
+        else:
+            raise ValueError("Agent path lists must be comma-separated strings")
+        normalized = tuple(item.strip() if isinstance(item, str) else "" for item in values)
+        if any(not item for item in normalized):
+            raise ValueError("Agent path lists must not contain empty paths")
+        return tuple(dict.fromkeys(normalized))
+
     @field_validator("platform_admin_emails", mode="before")
     @classmethod
     def parse_platform_admin_emails(cls, value: Any) -> tuple[str, ...]:
@@ -226,9 +279,7 @@ class Settings(BaseSettings):
     @classmethod
     def validate_knowledge_upload_max_bytes(cls, value: int) -> int:
         if not 1 <= value <= 2 * 1024 * 1024 * 1024:
-            raise ValueError(
-                "KNOWLEDGE_UPLOAD_MAX_BYTES must be between 1 and 2147483648"
-            )
+            raise ValueError("KNOWLEDGE_UPLOAD_MAX_BYTES must be between 1 and 2147483648")
         return value
 
     @field_validator("max_vault_files")
@@ -242,9 +293,7 @@ class Settings(BaseSettings):
     @classmethod
     def validate_max_vault_uncompressed_bytes(cls, value: int) -> int:
         if not 1 <= value <= 20 * 1024 * 1024 * 1024:
-            raise ValueError(
-                "MAX_VAULT_UNCOMPRESSED_BYTES must be between 1 and 21474836480"
-            )
+            raise ValueError("MAX_VAULT_UNCOMPRESSED_BYTES must be between 1 and 21474836480")
         return value
 
     @field_validator("embedding_dimension")
@@ -357,9 +406,7 @@ class Settings(BaseSettings):
             else ""
             for language in values
         )
-        if not normalized or any(
-            not _LANGUAGE_NAME.fullmatch(language) for language in normalized
-        ):
+        if not normalized or any(not _LANGUAGE_NAME.fullmatch(language) for language in normalized):
             raise ValueError("OCR_LANGUAGES must contain safe language names")
         return tuple(dict.fromkeys(normalized))
 
@@ -535,20 +582,14 @@ class Settings(BaseSettings):
         object_access_key = self.object_storage_access_key
         trimmed_object_access_key = object_access_key.strip()
         if object_access_key != trimmed_object_access_key or len(trimmed_object_access_key) < 3:
-            errors.append(
-                "OBJECT_STORAGE_ACCESS_KEY must be trimmed and at least 3 characters"
-            )
+            errors.append("OBJECT_STORAGE_ACCESS_KEY must be trimmed and at least 3 characters")
         if trimmed_object_access_key.casefold() in _DEVELOPMENT_OBJECT_ACCESS_KEYS:
             errors.append("OBJECT_STORAGE_ACCESS_KEY must be replaced")
         object_secret_key = self.object_storage_secret_key.get_secret_value()
         trimmed_object_secret_key = object_secret_key.strip()
         if object_secret_key != trimmed_object_secret_key or len(trimmed_object_secret_key) < 8:
-            errors.append(
-                "OBJECT_STORAGE_SECRET_KEY must be trimmed and at least 8 characters"
-            )
-        if (
-            trimmed_object_secret_key.casefold() in _DEVELOPMENT_OBJECT_SECRETS
-        ):
+            errors.append("OBJECT_STORAGE_SECRET_KEY must be trimmed and at least 8 characters")
+        if trimmed_object_secret_key.casefold() in _DEVELOPMENT_OBJECT_SECRETS:
             errors.append("OBJECT_STORAGE_SECRET_KEY must be replaced")
         if self.web_origin.startswith("http://"):
             errors.append("WEB_ORIGIN must use HTTPS")

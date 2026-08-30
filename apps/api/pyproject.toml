@@ -22,7 +22,8 @@ dependencies = [
   "redis>=6,<7",
   "sqlalchemy>=2.0,<3",
   "starlette>=1.6,<2",
-  "uvicorn[standard]>=0.35,<1"
+  "uvicorn[standard]>=0.35,<1",
+  "watchfiles>=1.2,<2"
 ]
 
 [project.optional-dependencies]
