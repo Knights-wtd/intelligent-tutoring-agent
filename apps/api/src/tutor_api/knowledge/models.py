@@ -9,6 +9,7 @@ from weakref import ref
 from sqlalchemy import (
     DDL,
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -429,6 +430,15 @@ class MarkdownNote(Base):
             ["documents.id", "documents.knowledge_base_id", "documents.space_id"],
             name="fk_markdown_note_source_document_kb_space",
         ),
+        ForeignKeyConstraint(
+            ["vault_file_id", "knowledge_base_id", "space_id"],
+            ["vault_files.id", "vault_files.knowledge_base_id", "vault_files.space_id"],
+            name="fk_markdown_note_vault_file_kb_space",
+        ),
+        CheckConstraint(
+            "content_hash IS NULL OR " + _sha256_check("content_hash"),
+            name="ck_markdown_note_content_hash",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -436,6 +446,24 @@ class MarkdownNote(Base):
         ForeignKey("spaces.id", ondelete="CASCADE"), nullable=False, index=True
     )
     knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
+    vault_file_id: Mapped[UUID | None] = mapped_column(index=True, unique=True)
+    vault_relative_path: Mapped[str | None] = mapped_column(String(2048))
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    sync_state: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pending", server_default="pending", index=True
+    )
+    last_change_set_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "vault_change_sets.id",
+            name="fk_markdown_note_last_change_set",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
+    is_tombstoned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
+    tombstoned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     source_document_id: Mapped[UUID | None] = mapped_column(index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     normalized_title: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -473,6 +501,14 @@ class MarkdownRevision(Base):
         CheckConstraint(
             "content_sha256 IS NULL OR " + _sha256_check("content_sha256"),
             name="ck_markdown_revision_sha256",
+        ),
+        CheckConstraint(
+            "before_hash IS NULL OR " + _sha256_check("before_hash"),
+            name="ck_markdown_revision_before_hash",
+        ),
+        CheckConstraint(
+            "after_hash IS NULL OR " + _sha256_check("after_hash"),
+            name="ck_markdown_revision_after_hash",
         ),
         ForeignKeyConstraint(
             ["note_id", "knowledge_base_id", "space_id"],
@@ -517,6 +553,34 @@ class MarkdownRevision(Base):
     )
     markdown: Mapped[str | None] = mapped_column(Text)
     content_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    change_set_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "vault_change_sets.id",
+            name="fk_markdown_revision_change_set",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
+    agent_session_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "agent_sessions.id",
+            name="fk_markdown_revision_agent_session",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
+    agent_turn_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "agent_turns.id",
+            name="fk_markdown_revision_agent_turn",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
+    tool_call_id: Mapped[str | None] = mapped_column(String(512), index=True)
+    change_source: Mapped[str | None] = mapped_column(String(100), index=True)
+    before_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    after_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     source_markers: Mapped[list[str]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=False,
@@ -610,6 +674,14 @@ class IndexVersion(Base):
             "embedding_dimension BETWEEN 8 AND 4096",
             name="ck_index_embedding_dimension_range",
         ),
+        CheckConstraint(
+            "planner_prompt_hash IS NULL OR " + _sha256_check("planner_prompt_hash"),
+            name="ck_index_planner_prompt_hash",
+        ),
+        CheckConstraint(
+            "source_snapshot_hash IS NULL OR " + _sha256_check("source_snapshot_hash"),
+            name="ck_index_source_snapshot_hash",
+        ),
         ForeignKeyConstraint(
             ["knowledge_base_id", "space_id"],
             ["knowledge_bases.id", "knowledge_bases.space_id"],
@@ -646,6 +718,22 @@ class IndexVersion(Base):
     embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
     embedding_contract_signature: Mapped[str] = mapped_column(String(512), nullable=False)
     index_signature: Mapped[str] = mapped_column(String(512), nullable=False)
+    planner_provider: Mapped[str | None] = mapped_column(String(100))
+    planner_model: Mapped[str | None] = mapped_column(String(255))
+    planner_schema_version: Mapped[str | None] = mapped_column(String(50))
+    planner_prompt_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_change_set_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey(
+            "vault_change_sets.id",
+            name="fk_index_version_source_change_set",
+            ondelete="SET NULL",
+        ),
+        index=True,
+    )
+    source_snapshot_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    activation_status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pending", server_default="pending", index=True
+    )
     created_by_user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id"), nullable=False, index=True
     )

@@ -36,43 +36,16 @@ Start-Process -WindowStyle Hidden `
 
 该中继只允许连接 `faroapi.com:443`，不会转发任意目标。API 和 worker 共用同一套 Faro 网络客户端：当已配置的中继在**建立连接阶段**不可达时，会安全回退到容器直连；一旦已经收到 HTTP 响应则不会重复发送 POST。这样宿主机中继停止后不会在容器直连可用时同时拖垮 AI 助教和候选生成。若不再需要中继，应清空 `FARO_PROXY_URL`；修改该变量后需要重新创建 API 和 worker 容器。
 
-```powershell
-docker compose --env-file .env up --build -d
-docker compose --env-file .env ps
-```
 
-### 首次拉取或 Python 依赖更新后必须重建镜像
+### Workspace Agent、Vault 与公共 Web 边界
 
-Docker 用户不需要在 Windows 上单独安装 Python 包。API 与 Worker 的 Python 依赖由 `apps/api/requirements.lock` 安装进 `textbook-tutor-api` 镜像；当前版本已经锁定 `httpx==0.28.1`。如果拉取更新后仍复用旧镜像，Worker 可能报告 `ModuleNotFoundError: No module named 'httpx'`。
+工作区的唯一新交互入口是 Workspace Agent。Agent Runtime 运行在宿主机，复用永久 Vault 中用户有权访问的 Markdown、模型自身知识、经安全策略允许的公共 Web、MCP、Skills 与子代理；旧 Tutor 会话仅保留只读历史和引用投影，旧创建/发送接口返回 `410 legacy_tutor_retired`，替代入口为 `/api/v1/agent`。
 
-遇到这种情况，不要在运行中的容器里执行临时 `pip install`，因为容器重建后临时安装会丢失。请从仓库根目录重建并重新创建 API、Worker 和 Web：
+Agent 目标上下文窗口为 1,000,000 tokens，不再通过旧 Tutor 的问题字符数、历史条数、本地证据数、知识库数或网页结果数做静默裁剪。资源治理改由可调的 Runtime 请求超时、并发与 backpressure、inline event 大小、sidecar 存储、磁盘水位、session idle/warm 生命周期负责；超限或依赖不可用必须显式失败。普通文件工具仍受 API 签发 capability 中的用户、space、knowledge base 和路径范围约束，跨用户个人空间与未加入班级不可读。
 
-```powershell
-docker compose --env-file .env build --no-cache api worker
-docker compose --env-file .env up -d --force-recreate api worker web
-docker compose --env-file .env exec api python -c "import httpx; print(httpx.__version__)"
-```
+`bypassPermissions` 只表示 Runtime 内的 Agent 权限模式，不会绕过控制面的 ACL。Runtime 的 Bash/进程工具拥有宿主机账号可获得的权限，因此生产部署应使用专用低权限账号、限制 Vault 根目录、MCP 配置和 Skills 来源，并把 Runtime 端口仅绑定到回环地址。公共 Web 工具必须保留 SSRF 防护、重定向复检、私网与本机地址拒绝；不再使用固定 Wikipedia adapter。Runtime 不可用时 Agent 路由返回可恢复的 `503`，健康检查、登录、知识库浏览和旧历史读取继续可用。
 
-最后一条命令应输出 `0.28.1`。如果 API 日志显示 PostgreSQL `password authentication failed`，那是 `.env` 与既有数据库卷密码不一致，不是 Python 依赖问题；请按本文“首次启动后修改了 PostgreSQL 密码”一节处理，不要用安装依赖或反复重建镜像来掩盖凭据不一致。
-
-启动完成后可访问：
-
-- Web 工作区：`http://localhost:${WEB_PORT}`（默认 `3000`；可在 `.env` 中换成新端口）
-- API 健康检查：<http://127.0.0.1:8000/api/v1/health>
-- MinIO 管理界面：<http://127.0.0.1:9001>
-
-需要查看启动日志或停止服务时：
-
-```powershell
-docker compose --env-file .env logs --tail 200
-docker compose --env-file .env down
-```
-
-浏览器默认通过同源的 `/api` 服务端代理访问后端（代理目标由 Web 容器的 `API_INTERNAL_URL` 决定），因此不需要设置任何浏览器端变量。`.env.example` 中的 `NEXT_PUBLIC_API_BASE_URL` 仅作为可选覆盖：把它设置为可公开访问的后端地址并重建 Web 后，浏览器会直连该地址而不是走代理。无论哪种方式，修改它以后都必须重建 Web：
-
-```powershell
-docker compose --env-file .env up --build -d web
-```
+Vault 迁移按 `inventory → copy → verify → activate-shadow → cutover` 顺序执行；任何 cutover 前都必须验证 manifest、source snapshot、hash 与 shadow 状态。回滚恢复旧 active index/knowledge workspace 路径且不删除 Vault 或旧 Tutor 数据。迁移与回滚报告写入 `artifacts/agent-migration/`。Claudian 上游版本、commit、MIT 许可证和下游补丁仅保存在 Runtime 后端的 `UPSTREAM.md`、`THIRD_PARTY_NOTICES.md`、`PATCHES.md` 与 `licenses/` 中，不在最终用户前端展示。
 
 ## 不使用 Docker 的开发方式
 

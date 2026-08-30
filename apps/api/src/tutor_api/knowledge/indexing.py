@@ -33,6 +33,7 @@ from tutor_api.knowledge.models import (
 _MAX_CHUNK_CHARS = 100_000
 _TERM = re.compile(r"[^\W_]+", re.UNICODE)
 
+
 # pgvector stores VECTOR elements as PostgreSQL single-precision (float4) values.
 def _quantize_embedding_values_to_float4(values: list[float]) -> tuple[int, ...] | None:
     try:
@@ -132,6 +133,9 @@ class IndexBuildRequest:
     parser_signature: str
     ocr_signature: str
     chunking: ChunkingConfig
+    source_change_set_id: UUID | None = None
+    source_snapshot_hash: str | None = None
+    semantic_plan_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if not self.document_version_ids:
@@ -140,6 +144,10 @@ class IndexBuildRequest:
             raise ValueError("document_version_ids must be unique")
         if not self.parser_signature or not self.ocr_signature:
             raise ValueError("pipeline signatures must not be blank")
+        if self.source_snapshot_hash is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.source_snapshot_hash
+        ):
+            raise ValueError("source_snapshot_hash must be a lowercase SHA-256")
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +199,8 @@ def make_index_signature(
     ocr_signature: str,
     chunking_signature: str,
     embedding_signature: str,
+    source_snapshot_hash: str | None = None,
+    semantic_plan_id: UUID | None = None,
 ) -> str:
     sources = sorted((str(version_id), sha256) for version_id, sha256 in document_sources)
     if not sources or any(not re.fullmatch(r"[0-9a-f]{64}", sha256) for _, sha256 in sources):
@@ -206,6 +216,8 @@ def make_index_signature(
             "knowledge_base_id": str(knowledge_base_id),
             "ocr": ocr_signature,
             "parser": parser_signature,
+            "semantic_plan_id": str(semantic_plan_id) if semantic_plan_id else None,
+            "source_snapshot_hash": source_snapshot_hash,
             "signature_version": 1,
         },
     )
@@ -570,6 +582,8 @@ def prepare_index_build(
         ocr_signature=request.ocr_signature,
         chunking_signature=request.chunking.signature,
         embedding_signature=embedding_contract_signature,
+        source_snapshot_hash=request.source_snapshot_hash,
+        semantic_plan_id=request.semantic_plan_id,
     )
     existing = session.scalar(
         select(IndexVersion).where(
@@ -600,6 +614,8 @@ def prepare_index_build(
         embedding_dimension=adapter.dimension,
         embedding_contract_signature=embedding_contract_signature,
         index_signature=signature,
+        source_change_set_id=request.source_change_set_id,
+        source_snapshot_hash=request.source_snapshot_hash,
         created_by_user_id=request.created_by_user_id,
     )
     session.add(index)
@@ -613,13 +629,17 @@ def build_index(
     adapter: EmbeddingAdapter,
     *,
     now: datetime | None = None,
+    activate: bool = True,
 ) -> IndexBuildResult:
-    """Build all chunks under one version, then validate and atomically activate it."""
+    """Build and validate one immutable index, optionally deferring activation."""
 
     timestamp = now or datetime.now(UTC)
     index = prepare_index_build(session, request, adapter)
     signature = index.index_signature
-    if index.state in (IndexVersionState.ACTIVE, IndexVersionState.RETIRED):
+    reusable_states = (IndexVersionState.ACTIVE, IndexVersionState.RETIRED)
+    if not activate:
+        reusable_states += (IndexVersionState.READY,)
+    if index.state in reusable_states:
         count = (
             session.scalar(
                 select(func.count()).select_from(Chunk).where(Chunk.index_version_id == index.id)
@@ -660,7 +680,14 @@ def build_index(
             )
             session.flush()
             _validate_persisted_index(session, index, prepared)
-            _activate_building_index(session, index, timestamp)
+            if activate:
+                _activate_building_index(session, index, timestamp)
+            else:
+                index.state = IndexVersionState.READY
+                index.completed_at = timestamp
+                index.activated_at = None
+                index.activation_status = "deterministic_ready"
+                session.flush()
     except Exception as error:
         session.expire_all()
         failed = session.get(IndexVersion, index.id)

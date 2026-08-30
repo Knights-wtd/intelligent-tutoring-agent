@@ -7,6 +7,7 @@ export type WorkspacePreference = {
 
 const fixedTabIds = new Set<WorkspaceTab["id"]>(["today", "knowledge", "practice"]);
 const safeIdPattern = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/u;
+const legacyAssistantModes = new Set(["tutor", "agent"]);
 
 function isSafeId(value: unknown): value is string {
   return typeof value === "string" && safeIdPattern.test(value);
@@ -18,23 +19,33 @@ function isActiveTabId(value: unknown): value is WorkspaceTab["id"] {
   return value.startsWith("graph:") && isSafeId(value.slice("graph:".length));
 }
 
-function isWorkspacePreference(value: unknown): value is WorkspacePreference {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+function parseWorkspacePreference(value: unknown): WorkspacePreference | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
 
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
+  const hasLegacyAssistantMode =
+    keys.length === 3 && Object.prototype.hasOwnProperty.call(record, "assistantMode");
   if (
-    keys.length !== 2 ||
+    (keys.length !== 2 && !hasLegacyAssistantMode) ||
     !Object.prototype.hasOwnProperty.call(record, "selectedKnowledgeBaseId") ||
     !Object.prototype.hasOwnProperty.call(record, "activeTabId")
   ) {
-    return false;
+    return null;
+  }
+  if (
+    !(record.selectedKnowledgeBaseId === null || isSafeId(record.selectedKnowledgeBaseId)) ||
+    !isActiveTabId(record.activeTabId) ||
+    (hasLegacyAssistantMode &&
+      (typeof record.assistantMode !== "string" || !legacyAssistantModes.has(record.assistantMode)))
+  ) {
+    return null;
   }
 
-  return (
-    (record.selectedKnowledgeBaseId === null || isSafeId(record.selectedKnowledgeBaseId)) &&
-    isActiveTabId(record.activeTabId)
-  );
+  return {
+    selectedKnowledgeBaseId: record.selectedKnowledgeBaseId,
+    activeTabId: record.activeTabId,
+  };
 }
 
 export function readWorkspacePreference(spaceId: string): WorkspacePreference | null {
@@ -42,7 +53,7 @@ export function readWorkspacePreference(spaceId: string): WorkspacePreference | 
     const stored = localStorage.getItem(`workspace:${spaceId}`);
     if (stored === null) return null;
     const parsed: unknown = JSON.parse(stored);
-    return isWorkspacePreference(parsed) ? parsed : null;
+    return parseWorkspacePreference(parsed);
   } catch {
     return null;
   }
@@ -52,11 +63,11 @@ export function writeWorkspacePreference(
   spaceId: string,
   preference: WorkspacePreference,
 ): void {
-  const persisted: WorkspacePreference = {
+  const persisted = parseWorkspacePreference({
     selectedKnowledgeBaseId: preference.selectedKnowledgeBaseId,
     activeTabId: preference.activeTabId,
-  };
-  if (!isWorkspacePreference(persisted)) return;
+  });
+  if (persisted === null) return;
 
   try {
     localStorage.setItem(`workspace:${spaceId}`, JSON.stringify(persisted));

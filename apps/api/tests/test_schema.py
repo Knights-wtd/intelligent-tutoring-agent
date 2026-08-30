@@ -14,7 +14,9 @@ from sqlalchemy import MetaData, create_engine, event, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+import tutor_api.agent.models  # noqa: F401
 import tutor_api.knowledge.models  # noqa: F401
+import tutor_api.vault.models  # noqa: F401
 from tutor_api.billing.models import (
     LedgerEntry,
     LedgerEntryType,
@@ -351,9 +353,7 @@ def test_reservation_rejects_non_positive_amount(session: Session) -> None:
         session.commit()
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> None:
     database_path = tmp_path / "schema.db"
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -390,9 +390,9 @@ def test_migration_upgrade_and_downgrade_preserve_wallet_schema(tmp_path) -> Non
         for constraint in inspector.get_check_constraints("recharge_records")
     }
     assert "ck_recharge_record_reversal_audit_complete" in recharge_checks
-    assert "reversal_ledger_entry_id" in recharge_checks[
-        "ck_recharge_record_reversal_audit_complete"
-    ]
+    assert (
+        "reversal_ledger_entry_id" in recharge_checks["ck_recharge_record_reversal_audit_complete"]
+    )
     assert "reversed_at" in recharge_checks["ck_recharge_record_reversal_audit_complete"]
     assert {
         "ck_price_version_input_unit_price_nonnegative",
@@ -473,7 +473,7 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0015_tutor_conversations"
+        assert version == "0016_agent_workspace"
     finally:
         engine.dispose()
 
@@ -488,10 +488,7 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.begin() as connection:
             connection.execute(
-                text(
-                    "UPDATE alembic_version SET version_num = "
-                    "'0003_reservation_provider'"
-                )
+                text("UPDATE alembic_version SET version_num = '0003_reservation_provider'")
             )
     finally:
         engine.dispose()
@@ -501,14 +498,12 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0015_tutor_conversations"
+        assert version == "0016_agent_workspace"
     finally:
         engine.dispose()
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_migration_backfills_and_releases_historic_unbound_reservations(tmp_path) -> None:
     database_path = tmp_path / "historic-reservations.db"
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -550,16 +545,24 @@ def test_migration_backfills_and_releases_historic_unbound_reservations(tmp_path
     upgraded = MetaData()
     upgraded.reflect(bind=engine, only=["provider_profiles", "wallet_reservations"])
     with engine.connect() as connection:
-        reservation = connection.execute(
-            select(upgraded.tables["wallet_reservations"]).where(
-                upgraded.tables["wallet_reservations"].c.id == reservation_id
+        reservation = (
+            connection.execute(
+                select(upgraded.tables["wallet_reservations"]).where(
+                    upgraded.tables["wallet_reservations"].c.id == reservation_id
+                )
             )
-        ).mappings().one()
-        profile = connection.execute(
-            select(upgraded.tables["provider_profiles"]).where(
-                upgraded.tables["provider_profiles"].c.id == reservation["provider_profile_id"]
+            .mappings()
+            .one()
+        )
+        profile = (
+            connection.execute(
+                select(upgraded.tables["provider_profiles"]).where(
+                    upgraded.tables["provider_profiles"].c.id == reservation["provider_profile_id"]
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
 
     assert reservation["state"] == "released"
     assert reservation["released_at"] is not None
@@ -569,9 +572,7 @@ def test_migration_backfills_and_releases_historic_unbound_reservations(tmp_path
     engine.dispose()
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_reversal_audit_migration_round_trip_preserves_0004_contract(tmp_path) -> None:
     database_path = tmp_path / "reversal-audit.db"
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -636,9 +637,9 @@ def test_price_version_is_unique_per_profile_and_effective_at(session: Session) 
 
     with pytest.raises(IntegrityError):
         session.commit()
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+
+
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
     database_path = tmp_path / "versioned-knowledge.db"
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -666,9 +667,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
         assert {
             "ck_chunk_embedding_dimension_sqlite",
             "ck_chunk_sha256",
-        }.issubset(
-            {constraint["name"] for constraint in inspector.get_check_constraints("chunks")}
-        )
+        }.issubset({constraint["name"] for constraint in inspector.get_check_constraints("chunks")})
         assert {
             "ck_ingestion_attempt_within_limit",
             "ck_ingestion_lease_matches_state",
@@ -677,10 +676,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
             "ck_ingestion_target_matches_kind",
             "ck_ingestion_checkpoint_object_sqlite",
         }.issubset(
-            {
-                constraint["name"]
-                for constraint in inspector.get_check_constraints("ingestion_jobs")
-            }
+            {constraint["name"] for constraint in inspector.get_check_constraints("ingestion_jobs")}
         )
         chunk_foreign_keys = {
             (
@@ -715,21 +711,15 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
             ("id", "knowledge_base_id", "space_id"),
             "CASCADE",
         ) in chunk_foreign_keys
-        columns = {
-            column["name"]: column for column in inspector.get_columns("chunks")
-        }
+        columns = {column["name"]: column for column in inspector.get_columns("chunks")}
         assert columns["knowledge_base_id"]["nullable"] is False
         assert "JSON" in str(columns["embedding"]["type"]).upper()
         assert columns["embedding"]["nullable"] is False
         version_columns = {
-            column["name"]: column
-            for column in inspector.get_columns("document_versions")
+            column["name"]: column for column in inspector.get_columns("document_versions")
         }
         assert version_columns["knowledge_base_id"]["nullable"] is False
-        job_columns = {
-            column["name"]: column
-            for column in inspector.get_columns("ingestion_jobs")
-        }
+        job_columns = {column["name"]: column for column in inspector.get_columns("ingestion_jobs")}
         assert job_columns["page_id"]["nullable"] is True
         assert "JSON" in str(job_columns["checkpoint"]["type"]).upper()
         assert job_columns["checkpoint"]["nullable"] is False
@@ -742,11 +732,9 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
             }
             assert "trg_chunks_validate_embedding_insert" in trigger_names
             assert "trg_chunks_validate_embedding_update" in trigger_names
-            assert compare_metadata(
-                MigrationContext.configure(connection), Base.metadata
-            ) == []
+            assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0015_tutor_conversations"
+                "0016_agent_workspace"
             )
     finally:
         engine.dispose()
@@ -804,9 +792,7 @@ def _sqlite_embedding_contract(engine) -> tuple[dict[str, str], dict[str, str]]:
     return checks, triggers
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_create_all_and_migrated_sqlite_embedding_contracts_match(tmp_path) -> None:
     create_all_engine = create_engine("sqlite://")
     Base.metadata.create_all(create_all_engine)
@@ -816,21 +802,27 @@ def test_create_all_and_migrated_sqlite_embedding_contracts_match(tmp_path) -> N
     command.upgrade(config, "head")
     migrated_engine = create_engine(config.get_main_option("sqlalchemy.url"))
     try:
-        create_all_checks, create_all_triggers = _sqlite_embedding_contract(
-            create_all_engine
-        )
+        create_all_checks, create_all_triggers = _sqlite_embedding_contract(create_all_engine)
         migrated_checks, migrated_triggers = _sqlite_embedding_contract(migrated_engine)
 
-        assert create_all_checks == migrated_checks == {
-            "ck_chunk_embedding_dimension_sqlite": (
-                "json_valid(embedding) and json_type(embedding) = 'array' "
-                "and json_array_length(embedding) = embedding_dimension"
-            )
-        }
-        assert set(create_all_triggers) == set(migrated_triggers) == {
-            "trg_chunks_validate_embedding_insert",
-            "trg_chunks_validate_embedding_update",
-        }
+        assert (
+            create_all_checks
+            == migrated_checks
+            == {
+                "ck_chunk_embedding_dimension_sqlite": (
+                    "json_valid(embedding) and json_type(embedding) = 'array' "
+                    "and json_array_length(embedding) = embedding_dimension"
+                )
+            }
+        )
+        assert (
+            set(create_all_triggers)
+            == set(migrated_triggers)
+            == {
+                "trg_chunks_validate_embedding_insert",
+                "trg_chunks_validate_embedding_update",
+            }
+        )
         assert create_all_triggers == migrated_triggers
         assert all(
             "abs(cast(value as real)) > 1.7976931348623157e308" in sql
@@ -841,9 +833,7 @@ def test_create_all_and_migrated_sqlite_embedding_contracts_match(tmp_path) -> N
         migrated_engine.dispose()
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_postgresql_offline_sql_enables_pgvector_and_uses_vector_type() -> None:
     output = StringIO()
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"), output_buffer=output)
@@ -869,15 +859,11 @@ def test_postgresql_offline_sql_enables_pgvector_and_uses_vector_type() -> None:
         "references index_versions (id, knowledge_base_id, space_id, "
         "embedding_dimension, index_signature)"
     ) in sql
-    assert (
-        "foreign key(document_version_id, knowledge_base_id, space_id)"
-    ) in sql
+    assert ("foreign key(document_version_id, knowledge_base_id, space_id)") in sql
     assert "create trigger trg_chunks_validate_embedding" not in sql
 
 
-def _raw_migrated_chunk_insert(
-    connection, embedding_json: str, *, ordinal: int
-) -> str:
+def _raw_migrated_chunk_insert(connection, embedding_json: str, *, ordinal: int) -> str:
     chunk_id = uuid4().hex
     connection.exec_driver_sql(
         """
@@ -910,9 +896,7 @@ def _raw_migrated_chunk_insert(
     ["[1e309,0,0,0,0,0,0,0]", "[-1e999,0,0,0,0,0,0,0]"],
 )
 @pytest.mark.parametrize("operation", ["insert", "update"])
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_migrated_sqlite_raw_sql_rejects_non_finite_embeddings(
     tmp_path, embedding_json: str, operation: str
 ) -> None:
@@ -929,9 +913,7 @@ def test_migrated_sqlite_raw_sql_rejects_non_finite_embeddings(
             )
             if operation == "insert":
                 with pytest.raises(IntegrityError, match="invalid embedding element"):
-                    _raw_migrated_chunk_insert(
-                        connection, embedding_json, ordinal=1
-                    )
+                    _raw_migrated_chunk_insert(connection, embedding_json, ordinal=1)
             else:
                 connection.exec_driver_sql(
                     "UPDATE chunks SET embedding = ? WHERE id = ?",
@@ -942,21 +924,21 @@ def test_migrated_sqlite_raw_sql_rejects_non_finite_embeddings(
                         "UPDATE chunks SET embedding = ? WHERE id = ?",
                         (embedding_json, finite_chunk_id),
                     )
-                assert connection.exec_driver_sql(
-                    "SELECT embedding FROM chunks WHERE id = ?",
-                    (finite_chunk_id,),
-                ).scalar().startswith("[-1e300")
+                assert (
+                    connection.exec_driver_sql(
+                        "SELECT embedding FROM chunks WHERE id = ?",
+                        (finite_chunk_id,),
+                    )
+                    .scalar()
+                    .startswith("[-1e300")
+                )
     finally:
         engine.dispose()
 
 
-@pytest.mark.parametrize(
-    "integer_value", [-9223372036854775808, 9223372036854775807]
-)
+@pytest.mark.parametrize("integer_value", [-9223372036854775808, 9223372036854775807])
 @pytest.mark.parametrize("operation", ["insert", "update"])
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_migrated_sqlite_raw_sql_accepts_integer_embedding_boundaries(
     tmp_path, integer_value: int, operation: str
 ) -> None:
@@ -970,13 +952,9 @@ def test_migrated_sqlite_raw_sql_accepts_integer_embedding_boundaries(
             assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 0
             embedding_json = f"[{integer_value},0,0,0,0,0,0,0]"
             if operation == "insert":
-                chunk_id = _raw_migrated_chunk_insert(
-                    connection, embedding_json, ordinal=0
-                )
+                chunk_id = _raw_migrated_chunk_insert(connection, embedding_json, ordinal=0)
             else:
-                chunk_id = _raw_migrated_chunk_insert(
-                    connection, "[0,0,0,0,0,0,0,0]", ordinal=0
-                )
+                chunk_id = _raw_migrated_chunk_insert(connection, "[0,0,0,0,0,0,0,0]", ordinal=0)
                 connection.exec_driver_sql(
                     "UPDATE chunks SET embedding = ? WHERE id = ?",
                     (embedding_json, chunk_id),
@@ -989,9 +967,7 @@ def test_migrated_sqlite_raw_sql_accepts_integer_embedding_boundaries(
         engine.dispose()
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_migrated_sqlite_rejects_cross_knowledge_base_chunks(tmp_path) -> None:
     database_path = tmp_path / "cross-kb-chunks.db"
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -1183,9 +1159,7 @@ def test_migrated_sqlite_rejects_cross_knowledge_base_chunks(tmp_path) -> None:
     engine.dispose()
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_migrated_knowledge_base_names_are_unique_per_space(tmp_path) -> None:
     database_path = tmp_path / "knowledge-base-name-uniqueness.db"
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -1273,6 +1247,7 @@ def test_migrated_knowledge_base_names_are_unique_per_space(tmp_path) -> None:
         )
 
     engine.dispose()
+
 
 def create_identity_and_knowledge_base(
     session: Session, *, suffix: str | None = None
@@ -1364,9 +1339,7 @@ def test_tutor_message_must_match_all_conversation_scope_fields(
 
 def test_tutor_conversation_knowledge_base_must_belong_to_space(session: Session) -> None:
     first_user, first_space, _ = create_identity_and_knowledge_base(session, suffix="first-space")
-    _, _, second_knowledge_base = create_identity_and_knowledge_base(
-        session, suffix="second-space"
-    )
+    _, _, second_knowledge_base = create_identity_and_knowledge_base(session, suffix="second-space")
     session.add(
         TutorConversation(
             user_id=first_user.id,
@@ -1459,9 +1432,7 @@ def test_tutor_message_rejects_empty_content_or_negative_usage(
         session.flush()
 
 
-@pytest.mark.filterwarnings(
-    "ignore:No path_separator found in configuration:DeprecationWarning"
-)
+@pytest.mark.filterwarnings("ignore:No path_separator found in configuration:DeprecationWarning")
 def test_tutor_migration_matches_model_metadata(tmp_path) -> None:
     database_path = tmp_path / "tutor-schema.db"
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -1471,9 +1442,48 @@ def test_tutor_migration_matches_model_metadata(tmp_path) -> None:
     engine = create_engine(config.get_main_option("sqlalchemy.url"))
     try:
         inspector = inspect(engine)
-        assert {"tutor_conversations", "tutor_messages"}.issubset(
-            inspector.get_table_names()
-        )
+        assert {"tutor_conversations", "tutor_messages"}.issubset(inspector.get_table_names())
+        assert {
+            "agent_sessions",
+            "agent_turns",
+            "agent_session_events",
+            "agent_workspace_grants",
+            "agent_audit_events",
+            "agent_provider_settings",
+            "agent_usage_records",
+            "vault_files",
+            "vault_change_sets",
+            "vault_change_entries",
+            "vault_sync_cursors",
+            "semantic_index_plans",
+        }.issubset(inspector.get_table_names())
+        assert {
+            "vault_file_id",
+            "vault_relative_path",
+            "content_hash",
+            "sync_state",
+            "last_change_set_id",
+            "is_tombstoned",
+            "tombstoned_at",
+        }.issubset({column["name"] for column in inspector.get_columns("markdown_notes")})
+        assert {
+            "change_set_id",
+            "agent_session_id",
+            "agent_turn_id",
+            "tool_call_id",
+            "change_source",
+            "before_hash",
+            "after_hash",
+        }.issubset({column["name"] for column in inspector.get_columns("markdown_revisions")})
+        assert {
+            "planner_provider",
+            "planner_model",
+            "planner_schema_version",
+            "planner_prompt_hash",
+            "source_change_set_id",
+            "source_snapshot_hash",
+            "activation_status",
+        }.issubset({column["name"] for column in inspector.get_columns("index_versions")})
         message_foreign_keys = {
             (
                 tuple(foreign_key["constrained_columns"]),
@@ -1495,11 +1505,9 @@ def test_tutor_migration_matches_model_metadata(tmp_path) -> None:
             "CASCADE",
         ) in message_foreign_keys
         with engine.connect() as connection:
-            assert compare_metadata(
-                MigrationContext.configure(connection), Base.metadata
-            ) == []
+            assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0015_tutor_conversations"
+                "0016_agent_workspace"
             )
     finally:
         engine.dispose()

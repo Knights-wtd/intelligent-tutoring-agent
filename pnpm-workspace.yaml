@@ -1,6 +1,9 @@
 packages:
   - apps/web
+  - apps/agent-runtime
+  - packages/agent-protocol
 
 allowBuilds:
+  esbuild: true
   sharp: false
   unrs-resolver: false

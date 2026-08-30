@@ -1,0 +1,233 @@
+.toolCard,
+.sidecarPreview {
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, Canvas 96%, currentColor 4%);
+  color: CanvasText;
+  overflow: hidden;
+}
+
+.toolCard {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-inline-start-width: 4px;
+}
+
+.state_running { border-inline-start-color: #3978d6; }
+.state_completed { border-inline-start-color: #24835b; }
+.state_failed { border-inline-start-color: #c84848; }
+
+.toolHeader,
+.sidecarHeader,
+.sidecarFooter,
+.windowControls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toolHeader > div:first-child,
+.sidecarHeader > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolKind,
+.sidecarHeader span,
+.statusGroup,
+.sidecarMeta,
+.sidecarFacts,
+.windowControls,
+.sidecarFooter {
+  color: color-mix(in srgb, currentColor 68%, transparent);
+  font-size: 0.8rem;
+}
+
+.statusGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.status {
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  padding: 3px 8px;
+  color: CanvasText;
+}
+
+.primary,
+.output,
+.diff,
+.sidecarContent {
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 0.82rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.primary {
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  padding: 9px 10px;
+}
+
+.details,
+.sidecarFacts {
+  margin: 0;
+}
+
+.detailRow,
+.sidecarFacts > div {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) 1fr;
+  gap: 10px;
+}
+
+.detailRow dt,
+.sidecarFacts dt {
+  color: color-mix(in srgb, currentColor 58%, transparent);
+}
+
+.detailRow dd,
+.sidecarFacts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.section {
+  display: grid;
+  gap: 6px;
+}
+
+.section h4 {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.output,
+.diff {
+  max-height: 240px;
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  padding: 10px;
+}
+
+.diff {
+  color: color-mix(in srgb, #2b8a62 80%, CanvasText);
+}
+
+.parentLink,
+.downloadLink,
+.sidecarFooter button,
+.windowControls button {
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 5px 9px;
+}
+
+.parentLink {
+  justify-self: start;
+}
+
+.downloadLink {
+  text-decoration: none;
+}
+
+.parentLink:hover,
+.downloadLink:hover,
+.sidecarFooter button:hover:not(:disabled),
+.windowControls button:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.windowControls button:disabled,
+.sidecarFooter button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.error {
+  margin: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, #c84848 12%, transparent);
+  color: #a72f2f;
+  padding: 9px 10px;
+}
+
+.sidecarMeta {
+  padding-top: 2px;
+}
+
+.sidecarPreview {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.sidecarHeader {
+  border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  padding-bottom: 10px;
+}
+
+.sidecarFacts {
+  display: grid;
+  gap: 4px;
+}
+
+.safetyNote {
+  margin: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, #d28b2d 12%, transparent);
+  padding: 7px 9px;
+  font-size: 0.8rem;
+}
+
+.sidecarContent {
+  min-height: 72px;
+  max-height: 420px;
+  border: 1px solid color-mix(in srgb, currentColor 11%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  padding: 12px;
+}
+
+.windowControls {
+  align-items: flex-start;
+}
+
+.windowControls > div {
+  display: flex;
+  gap: 6px;
+}
+
+.sidecarFooter {
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  padding-top: 10px;
+}
+
+@media (max-width: 560px) {
+  .toolHeader,
+  .sidecarHeader,
+  .sidecarFooter,
+  .windowControls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .statusGroup {
+    justify-content: space-between;
+  }
+}

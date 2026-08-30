@@ -97,7 +97,19 @@ def test_faro_uses_the_restricted_connect_proxy_without_a_dns_override() -> None
     assert environment["FARO_PROXY_URL"] == ""
     for service in (api, worker):
         assert "FARO_PROXY_URL:" in service
-        assert "extra_hosts:" not in service
+        assert service.count("extra_hosts:") == 1
+        assert '"host.docker.internal:host-gateway"' in service
+
+
+def test_retired_tutor_policy_does_not_reach_any_compose_service() -> None:
+    environment = _environment_example()
+    compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    web = _service_block(compose, "web", "volumes")
+    retired_prefix = "TUTOR" + "_"
+
+    assert all(not name.startswith(retired_prefix) for name in environment)
+    assert retired_prefix not in compose
+    assert retired_prefix not in web
 
 
 def test_web_host_port_can_be_changed_without_changing_the_container_port() -> None:
@@ -213,3 +225,25 @@ def test_minio_initializer_provisions_bucket_scoped_application_policy() -> None
         assert f'"{action}"' in initializer
 
     assert '"arn:aws:s3:::*"' not in initializer
+
+
+def test_agent_runtime_is_host_isolated_and_not_a_required_service_dependency() -> None:
+    environment = _environment_example()
+    compose = (REPOSITORY_ROOT / "compose.yaml").read_text(encoding="utf-8")
+    api = _service_block(compose, "api", "worker")
+    worker = _service_block(compose, "worker", "web")
+    web = _service_block(compose, "web", "volumes")
+
+    assert environment["AGENT_RUNTIME_URL"] == "http://host.docker.internal:8765"
+    assert environment["AGENT_CONTEXT_WINDOW"] == "1000000"
+    assert "agent-runtime:" not in compose
+    for service in (api, worker):
+        assert "AGENT_RUNTIME_URL:" in service
+        assert "AGENT_RUNTIME_TOKEN:" in service
+        assert "AGENT_CAPABILITY_SECRET:" in service
+        assert '"host.docker.internal:host-gateway"' in service
+        dependency_block = service.split("depends_on:", 1)[-1].split("environment:", 1)[0]
+        assert "agent-runtime" not in dependency_block
+    assert "AGENT_RUNTIME_TOKEN" not in web
+    assert "AGENT_CAPABILITY_SECRET" not in web
+    assert "AGENT_VAULT_ROOT" not in web

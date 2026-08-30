@@ -601,3 +601,43 @@ Per the user-approved three-strike rule, stop here before a fourth repair and re
 The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
 
 Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.
+## 2026-08-29 · AI 助教 Faro/Gemini 恢复任务
+
+- 已读取 `systematic-debugging`、`subagent-driven-development` 与 `planning-with-files` skill 指引。
+- 已确认工作区/分支和 Docker 服务状态，并检查关键 Tutor/Agent 文件与 Git HEAD 参考实现。
+- 已向两个已有子代理请求最新结果：Faro 调用链只读调查、TutorPanel UI 实现。
+- 已形成单一根因假设并由代码证据支持：活跃 UI/API 已被切到 Claude Agent，Faro Tutor 写链路被退休，故“连不上”不是单纯外部 API 超时。
+- Web 基线命令完成：`pnpm --dir apps/web exec vitest run src/lib/tutor-api.test.ts src/components/workspace/workspace-shell.test.tsx src/components/workspace/agent-cutover.test.tsx` → 3 files / 21 tests passed（仅表示当前行为自洽）。
+- API 基线命令启动：`pytest apps/api/tests/test_tutor.py apps/api/tests/test_llm_faro.py -q`；运行过程中被用户中断，只有部分通过标记，需重新执行。
+- `session-catchup.py` 首次因系统没有全局 `python` 命令失败；改用 `apps/api/.venv/Scripts/python.exe` 后成功、无额外输出。
+- 下一步：等待并审查 TutorPanel 子代理结果；语义合并恢复 Faro Tutor 后端与 Web API；切回 TutorPanel；运行完整聚焦测试、类型检查、构建与 Docker 实测。
+
+## 2026-08-30 · AI 助教 Faro/Gemini 并行修复恢复
+
+- 恢复上下文后确认继续采用 AgentPanel → Agent API → Agent Runtime 架构，不再恢复已退休 Tutor 写接口。
+- 已启动 Web、Runtime、API 三个互不冲突的子代理；主线程负责环境修正、服务重启和真实连接验收。
+- 安全检查只判断配置是否存在：Faro API key 已设置；本机非敏感 Agent provider/model/context 仍为旧值。
+- 当前 8765 Runtime 健康但运行的是重启前构建，必须在代码和测试完成后重启。
+## 2026-08-30 · AI 助教 Faro/Gemini 修复完成
+
+### 已交付
+
+- Runtime 新增并唯一注册 Faro OpenAI-compatible provider，模型固定为 `gemini-3.7-flash-tiered`，上下文窗口固定为 `32000`；不再注册或回退 Claude。
+- Agent API 固定新会话与设置为 `faro / gemini-3.7-flash-tiered / 32000`，拒绝错误 provider/model/context；旧 Claude/Fable 会话保留历史但写操作返回 `409 agent_session_provider_retired`。
+- Web 的 AI 助教默认区域只保留聊天主界面；右上角设置按钮打开统一风格弹层，二级页签为“会话记录”和“服务设置”。服务配置只读展示 Faro/Gemini/32000，不显示密钥。
+- 旧 Claude/Fable 会话在 Web 中标为只读，不建立实时连接，不允许继续、停止、回退、分叉或发送；仅有旧会话时自动创建新的 Faro 会话。
+- 本机 `.env` 仅定向更新非敏感 Agent provider/model/context；Runtime 与 Docker API/Web/Worker 已按新构建重启。
+
+### 验证记录
+
+- API 聚焦测试：`119 passed`。
+- Web：`35 test files passed / 232 tests passed`；ESLint 通过；Next production build 通过。
+- Runtime：`25 test suites passed / 86 tests passed`；typecheck 通过；build 通过。首次与 Web build 并行时仅 `tests/package.test.ts` 触发 5 秒资源竞争超时，取消并行后全套通过，无需业务代码修复。
+- Host Runtime PID：`35704`。本轮再次运行 `scripts/smoke-agent-runtime.ps1` 通过：Node `24.18.0`、pnpm `11.19.0`、protocol `1.0`。
+- 鉴权 diagnostics：`status=ok`，providers 仅含 `faro`，状态 `ok`，详情 `Faro · gemini-3.7-flash-tiered`；未出现 Claude provider。
+- API `/api/v1/health` 返回 `{"status":"ok","service":"textbook-tutor-api"}`；Web 返回 HTTP `200`；Docker API/Web/PostgreSQL/Redis healthy，Worker 与 MinIO running。
+- 真实 Agent API → Runtime → Faro 对话连续两次通过：POST turn 返回 `202`，事件序列包含 `turn_started`、`user_message`、`model_text_delta`、`session_state`，cursor 匹配，最终 Runtime 状态 `completed`；最新 `model_text_delta` 非空。
+
+### 结论
+
+AI 助教“连接不上”的根因已修复。当前实际聊天链路为 `AgentPanel → /api/v1/agent → Agent Runtime → Faro → Gemini 3.7 Flash`，并已由真实模型响应验证，不再使用 Claude。

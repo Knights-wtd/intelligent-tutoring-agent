@@ -1,7 +1,9 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from threading import Semaphore
+from pathlib import Path
+from types import SimpleNamespace
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -9,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
+from tutor_api.agent.router import router as agent_router
+from tutor_api.agent.runtime_client import RuntimeClient
 from tutor_api.billing.router import admin_router
 from tutor_api.billing.router import router as billing_router
 from tutor_api.classrooms.router import router as classrooms_router
@@ -19,32 +23,33 @@ from tutor_api.identity.router import router as identity_router
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.router import router as knowledge_router
 from tutor_api.knowledge.storage import ObjectStorage, create_object_storage
-from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
-from tutor_api.llm.http_client import create_faro_http_client
-from tutor_api.llm.ports import TutorChatAdapter
 from tutor_api.providers.router import router as providers_router
 from tutor_api.providers.service import synchronize_provider_profiles
 from tutor_api.question_bank.router import router as question_bank_router
 from tutor_api.spaces.router import router as spaces_router
 from tutor_api.tutor.router import router as tutor_router
+from tutor_api.vault.router import router as vault_router
 
 
 def create_app(
     settings: Settings | None = None,
     session_factory: sessionmaker[Session] | None = None,
     object_storage: ObjectStorage | None = None,
-    tutor_adapter: TutorChatAdapter | None = None,
 ) -> FastAPI:
     active_settings = settings or get_settings()
     production_errors = active_settings.production_errors()
     if production_errors:
         raise RuntimeError("Invalid production configuration: " + "; ".join(production_errors))
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if app.state.session_factory is not None:
-            with app.state.session_factory.begin() as session:
-                synchronize_provider_profiles(session, active_settings.provider_profiles)
-        yield
+        try:
+            if app.state.session_factory is not None:
+                with app.state.session_factory.begin() as session:
+                    synchronize_provider_profiles(session, active_settings.provider_profiles)
+            yield
+        finally:
+            await app.state.agent_runtime_http_client.aclose()
 
     app = FastAPI(title="Textbook Tutor API", version="0.1.0", lifespan=lifespan)
     app.state.settings = active_settings
@@ -58,22 +63,6 @@ def create_app(
         max_attempts=active_settings.register_max_attempts,
         lockout_seconds=active_settings.register_lockout_seconds,
     )
-    # API and worker share the same hardened network path. A stale optional host
-    # relay falls back to direct IPv4 egress only before an HTTP response exists.
-    provider_http_client = create_faro_http_client(
-        proxy_url=active_settings.faro_proxy_url,
-        timeout_seconds=active_settings.faro_timeout_seconds,
-    )
-    app.state.tutor_adapter = tutor_adapter or FaroOpenAICompatibleAdapter(
-        api_key=active_settings.faro_api_key.get_secret_value(),
-        base_url=active_settings.faro_api_base_url,
-        model=active_settings.faro_model,
-        timeout_seconds=active_settings.faro_timeout_seconds,
-        http_client=provider_http_client,
-    )
-    # Bounds concurrent tutor provider calls (chat path). Guards the LLM
-    # endpoint against unbounded fan-out when many learners chat at once.
-    app.state.tutor_semaphore = Semaphore(active_settings.faro_max_concurrency)
     app.state.embedding_adapter = HashEmbeddingAdapter(
         backend=active_settings.embedding_backend,
         model=active_settings.embedding_model,
@@ -95,6 +84,26 @@ def create_app(
         app.state.session_factory = sessionmaker(bind=engine)
     else:
         app.state.session_factory = None
+
+    app.state.agent_event_store = app.state.session_factory
+    app.state.vault_root = Path(active_settings.agent_vault_root).resolve()
+    app.state.agent_sidecar_root = Path(active_settings.agent_sidecar_root).resolve()
+    app.state.agent_runtime_http_client = httpx.AsyncClient(
+        trust_env=False,
+        follow_redirects=False,
+    )
+    try:
+        app.state.agent_runtime_client = RuntimeClient(
+            app.state.agent_runtime_http_client,
+            active_settings,
+        )
+        app.state.agent_runtime_status = SimpleNamespace(status="unknown", code=None)
+    except (TypeError, ValueError):
+        app.state.agent_runtime_client = None
+        app.state.agent_runtime_status = SimpleNamespace(
+            status="unavailable",
+            code="runtime_configuration_invalid",
+        )
 
     @app.exception_handler(RequestValidationError)
     async def redact_validation_passwords(
@@ -119,6 +128,8 @@ def create_app(
     app.include_router(classrooms_router)
     app.include_router(knowledge_router)
     app.include_router(tutor_router)
+    app.include_router(agent_router)
+    app.include_router(vault_router)
     app.include_router(providers_router)
     app.include_router(question_bank_router)
     app.include_router(billing_router)

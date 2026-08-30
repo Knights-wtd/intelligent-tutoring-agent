@@ -1,0 +1,285 @@
+.panel {
+  position: relative;
+  display: grid;
+  gap: 1rem;
+  min-height: 0;
+  color: var(--text, #282733);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--line, #e2e1e8);
+}
+
+.header h2,
+.header p,
+.settingsDialogHeader h3,
+.settingsDialogHeader p {
+  margin: 0;
+}
+
+.header h2 {
+  margin-top: 0.2rem;
+  color: #302e3a;
+  font-size: 1.2rem;
+}
+
+.header p,
+.settingsDialogHeader p {
+  margin-top: 0.35rem;
+  color: var(--muted, #74727f);
+  font-size: 0.82rem;
+}
+
+.eyebrow {
+  display: block;
+  color: #807b91;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+
+.connectionStatus {
+  color: #52617a;
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.settingsTrigger,
+.settingsClose,
+.settingsTab {
+  border: 1px solid #d8d3ea;
+  border-radius: 9px;
+  background: #fff;
+  color: #51479e;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.settingsTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  min-height: 36px;
+  padding: 0.45rem 0.75rem;
+}
+
+.settingsTrigger:hover,
+.settingsTrigger:focus-visible,
+.settingsClose:hover,
+.settingsClose:focus-visible,
+.settingsTab:hover,
+.settingsTab:focus-visible {
+  border-color: #afa4e1;
+  background: #faf9ff;
+  box-shadow: 0 0 0 3px rgb(101 88 201 / 12%);
+  outline: none;
+}
+
+.runtimeError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #e3b6be;
+  border-radius: 0.75rem;
+  background: #fff7f8;
+  color: #8f2f41;
+}
+
+.runtimeError p {
+  margin: 0.25rem 0 0;
+}
+
+.runtimeError button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.layout {
+  display: grid;
+  min-height: 0;
+}
+
+.conversation {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 0.85rem;
+}
+
+.readOnlyNotice {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #d9d3ee;
+  border-radius: 10px;
+  color: #5a527f;
+  background: #faf8ff;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.toolList,
+.sidecarList {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.toolList:empty,
+.sidecarList:empty {
+  display: none;
+}
+
+.composerRegion {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 0.25rem;
+  background: inherit;
+}
+
+.settingsOverlay {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.settingsBackdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgb(31 27 53 / 28%);
+  cursor: default;
+}
+
+.settingsDialog {
+  position: relative;
+  display: grid;
+  width: min(760px, 100%);
+  max-height: min(820px, calc(100dvh - 2.5rem));
+  overflow: auto;
+  border: 1px solid #dedaf0;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgb(49 34 67 / 20%);
+}
+
+.settingsDialogHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.2rem 1.25rem 1rem;
+  border-bottom: 1px solid var(--line, #e2e1e8);
+}
+
+.settingsDialogHeader h3 {
+  margin-top: 0.25rem;
+  color: #302e3a;
+  font-size: 1.05rem;
+}
+
+.settingsClose {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  color: #6f6a7e;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.settingsTabs {
+  display: flex;
+  gap: 0.45rem;
+  padding: 0.75rem 1.25rem 0;
+  border-bottom: 1px solid var(--line, #e2e1e8);
+}
+
+.settingsTab {
+  min-height: 36px;
+  margin-bottom: -1px;
+  padding: 0.45rem 0.85rem;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-color: transparent;
+  background: transparent;
+  color: #777482;
+}
+
+.settingsTab[aria-selected="true"] {
+  border-color: #d8d1f5;
+  border-bottom-color: #fff;
+  background: #fff;
+  color: #51479e;
+}
+
+.settingsDialog [role="tabpanel"] {
+  min-width: 0;
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.settingsDialog [role="tabpanel"] > :global(*) {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .header,
+  .runtimeError,
+  .settingsDialogHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .headerActions {
+    justify-content: space-between;
+  }
+
+  .connectionStatus {
+    white-space: normal;
+  }
+
+  .settingsOverlay {
+    align-items: stretch;
+    padding: 0;
+  }
+
+  .settingsDialog {
+    width: 100%;
+    max-height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .settingsTabs,
+  .settingsDialog [role="tabpanel"] {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+}

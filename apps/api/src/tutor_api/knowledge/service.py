@@ -738,6 +738,19 @@ def enqueue_index_build(
     )
     if existing is not None:
         return existing
+    checkpoint: dict[str, object] = {
+        "document_version_ids": [str(value) for value in request.document_version_ids],
+        "parser_signature": request.parser_signature,
+        "ocr_signature": request.ocr_signature,
+        "chunk_max_chars": request.chunking.max_chars,
+        "chunk_overlap_chars": request.chunking.overlap_chars,
+    }
+    if request.source_snapshot_hash is not None:
+        checkpoint["source_snapshot_hash"] = request.source_snapshot_hash
+    if request.source_change_set_id is not None:
+        checkpoint["source_change_set_id"] = str(request.source_change_set_id)
+    if request.semantic_plan_id is not None:
+        checkpoint["semantic_plan_id"] = str(request.semantic_plan_id)
     job = IngestionJob(
         space_id=request.space_id,
         knowledge_base_id=request.knowledge_base_id,
@@ -745,13 +758,7 @@ def enqueue_index_build(
         kind=IngestionJobKind.BUILD_INDEX,
         state=IngestionJobState.QUEUED,
         idempotency_key=idempotency_key,
-        checkpoint={
-            "document_version_ids": [str(value) for value in request.document_version_ids],
-            "parser_signature": request.parser_signature,
-            "ocr_signature": request.ocr_signature,
-            "chunk_max_chars": request.chunking.max_chars,
-            "chunk_overlap_chars": request.chunking.overlap_chars,
-        },
+        checkpoint=checkpoint,
         created_by_user_id=request.created_by_user_id,
     )
     session.add(job)

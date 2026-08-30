@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -6,6 +7,7 @@ from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from test_knowledge_candidate_models import create_source
 
+from tutor_api.agent import models as agent_models  # noqa: F401
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.knowledge.candidate_service import (
     confirm_candidate_batch,
@@ -23,6 +25,9 @@ from tutor_api.knowledge.models import (
     MarkdownNote,
     MarkdownRevision,
 )
+from tutor_api.knowledge.storage import MemoryObjectStorage
+from tutor_api.vault.migration import MigrationPhase, VaultMigrator
+from tutor_api.vault.models import VaultChangeSet, VaultChangeSource
 
 
 @pytest.fixture
@@ -310,3 +315,66 @@ def test_generation_request_is_idempotent(session) -> None:
     assert second_batch.id == first_batch.id
     assert second_job.id == first_job.id
     assert session.scalar(select(func.count()).select_from(IngestionJob)) == 1
+
+
+def test_shadow_route_dual_writes_legacy_candidate_confirmation_and_allows_cutover(
+    session: Session, tmp_path: Path
+) -> None:
+    owner, space, knowledge_base, _, version = create_source(session)
+    version.state = DocumentVersionState.READY
+    migration = VaultMigrator(
+        session=session,
+        object_storage=MemoryObjectStorage(),
+        vault_root=tmp_path / "vault",
+        artifact_root=tmp_path / "artifacts",
+    )
+    manifest = migration.inventory(knowledge_base_id=knowledge_base.id)
+    migration.copy(manifest)
+    migration.verify(manifest)
+    assert migration.activate_shadow(manifest).phase is MigrationPhase.SHADOW
+
+    batch, _ = create_candidate_generation(
+        session,
+        owner,
+        knowledge_base.id,
+        version.id,
+        idempotency_key="shadow-dual-write",
+    )
+    batch.state = CandidateBatchState.NEEDS_REVIEW
+    candidate = KnowledgeCandidateNote(
+        space_id=space.id,
+        knowledge_base_id=knowledge_base.id,
+        batch_id=batch.id,
+        ordinal=0,
+        candidate_key="shadow-note",
+        title="Shadow note",
+        normalized_title="shadow note",
+        kind=CandidateNoteKind.CONCEPT,
+        markdown="# Shadow\n\nMirrored body.",
+        source_pointers=["source.md#shadow"],
+    )
+    session.add(candidate)
+    session.flush()
+
+    confirm_candidate_batch(
+        session,
+        owner,
+        knowledge_base.id,
+        batch.id,
+        accepted_note_ids={candidate.id},
+        accepted_link_ids=set(),
+    )
+
+    note = session.scalar(select(MarkdownNote).where(MarkdownNote.title == "Shadow note"))
+    revision = session.scalar(
+        select(MarkdownRevision).where(MarkdownRevision.note_id == note.id)
+    )
+    assert note is not None and revision is not None
+    assert note.vault_file_id is not None
+    assert revision.change_set_id is not None
+    shadow_change = session.get(VaultChangeSet, revision.change_set_id)
+    assert shadow_change is not None
+    assert shadow_change.source is VaultChangeSource.API
+    target = migration.scoped_vault_root(manifest) / note.vault_relative_path
+    assert target.read_text(encoding="utf-8") == revision.markdown
+    assert migration.cutover(manifest).phase is MigrationPhase.VAULT_AUTHORITATIVE

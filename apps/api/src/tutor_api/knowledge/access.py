@@ -99,6 +99,34 @@ def get_readable_knowledge_base(
     return classroom_knowledge_base
 
 
+def list_readable_knowledge_bases(session: Session, user: User) -> list[KnowledgeBase]:
+    """Return every knowledge base visible to the user without widening access."""
+
+    personal = list(
+        session.scalars(
+            select(KnowledgeBase)
+            .join(Space, Space.id == KnowledgeBase.space_id)
+            .where(Space.kind == SpaceKind.PERSONAL, Space.owner_id == user.id)
+            .order_by(KnowledgeBase.created_at, KnowledgeBase.id)
+        )
+    )
+    classroom = list(
+        session.scalars(
+            select(KnowledgeBase)
+            .join(Space, Space.id == KnowledgeBase.space_id)
+            .join(Classroom, Classroom.space_id == Space.id)
+            .join(ClassroomMembership, ClassroomMembership.classroom_id == Classroom.id)
+            .where(
+                Space.kind == SpaceKind.CLASSROOM,
+                ClassroomMembership.user_id == user.id,
+            )
+            .order_by(KnowledgeBase.created_at, KnowledgeBase.id)
+        )
+    )
+    readable_by_id = {knowledge_base.id: knowledge_base for knowledge_base in personal + classroom}
+    return list(readable_by_id.values())
+
+
 def get_writable_knowledge_base(
     session: Session, user: User, knowledge_base_id: UUID
 ) -> KnowledgeBase:

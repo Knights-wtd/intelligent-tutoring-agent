@@ -1,5 +1,6 @@
-"""Database-authoritative projections for the knowledge workspace."""
+"""Route-aware projections for the knowledge workspace."""
 
+import hashlib
 import re
 from dataclasses import dataclass
 from uuid import UUID
@@ -22,6 +23,14 @@ from tutor_api.knowledge.models import (
     MarkdownRevisionState,
 )
 from tutor_api.knowledge.service import get_document_processing_state
+from tutor_api.vault.migration import (
+    MigrationPhase,
+    MigrationRoute,
+    knowledge_base_vault_root,
+    migration_route_for_knowledge_base,
+    resolve_vault_path,
+)
+from tutor_api.vault.models import VaultFile
 
 _PARENT_PATTERN = re.compile(r"所属结构\s*→\s*\[\[([^\]]+)\]\]")
 
@@ -109,12 +118,67 @@ def _parent_title(markdown: str | None) -> str | None:
     return match.group(1).strip() if match else None
 
 
-def _note_hierarchy(rows) -> tuple[dict[UUID, UUID | None], dict[UUID, list[UUID]]]:
+def _vault_read_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="知识库内容暂不可用",
+    )
+
+
+def _effective_markdown(
+    session: Session,
+    note: MarkdownNote,
+    revision: MarkdownRevision,
+    route: MigrationRoute | None,
+) -> str:
+    if route is None or route.phase is not MigrationPhase.VAULT_AUTHORITATIVE:
+        return revision.markdown or ""
+    if note.vault_file_id is None or note.vault_relative_path is None:
+        raise _vault_read_unavailable()
+    vault_file = session.get(VaultFile, note.vault_file_id)
+    if (
+        vault_file is None
+        or vault_file.knowledge_base_id != note.knowledge_base_id
+        or vault_file.space_id != note.space_id
+        or vault_file.relative_path != note.vault_relative_path
+        or vault_file.is_tombstoned
+    ):
+        raise _vault_read_unavailable()
+    try:
+        raw = resolve_vault_path(
+            knowledge_base_vault_root(
+                route.vault_root, note.space_id, note.knowledge_base_id
+            ),
+            vault_file.relative_path,
+        ).read_bytes()
+    except (OSError, RuntimeError):
+        raise _vault_read_unavailable() from None
+    if (
+        len(raw) != vault_file.size_bytes
+        or hashlib.sha256(raw).hexdigest() != vault_file.content_hash
+    ):
+        raise _vault_read_unavailable()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise _vault_read_unavailable() from None
+
+
+def _effective_markdown_by_note(session: Session, knowledge_base_id: UUID, rows) -> dict[UUID, str]:
+    route = migration_route_for_knowledge_base(session, knowledge_base_id)
+    return {
+        note.id: _effective_markdown(session, note, revision, route) for note, revision, _ in rows
+    }
+
+
+def _note_hierarchy(
+    rows, markdown_by_note: dict[UUID, str]
+) -> tuple[dict[UUID, UUID | None], dict[UUID, list[UUID]]]:
     note_by_title = {note.title: note for note, _, _ in rows}
     parent_by_id: dict[UUID, UUID | None] = {}
     children_by_id: dict[UUID, list[UUID]] = {note.id: [] for note, _, _ in rows}
-    for note, revision, _ in rows:
-        title = _parent_title(revision.markdown)
+    for note, _, _ in rows:
+        title = _parent_title(markdown_by_note[note.id])
         parent = note_by_title.get(title) if title is not None else None
         parent_id = parent.id if parent is not None and parent.id != note.id else None
         parent_by_id[note.id] = parent_id
@@ -209,7 +273,8 @@ def load_knowledge_workspace(
         .limit(1)
     )
     rows = _published_note_rows(session, knowledge_base.id, knowledge_base.space_id)
-    parent_by_id, _ = _note_hierarchy(rows)
+    markdown_by_note = _effective_markdown_by_note(session, knowledge_base.id, rows)
+    parent_by_id, _ = _note_hierarchy(rows, markdown_by_note)
     row_by_note_id = {note.id: (note, revision) for note, revision, _ in rows}
     notes = tuple(
         NoteSummary(
@@ -236,7 +301,8 @@ def load_published_note(
     selected = next((row for row in rows if row[0].id == note_id), None)
     if selected is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="资源不存在")
-    parent_by_id, children_by_id = _note_hierarchy(rows)
+    markdown_by_note = _effective_markdown_by_note(session, knowledge_base.id, rows)
+    parent_by_id, children_by_id = _note_hierarchy(rows, markdown_by_note)
     note_by_id = {note.id: note for note, _, _ in rows}
     note, revision, document = selected
     parent_id = parent_by_id.get(note.id)
@@ -247,7 +313,7 @@ def load_published_note(
         id=note.id,
         title=note.title,
         kind="note",
-        markdown=revision.markdown or "",
+        markdown=markdown_by_note[note.id],
         source_markers=tuple(revision.source_markers),
         source_document_id=revision.source_document_id,
         source_name=document.source_key if document is not None else None,

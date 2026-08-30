@@ -1,0 +1,293 @@
+.composer {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dedbe7;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgb(38 32 65 / 7%);
+}
+
+.referenceTray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.referenceChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid #dcd6f3;
+  border-radius: 999px;
+  background: #f7f5ff;
+  color: #514696;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.referenceChip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chipButton {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.chipButton:hover:not(:disabled) {
+  background: #e8e2ff;
+}
+
+.inputLabel {
+  display: grid;
+}
+
+.textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+  padding: 4px 2px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #302d3b;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.textarea::placeholder {
+  color: #9893a3;
+}
+
+.composerFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.shortcutHint {
+  color: #8b8693;
+  font-size: 11px;
+}
+
+.sendButton,
+.stopButton,
+.resumeButton {
+  min-height: 34px;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sendButton,
+.resumeButton {
+  background: #6558c9;
+}
+
+.stopButton {
+  background: #b74b5c;
+}
+
+.sendButton:disabled,
+.stopButton:disabled,
+.resumeButton:disabled,
+.chipButton:disabled,
+.textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.messageList {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  min-width: 0;
+}
+
+.turn {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.message {
+  display: grid;
+  gap: 5px;
+  max-width: min(100%, 760px);
+  padding: 12px 14px;
+  border: 1px solid #e2dfe8;
+  border-radius: 13px;
+  background: #ffffff;
+  color: #34313d;
+}
+
+.message p,
+.thinking p,
+.citations p,
+.error p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.userMessage {
+  justify-self: end;
+  border-color: #d9d2f7;
+  background: #f5f2ff;
+}
+
+.assistantMessage {
+  justify-self: start;
+}
+
+.streaming {
+  border-color: #bfb5ec;
+  box-shadow: inset 3px 0 #7769d4;
+}
+
+.messageRole {
+  color: #756f7d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.thinking {
+  padding: 10px 12px;
+  border: 1px solid #e2dfe8;
+  border-radius: 10px;
+  background: #faf9fc;
+  color: #625d69;
+}
+
+.thinking summary {
+  cursor: pointer;
+  color: #6558a6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.thinking p {
+  margin-top: 9px;
+  line-height: 1.55;
+}
+
+.citations {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-left: 3px solid #c9c0ef;
+  background: #fbfaff;
+}
+
+.citations h4 {
+  margin: 0;
+  color: #5b5292;
+  font-size: 12px;
+}
+
+.citations ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.citations li {
+  min-width: 0;
+  color: #625d69;
+  font-size: 12px;
+}
+
+.citations a,
+.citationButton {
+  color: #5145ad;
+  font: inherit;
+  font-weight: 700;
+}
+
+.citationButton {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.citations p {
+  margin-top: 3px;
+  color: #77717f;
+  line-height: 1.45;
+}
+
+.compaction,
+.usage,
+.error {
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid #e1dee7;
+  border-radius: 10px;
+  background: #f8f7fa;
+  color: #5f5a66;
+  font-size: 12px;
+}
+
+.error {
+  border-color: #eccbd1;
+  background: #fff6f7;
+  color: #9b3446;
+}
+
+.metaGrid {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.metaGrid > div {
+  display: grid;
+  grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.metaGrid dt {
+  color: #7b7583;
+}
+
+.metaGrid dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

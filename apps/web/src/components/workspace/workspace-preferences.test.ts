@@ -34,15 +34,6 @@ describe("workspace preferences", () => {
       activeTabId: "practice",
     });
 
-    expect(JSON.parse(localStorage.getItem("workspace:personal") ?? "null")).toEqual({
-      selectedKnowledgeBaseId: "wireless",
-      activeTabId: "graph:wireless",
-    });
-    expect(JSON.parse(localStorage.getItem("workspace:math") ?? "null")).toEqual({
-      selectedKnowledgeBaseId: "geometry",
-      activeTabId: "practice",
-    });
-
     expect(readWorkspacePreference("personal")).toEqual({
       selectedKnowledgeBaseId: "wireless",
       activeTabId: "graph:wireless",
@@ -50,6 +41,22 @@ describe("workspace preferences", () => {
     expect(readWorkspacePreference("math")).toEqual({
       selectedKnowledgeBaseId: "geometry",
       activeTabId: "practice",
+    });
+  });
+
+  it("reads the temporary Agent/Tutor preference shape but discards the retired mode", () => {
+    localStorage.setItem(
+      "workspace:personal",
+      JSON.stringify({
+        selectedKnowledgeBaseId: "wireless",
+        activeTabId: "knowledge",
+        assistantMode: "tutor",
+      }),
+    );
+
+    expect(readWorkspacePreference("personal")).toEqual({
+      selectedKnowledgeBaseId: "wireless",
+      activeTabId: "knowledge",
     });
   });
 
@@ -63,6 +70,7 @@ describe("workspace preferences", () => {
     '{"selectedKnowledgeBaseId":"../wireless","activeTabId":"knowledge"}',
     '{"selectedKnowledgeBaseId":"wireless","activeTabId":"graph:"}',
     '{"selectedKnowledgeBaseId":"wireless","activeTabId":"graph:bad id"}',
+    '{"selectedKnowledgeBaseId":"wireless","activeTabId":"today","assistantMode":"assistant"}',
   ])("rejects stale or malformed stored workspace preferences: %s", (stored) => {
     localStorage.setItem("workspace:personal", stored);
     expect(readWorkspacePreference("personal")).toBeNull();
