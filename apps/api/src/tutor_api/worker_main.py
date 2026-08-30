@@ -34,6 +34,7 @@ from tutor_api.knowledge.worker import (
 )
 from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
 from tutor_api.llm.http_client import create_faro_http_client
+from tutor_api.question_bank.generation import make_question_generation_handler
 
 
 def create_session_factory(settings: Settings) -> sessionmaker[Session]:
@@ -90,6 +91,12 @@ def create_handlers(settings: Settings) -> Mapping[IngestionJobKind, JobHandler]
             model=settings.faro_model,
             formula_evidence_provider=WikipediaFormulaEvidenceProvider(),
         ),
+        IngestionJobKind.GENERATE_QUESTIONS: make_question_generation_handler(
+            llm_adapter,
+            max_chars=max(1, settings.faro_context_window // 2),
+            provider="faro",
+            model=settings.faro_model,
+        ),
     }
 
 
@@ -110,8 +117,9 @@ def main() -> None:
         # only surface as GENERATE_MARKDOWN jobs failing with llm_unauthorized.
         print(
             "WARNING: FARO_API_KEY is empty or still a placeholder; "
-            "candidate generation (GENERATE_MARKDOWN) will fail with "
-            "llm_unauthorized until a real key is configured.",
+            "candidate generation (GENERATE_MARKDOWN) and question generation "
+            "(GENERATE_QUESTIONS) will fail with llm_unauthorized until a real "
+            "key is configured.",
             flush=True,
         )
 

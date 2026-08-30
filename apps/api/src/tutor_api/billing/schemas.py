@@ -1,8 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class VerifiedUsage(BaseModel):
@@ -86,3 +87,26 @@ class BillingMeResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    payment_provider: str = "mock"
+
+
+class RechargeOrderRequest(BaseModel):
+    """Create a self-service gateway recharge order (1 积分 = 1 元)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["mock", "alipay", "wechat"]
+    amount: Decimal = Field(gt=0, decimal_places=2, max_digits=12)
+
+
+class RechargeOrderResponse(BaseModel):
+    id: UUID
+    out_trade_no: str
+    provider: str
+    amount: Decimal
+    state: str
+    pay_url: str | None = None
+    code_url: str | None = None
+    mock_confirmable: bool = False
+    created_at: datetime | None
+    paid_at: datetime | None = None

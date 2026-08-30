@@ -10,6 +10,7 @@ import {
   type TutorStatus,
 } from "@/lib/tutor-api";
 
+import { TutorRichText } from "./tutor-rich-text";
 import styles from "./workspace-shell.module.css";
 
 type Props = {
@@ -17,6 +18,19 @@ type Props = {
   contextLabel: string;
   onOpenCitation: (citation: TutorCitation) => void;
 };
+
+const TUTOR_CLARIFY_MARKER = "【追问】";
+const TUTOR_CLARIFY_HINT =
+  "导师需要先弄清方向——点击任一问题填入输入框，补充后发送即可获得完整解答。";
+
+function clarifyQuestionLines(content: string): string[] {
+  const lines = content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines[0]?.startsWith(TUTOR_CLARIFY_MARKER)) return lines.slice(1);
+  return lines;
+}
 
 export function TutorPanel({ knowledgeBase, contextLabel, onOpenCitation }: Props) {
   const [status, setStatus] = useState<TutorStatus | null>(null);
@@ -146,26 +160,55 @@ export function TutorPanel({ knowledgeBase, contextLabel, onOpenCitation }: Prop
 
       {conversation ? (
         <ol aria-label="导师对话" className={styles.tutorMessages}>
-          {conversation.messages.map((message) => (
-            <li className={message.role === "user" ? styles.tutorMessageUser : styles.tutorMessageAssistant} key={message.id}>
-              <span className={styles.tutorMessageRole}>{message.role === "user" ? "你" : "AI 导师"}</span>
-              <p>{message.content}</p>
-              {message.citations.length > 0 ? (
-                <div className={styles.tutorCitations}>
-                  {message.citations.map((citation) => (
-                    <button
-                      aria-label={`打开引用：${citation.source_name}${citation.page_number === null ? "" : `，第 ${citation.page_number} 页`}`}
-                      key={citation.id}
-                      onClick={() => onOpenCitation(citation)}
-                      type="button"
-                    >
-                      {citation.source_name}{citation.page_number === null ? "" : ` · 第 ${citation.page_number} 页`}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </li>
-          ))}
+          {conversation.messages.map((message) => {
+            const isClarify = message.role === "assistant" && message.kind === "clarify";
+            return (
+              <li
+                className={
+                  message.role === "user"
+                    ? styles.tutorMessageUser
+                    : isClarify
+                      ? `${styles.tutorMessageAssistant} ${styles.tutorMessageClarify}`
+                      : styles.tutorMessageAssistant
+                }
+                key={message.id}
+              >
+                <span className={styles.tutorMessageRole}>
+                  {message.role === "user" ? "你" : isClarify ? "AI 导师 · 追问" : "AI 导师"}
+                </span>
+                {isClarify ? (
+                  <div className={styles.tutorClarify}>
+                    <p className={styles.tutorClarifyHint}>{TUTOR_CLARIFY_HINT}</p>
+                    <div className={styles.tutorClarifyQuestions}>
+                      {clarifyQuestionLines(message.content).map((line, index) => (
+                        <button key={`${message.id}-${index}`} onClick={() => setPrompt(line)} type="button">
+                          {line}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : message.role === "assistant" ? (
+                  <TutorRichText content={message.content} />
+                ) : (
+                  <p>{message.content}</p>
+                )}
+                {message.citations.length > 0 ? (
+                  <div className={styles.tutorCitations}>
+                    {message.citations.map((citation) => (
+                      <button
+                        aria-label={`打开引用：${citation.source_name}${citation.page_number === null ? "" : `，第 ${citation.page_number} 页`}`}
+                        key={citation.id}
+                        onClick={() => onOpenCitation(citation)}
+                        type="button"
+                      >
+                        {citation.source_name}{citation.page_number === null ? "" : ` · 第 ${citation.page_number} 页`}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
         </ol>
       ) : null}
 

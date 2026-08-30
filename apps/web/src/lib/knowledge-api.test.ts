@@ -108,7 +108,7 @@ describe("knowledgeApi", () => {
       "/api/v1/knowledge-bases/kb-1/search",
       expect.objectContaining({
         credentials: "include",
-        body: JSON.stringify({ query: "勾股定理", limit: 20 }),
+        body: JSON.stringify({ query: "勾股定理", limit: 20, full: true }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(

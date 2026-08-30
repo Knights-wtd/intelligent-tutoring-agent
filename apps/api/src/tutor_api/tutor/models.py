@@ -37,6 +37,13 @@ class TutorMessageRole(StrEnum):
     ASSISTANT = "assistant"
 
 
+class TutorMessageKind(StrEnum):
+    """助手消息形态:answer 为正式作答,clarify 为 grill 式追问轮。"""
+
+    ANSWER = "answer"
+    CLARIFY = "clarify"
+
+
 class TutorConversation(Base):
     __tablename__ = "tutor_conversations"
     __table_args__ = (
@@ -110,6 +117,12 @@ class TutorMessage(Base):
     knowledge_base_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     role: Mapped[TutorMessageRole] = mapped_column(
         _enum(TutorMessageRole, "tutor_message_role"), nullable=False
+    )
+    kind: Mapped[TutorMessageKind] = mapped_column(
+        _enum(TutorMessageKind, "tutor_message_kind"),
+        nullable=False,
+        default=TutorMessageKind.ANSWER,
+        server_default=TutorMessageKind.ANSWER.value,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     citations: Mapped[list[dict[str, object]]] = mapped_column(

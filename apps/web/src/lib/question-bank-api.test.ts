@@ -22,6 +22,11 @@ describe("questionBankApi", () => {
         question_version_id: "question-version-1",
         question_type: "single_choice",
         prompt: "What is the Shannon capacity formula?",
+        choices: [
+          { key: "A", text: "带宽越大容量越大" },
+          { key: "B", text: "带宽越大容量越小" },
+        ],
+        difficulty: 2,
       },
     ] satisfies LearnerQuestion[];
     const fetchMock = vi.fn().mockResolvedValue(
@@ -53,6 +58,8 @@ describe("questionBankApi", () => {
       needs_review: true,
       review_due_at: "2026-08-26T08:00:00Z",
       review_interval_days: 1,
+      expected_answer: null,
+      explanation: null,
     } satisfies AttemptAssessment;
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(payload), { status: 200 }),
@@ -96,6 +103,8 @@ describe("questionBankApi", () => {
       needs_review: false,
       review_due_at: "2026-08-26T08:00:00Z",
       review_interval_days: 3,
+      expected_answer: null,
+      explanation: null,
     } satisfies AttemptHistoryItem;
     const payload = { items: [item], next_cursor: null };
     const fetchMock = vi.fn().mockResolvedValue(
@@ -135,6 +144,8 @@ describe("questionBankApi", () => {
           needs_review: true,
           review_due_at: "2026-08-26T08:00:00Z",
           review_interval_days: 1,
+          expected_answer: null,
+          explanation: null,
         },
       ],
       next_cursor: null,

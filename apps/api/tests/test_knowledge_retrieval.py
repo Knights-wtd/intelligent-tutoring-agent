@@ -906,3 +906,187 @@ def test_vector_hits_above_similarity_floor_are_still_returned() -> None:
     finally:
         client.close()
         engine.dispose()
+
+
+def test_search_full_content_returns_untruncated_chunk_text() -> None:
+    """导师模式返回完整原文块;默认检索仍是有界摘录,面板不受影响。"""
+
+    from tutor_api.identity.models import User
+    from tutor_api.knowledge.retrieval import search_knowledge
+
+    client, engine = make_client()
+    try:
+        registration = register(client, "full-content-owner")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        filler = "推导步骤 " * 400  # 约 2000 字符,远超 500 字摘录上限
+        long_content = f"quadratic {filler} 收尾同样包含 quadratic 关键词。"
+        with sessionmaker(bind=engine)() as session:
+            seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="algebra.md",
+                content=long_content,
+                vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            )
+            user = session.get(User, UUID(registration["user"]["id"]))
+            assert user is not None
+            kb_id = UUID(knowledge_base["id"])
+
+            bounded = search_knowledge(
+                session,
+                user,
+                kb_id,
+                query="quadratic",
+                limit=5,
+                embedding_adapter=FixedEmbeddingAdapter(),
+                citation_secret="test-secret",
+            )
+            full = search_knowledge(
+                session,
+                user,
+                kb_id,
+                query="quadratic",
+                limit=5,
+                embedding_adapter=FixedEmbeddingAdapter(),
+                citation_secret="test-secret",
+                full_content=True,
+            )
+
+        assert bounded, "lexical hit expected"
+        assert len(bounded[0].excerpt) <= MAX_EXCERPT_CHARACTERS + 2
+        assert full, "full-content hit expected"
+        assert full[0].excerpt == " ".join(long_content.split())
+        assert len(full[0].excerpt) > MAX_EXCERPT_CHARACTERS
+        assert full[0].citation.source_name == "algebra.md"
+    finally:
+        client.close()
+        engine.dispose()
+
+
+def test_search_endpoint_full_flag_returns_untruncated_chunk_text() -> None:
+    """`full: true` 走 API 层直通 full_content，返回完整分块而非 500 字摘要。"""
+
+    client, engine = make_client()
+    try:
+        registration = register(client, "retrieval-full-endpoint")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        long_content = " ".join(
+            f"第{number}段讲解二次方程的配方法与判别式的含义。" for number in range(1, 60)
+        )
+        with sessionmaker(bind=engine)() as session:
+            seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="algebra.md",
+                content=long_content,
+                vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            )
+            session.commit()
+
+        bounded = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "判别式", "limit": 5},
+        )
+        full = client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/search",
+            json={"query": "判别式", "limit": 5, "full": True},
+        )
+
+        assert bounded.status_code == 200, bounded.text
+        assert full.status_code == 200, full.text
+        bounded_excerpt = bounded.json()["results"][0]["excerpt"]
+        full_excerpt = full.json()["results"][0]["excerpt"]
+        assert len(bounded_excerpt) <= MAX_EXCERPT_CHARACTERS + 2
+        assert full_excerpt == " ".join(long_content.split())
+        assert len(full_excerpt) > MAX_EXCERPT_CHARACTERS
+    finally:
+        client.close()
+        engine.dispose()
+
+
+def test_document_chunks_endpoint_returns_full_chunk_content_in_order() -> None:
+    """资料查看器按序拿到整份文档的详细分块（含页码），未索引文档返回空列表。"""
+
+    client, engine = make_client()
+    try:
+        registration = register(client, "retrieval-chunks")
+        knowledge_base = create_knowledge_base(client, registration["personal_space"]["id"])
+        with sessionmaker(bind=engine)() as session:
+            seed_chunk(
+                session,
+                user_id=UUID(registration["user"]["id"]),
+                space_id=UUID(registration["personal_space"]["id"]),
+                knowledge_base_id=UUID(knowledge_base["id"]),
+                source_name="physics.md",
+                content="第一块：牛顿第一定律描述惯性。",
+                vector=[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ordinal=0,
+                page_number=3,
+            )
+            document = session.scalar(select(Document).where(Document.source_key == "physics.md"))
+            assert document is not None
+            document_id = document.id
+            version = session.scalar(
+                select(DocumentVersion).where(DocumentVersion.document_id == document.id)
+            )
+            index = session.scalar(select(IndexVersion).limit(1))
+            assert version is not None and index is not None
+            page = Page(
+                space_id=document.space_id,
+                document_version_id=version.id,
+                page_number=4,
+                source_pointer="physics.md#page=4",
+                content_sha256=content_sha256("第二块：牛顿第二定律描述加速度与力的关系。"),
+                source_metadata={},
+            )
+            session.add(page)
+            session.flush()
+            session.add(
+                Chunk(
+                    space_id=document.space_id,
+                    knowledge_base_id=document.knowledge_base_id,
+                    index_version_id=index.id,
+                    document_version_id=version.id,
+                    page_id=page.id,
+                    block_id=None,
+                    ordinal=1,
+                    source_pointer="physics.md#page=4#chunk=1",
+                    content_sha256=content_sha256("第二块：牛顿第二定律描述加速度与力的关系。"),
+                    content="第二块：牛顿第二定律描述加速度与力的关系。",
+                    lexical_terms=[],
+                    embedding_dimension=8,
+                    index_signature=index.index_signature,
+                    embedding=[0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                )
+            )
+            session.commit()
+
+        response = client.get(
+            f"/api/v1/knowledge-bases/{knowledge_base['id']}/documents/{document_id}/chunks"
+        )
+
+        assert response.status_code == 200, response.text
+        chunks = response.json()
+        assert [chunk["ordinal"] for chunk in chunks] == [0, 1]
+        assert chunks[0]["content"] == "第一块：牛顿第一定律描述惯性。"
+        assert chunks[1]["content"] == "第二块：牛顿第二定律描述加速度与力的关系。"
+        assert [chunk["page_number"] for chunk in chunks] == [3, 4]
+
+        other_response = client.post(
+            f"/api/v1/spaces/{registration['personal_space']['id']}/knowledge-bases",
+            json={"name": "另一个检索教材"},
+        )
+        assert other_response.status_code == 201
+        other_kb = other_response.json()
+        missing = client.get(
+            f"/api/v1/knowledge-bases/{other_kb['id']}/documents/{document_id}/chunks"
+        )
+        assert missing.status_code == 200
+        assert missing.json() == []
+    finally:
+        client.close()
+        engine.dispose()

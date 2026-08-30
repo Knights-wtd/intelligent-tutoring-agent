@@ -18,6 +18,7 @@ import {
 
 import { KnowledgeCandidateReview } from "./knowledge-candidate-review";
 import { KnowledgeExplorer } from "./knowledge-explorer";
+import { TutorRichText } from "./tutor-rich-text";
 
 import styles from "./workspace-shell.module.css";
 
@@ -88,6 +89,9 @@ function KnowledgePanelForKnowledgeBase({
   const [isConfirmingCandidates, setIsConfirmingCandidates] = useState(false);
   const [workspaceDocuments, setWorkspaceDocuments] = useState<KnowledgeWorkspaceDocument[]>([]);
   const [publishedNotes, setPublishedNotes] = useState<KnowledgeNoteSummary[]>([]);
+  const [documentRefreshStates, setDocumentRefreshStates] = useState<
+    Record<string, "refreshing" | "failed">
+  >({});
   const [workspaceNotice, setWorkspaceNotice] = useState<{
     knowledgeBaseId: string;
     message: string;
@@ -403,8 +407,8 @@ function KnowledgePanelForKnowledgeBase({
       }
     }
   }
-  async function startCandidateGeneration(entry: UploadEntry) {
-    if (!entry.response || !selectedKnowledgeBaseId || isGeneratingCandidates) return;
+  async function startCandidateGenerationForVersion(documentVersionId: string) {
+    if (!selectedKnowledgeBaseId || isGeneratingCandidates) return;
     setIsGeneratingCandidates(true);
     setCandidateMessage("");
     try {
@@ -412,14 +416,73 @@ function KnowledgePanelForKnowledgeBase({
       // replayed from the server's idempotency cache.
       const batch = await knowledgeApi.startCandidateGeneration(
         selectedKnowledgeBaseId,
-        entry.response.document_version_id,
-        `candidate-${entry.response.document_version_id}-${crypto.randomUUID()}`,
+        documentVersionId,
+        `candidate-${documentVersionId}-${crypto.randomUUID()}`,
       );
       showCandidateBatch(batch);
     } catch {
       setCandidateMessage("知识候选暂时无法生成，请稍后重试。");
     } finally {
       setIsGeneratingCandidates(false);
+    }
+  }
+
+  async function refreshDocument(document: KnowledgeWorkspaceDocument) {
+    if (!selectedKnowledgeBaseId) return;
+    if (documentRefreshStates[document.document_id] === "refreshing") return;
+    statusControllersRef.current.get(document.document_id)?.abort();
+    const controller = new AbortController();
+    statusControllersRef.current.set(document.document_id, controller);
+    const contextSequence = contextSequenceRef.current;
+    setDocumentRefreshStates((current) => ({
+      ...current,
+      [document.document_id]: "refreshing",
+    }));
+    try {
+      const status = await knowledgeApi.documentStatus(
+        selectedKnowledgeBaseId,
+        document.document_id,
+        document.document_version_id,
+        controller.signal,
+      );
+      if (
+        controller.signal.aborted ||
+        !mountedRef.current ||
+        contextSequence !== contextSequenceRef.current
+      ) {
+        return;
+      }
+      setWorkspaceDocuments((current) =>
+        current.map((item) =>
+          item.document_id === status.document_id &&
+          item.document_version_id === status.document_version_id
+            ? { ...item, processing_state: status.processing_state }
+            : item,
+        ),
+      );
+      setDocumentRefreshStates((current) => {
+        const next = { ...current };
+        delete next[document.document_id];
+        return next;
+      });
+      if (status.processing_state !== "processing") {
+        setWorkspaceReload((value) => value + 1);
+      }
+    } catch {
+      if (
+        !controller.signal.aborted &&
+        mountedRef.current &&
+        contextSequence === contextSequenceRef.current
+      ) {
+        setDocumentRefreshStates((current) => ({
+          ...current,
+          [document.document_id]: "failed",
+        }));
+      }
+    } finally {
+      if (statusControllersRef.current.get(document.document_id) === controller) {
+        statusControllersRef.current.delete(document.document_id);
+      }
     }
   }
 
@@ -684,10 +747,19 @@ function KnowledgePanelForKnowledgeBase({
 
           <KnowledgeExplorer
             documents={workspaceDocuments}
+            documentRefreshStates={documentRefreshStates}
             initialNoteId={initialNoteId}
+            isGeneratingCandidates={isGeneratingCandidates}
             knowledgeBase={selectedKnowledgeBase}
             notes={publishedNotes}
+            onGenerateCandidates={(document) =>
+              void startCandidateGenerationForVersion(document.document_version_id)
+            }
             onInitialNoteHandled={onInitialNoteHandled}
+            onRefreshDocument={(document) => void refreshDocument(document)}
+            suppressActionDocumentIds={uploads
+              .map((entry) => entry.response?.document_id)
+              .filter((id): id is string => Boolean(id))}
             taskContent={
               uploads.length > 0 ? (
                 <section aria-label="当前上传任务" className={styles.explorerFolder}>
@@ -732,7 +804,12 @@ function KnowledgePanelForKnowledgeBase({
                             {entry.processingState === "searchable" ? (
                               <button
                                 disabled={isGeneratingCandidates}
-                                onClick={() => void startCandidateGeneration(entry)}
+                                onClick={() =>
+                                  entry.response &&
+                                  void startCandidateGenerationForVersion(
+                                    entry.response.document_version_id,
+                                  )
+                                }
                                 type="button"
                               >
                                 {isGeneratingCandidates ? "生成中…" : "生成知识候选"}
@@ -823,7 +900,9 @@ function KnowledgePanelForKnowledgeBase({
             <ol aria-label="知识库搜索结果" className={styles.searchResults}>
               {searchResults.map((result) => (
                 <li key={result.citation.id}>
-                  <p>{result.excerpt}</p>
+                  <div className={styles.searchResultContent}>
+                    <TutorRichText content={result.excerpt} />
+                  </div>
                   <span>{citationLabel(result.citation)}</span>
                   <button
                     disabled={isOpeningPreview}

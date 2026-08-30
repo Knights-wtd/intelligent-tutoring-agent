@@ -43,6 +43,8 @@ QUESTION_RESPONSE_FIELDS = {
     "version_number",
     "question_type",
     "prompt",
+    "choices",
+    "difficulty",
     "created_at",
 }
 ATTEMPT_RESPONSE_FIELDS = {
@@ -60,6 +62,9 @@ ATTEMPT_RESPONSE_FIELDS = {
     "grading_contract_version",
     "mastery_contract_version",
     "review_policy_version",
+    # 交卷后揭示的正确答案与解析。
+    "expected_answer",
+    "explanation",
 }
 
 REVIEW_ITEM_FIELDS = {
@@ -102,7 +107,6 @@ REVIEW_ITEM_PRIVATE_FIELDS = {
 }
 ATTEMPT_PRIVATE_FIELDS = {
     "answer",
-    "expected_answer",
     "expected_keywords",
     "source_chunk_id",
     "source_chunk_ordinal",
@@ -111,6 +115,7 @@ ATTEMPT_PRIVATE_FIELDS = {
     "source_index_signature",
     "user_id",
     "request_key_hash",
+    # expected_answer 不在此列：作答后的响应必须揭示正确答案（新契约）。
 }
 
 PRIVATE_MARKERS = {
@@ -671,10 +676,11 @@ def test_question_attempts_are_private_idempotent_and_tenant_scoped() -> None:
     assert first_payload["mastery_basis_points"] == 10_000
     assert first_payload["mastery_evidence_count"] == 1
     assert first_payload["review_interval_days"] == 7
+    # 交卷后响应必须揭示正确答案与解析（若有）。
+    assert first_payload["expected_answer"] == "private expected answer"
     assert not (ATTEMPT_PRIVATE_FIELDS & set(first_payload))
     for marker in (
         "PRIVATE   expected ANSWER",
-        "private expected answer",
         "attempt-key",
         source["content"],
     ):
@@ -930,6 +936,7 @@ def test_postgresql_submission_lock_precedes_replay_and_history_reads(monkeypatc
         question_type=QuestionType.SHORT,
         expected_answer="correct",
         expected_keywords=[],
+        explanation=None,
     )
 
     class PostgreSQLSession:

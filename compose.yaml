@@ -147,6 +147,9 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_APT_MIRROR: ${DEBIAN_APT_MIRROR:-deb.debian.org}
     environment:
       APP_ENV: ${APP_ENV:-development}
       API_HOST: ${API_HOST:-0.0.0.0}
@@ -170,6 +173,19 @@ services:
       FARO_TIMEOUT_SECONDS: ${FARO_TIMEOUT_SECONDS:-60}
       FARO_MAX_CONCURRENCY: ${FARO_MAX_CONCURRENCY:-2}
       FARO_PROXY_URL: ${FARO_PROXY_URL:-}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-}
+      ALIPAY_APP_PRIVATE_KEY: ${ALIPAY_APP_PRIVATE_KEY:-}
+      ALIPAY_PUBLIC_KEY: ${ALIPAY_PUBLIC_KEY:-}
+      ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi.alipay.com/gateway.do}
+      ALIPAY_NOTIFY_BASE_URL: ${ALIPAY_NOTIFY_BASE_URL:-}
+      WECHAT_MCH_ID: ${WECHAT_MCH_ID:-}
+      WECHAT_APP_ID: ${WECHAT_APP_ID:-}
+      WECHAT_MCH_SERIAL_NO: ${WECHAT_MCH_SERIAL_NO:-}
+      WECHAT_MCH_PRIVATE_KEY: ${WECHAT_MCH_PRIVATE_KEY:-}
+      WECHAT_APIV3_KEY: ${WECHAT_APIV3_KEY:-}
+      WECHAT_GATEWAY_URL: ${WECHAT_GATEWAY_URL:-https://api.mch.weixin.qq.com}
+      WECHAT_NOTIFY_BASE_URL: ${WECHAT_NOTIFY_BASE_URL:-}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:${API_PORT:-8000}"
     depends_on:
@@ -185,6 +201,9 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        DEBIAN_APT_MIRROR: ${DEBIAN_APT_MIRROR:-deb.debian.org}
     environment:
       APP_ENV: ${APP_ENV:-development}
       API_HOST: ${API_HOST:-0.0.0.0}
@@ -208,6 +227,19 @@ services:
       FARO_TIMEOUT_SECONDS: ${FARO_TIMEOUT_SECONDS:-60}
       FARO_MAX_CONCURRENCY: ${FARO_MAX_CONCURRENCY:-2}
       FARO_PROXY_URL: ${FARO_PROXY_URL:-}
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+      ALIPAY_APP_ID: ${ALIPAY_APP_ID:-}
+      ALIPAY_APP_PRIVATE_KEY: ${ALIPAY_APP_PRIVATE_KEY:-}
+      ALIPAY_PUBLIC_KEY: ${ALIPAY_PUBLIC_KEY:-}
+      ALIPAY_GATEWAY_URL: ${ALIPAY_GATEWAY_URL:-https://openapi.alipay.com/gateway.do}
+      ALIPAY_NOTIFY_BASE_URL: ${ALIPAY_NOTIFY_BASE_URL:-}
+      WECHAT_MCH_ID: ${WECHAT_MCH_ID:-}
+      WECHAT_APP_ID: ${WECHAT_APP_ID:-}
+      WECHAT_MCH_SERIAL_NO: ${WECHAT_MCH_SERIAL_NO:-}
+      WECHAT_MCH_PRIVATE_KEY: ${WECHAT_MCH_PRIVATE_KEY:-}
+      WECHAT_APIV3_KEY: ${WECHAT_APIV3_KEY:-}
+      WECHAT_GATEWAY_URL: ${WECHAT_GATEWAY_URL:-https://api.mch.weixin.qq.com}
+      WECHAT_NOTIFY_BASE_URL: ${WECHAT_NOTIFY_BASE_URL:-}
     command: ["python", "-m", "tutor_api.worker_main"]
     healthcheck:
       disable: true
@@ -220,6 +252,8 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
     environment:
       API_INTERNAL_URL: http://api:${API_PORT:-8000}
     ports:

@@ -10,6 +10,8 @@ const mockQuestionBankApi = vi.hoisted(() => ({
   submitAttempt: vi.fn(),
   listReviewItems: vi.fn(),
   listAttemptHistory: vi.fn(),
+  generateQuestions: vi.fn(),
+  getQuestionGeneration: vi.fn(),
 }));
 
 vi.mock("@/lib/knowledge-api", async (importOriginal) => {
@@ -40,6 +42,30 @@ const assessment = {
   grading_contract_version: "grading-v1",
   mastery_contract_version: "mastery-v1",
   review_policy_version: "review-v1",
+  expected_answer: null,
+  explanation: null,
+};
+const choiceAssessment = {
+  ...assessment,
+  expected_answer: "B",
+  explanation: "勾股定理指出两直角边平方和等于斜边平方。",
+};
+const choiceQuestion = {
+  id: "question-9",
+  question_version_id: "version-9",
+  knowledge_base_id: "kb-math",
+  space_id: "space-math",
+  version_number: 1,
+  question_type: "choice",
+  prompt: "勾股定理指的是什么？",
+  choices: [
+    { key: "A", text: "两直角边之和等于斜边" },
+    { key: "B", text: "两直角边的平方和等于斜边的平方" },
+    { key: "C", text: "斜边最长" },
+    { key: "D", text: "三角形内角和为 180 度" },
+  ],
+  difficulty: 2,
+  created_at: "2026-08-21T00:00:00Z",
 };
 
 beforeEach(() => {
@@ -64,6 +90,8 @@ beforeEach(() => {
       version_number: 1,
       question_type: "short",
       prompt: "请写出勾股定理。",
+      choices: null,
+      difficulty: null,
       created_at: "2026-08-21T00:00:00Z",
     },
   ]);
@@ -71,6 +99,24 @@ beforeEach(() => {
   mockQuestionBankApi.listAttemptHistory.mockResolvedValue({
     items: [{ ...assessment, question_id: "question-1", question_type: "short", prompt: "请写出勾股定理。", attempted_at: "2026-08-20T00:00:00Z" }],
     next_cursor: null,
+  });
+  mockQuestionBankApi.generateQuestions.mockResolvedValue({
+    generation_id: "gen-1",
+    state: "processing",
+    failure_code: null,
+    requested_question_count: 10,
+    question_count: 0,
+    created_at: "2026-08-30T00:00:00Z",
+    completed_at: null,
+  });
+  mockQuestionBankApi.getQuestionGeneration.mockResolvedValue({
+    generation_id: "gen-1",
+    state: "completed",
+    failure_code: null,
+    requested_question_count: 10,
+    question_count: 2,
+    created_at: "2026-08-30T00:00:00Z",
+    completed_at: "2026-08-30T00:01:00Z",
   });
 });
 
@@ -202,6 +248,101 @@ describe("QuestionBankPanel", () => {
     expect(await screen.findByText("暂无待复习项。")).toBeInTheDocument();
     expect(mockQuestionBankApi.submitAttempt.mock.calls[1]?.[3]).toBe(firstKey);
     expect(answerInput).toHaveValue("");
+  });
+
+  it("renders choice questions, reveals the correct answer and explanation after submitting", async () => {
+    const user = userEvent.setup();
+    mockQuestionBankApi.listQuestions.mockResolvedValue([choiceQuestion]);
+    mockQuestionBankApi.submitAttempt.mockResolvedValue(choiceAssessment);
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} />);
+
+    expect(await screen.findByText("勾股定理指的是什么？")).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: "选项" })).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: /两直角边的平方和等于斜边的平方/ }));
+    await user.click(screen.getByRole("button", { name: "提交答案" }));
+
+    expect(mockQuestionBankApi.submitAttempt).toHaveBeenCalledWith(
+      "kb-math",
+      "version-9",
+      "B",
+      expect.stringMatching(/^web-attempt-/),
+      expect.any(AbortSignal),
+    );
+    expect(await screen.findByText("回答正确")).toBeInTheDocument();
+    expect(screen.getByText(/正确答案：B/)).toBeInTheDocument();
+    expect(screen.getByLabelText("答案解析")).toHaveTextContent("勾股定理指出两直角边平方和等于斜边平方。");
+  });
+
+  it("generates questions from the knowledge base and reloads them when the job completes", async () => {
+    const user = userEvent.setup();
+    mockQuestionBankApi.listQuestions.mockResolvedValue([]);
+    mockQuestionBankApi.getQuestionGeneration.mockResolvedValue({
+      generation_id: "gen-1",
+      state: "processing",
+      failure_code: null,
+      requested_question_count: 10,
+      question_count: 0,
+      created_at: "2026-08-30T00:00:00Z",
+      completed_at: null,
+    });
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} />);
+
+    expect(
+      await screen.findByText(/AI 生成课后题/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/当前知识库还没有题目/),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "AI 生成课后题" }));
+    expect(mockQuestionBankApi.generateQuestions).toHaveBeenCalledWith(
+      "kb-math",
+      10,
+      expect.any(AbortSignal),
+    );
+    expect(screen.getByRole("button", { name: "生成中…" })).toBeDisabled();
+
+    // 第一次轮询仍在处理，随后完成并重载题目。
+    await waitFor(
+      () => expect(mockQuestionBankApi.getQuestionGeneration).toHaveBeenCalled(),
+    );
+    mockQuestionBankApi.listQuestions.mockResolvedValue([choiceQuestion]);
+    mockQuestionBankApi.getQuestionGeneration.mockResolvedValue({
+      generation_id: "gen-1",
+      state: "completed",
+      failure_code: null,
+      requested_question_count: 10,
+      question_count: 1,
+      created_at: "2026-08-30T00:00:00Z",
+      completed_at: "2026-08-30T00:01:00Z",
+    });
+
+    expect(
+      await screen.findByText("已生成 1 道课后题。", {}, { timeout: 4000 }),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("勾股定理指的是什么？")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AI 生成课后题" })).toBeEnabled();
+  });
+
+  it("surfaces a friendly message when generation fails permanently", async () => {
+    const user = userEvent.setup();
+    mockQuestionBankApi.listQuestions.mockResolvedValue([]);
+    mockQuestionBankApi.generateQuestions.mockResolvedValue({
+      generation_id: "gen-2",
+      state: "failed",
+      failure_code: "llm_unauthorized",
+      requested_question_count: 10,
+      question_count: 0,
+      created_at: "2026-08-30T00:00:00Z",
+      completed_at: "2026-08-30T00:00:10Z",
+    });
+    render(<QuestionBankPanel knowledgeBase={knowledgeBase} />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "AI 生成课后题" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("AI 服务密钥无效");
+    expect(screen.getByRole("button", { name: "AI 生成课后题" })).toBeEnabled();
   });
 
   it("reuses the idempotency key for the same answer retry and replaces it after an answer change", async () => {

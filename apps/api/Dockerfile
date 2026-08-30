@@ -1,10 +1,15 @@
 # Keep the readable tag; update its digest deliberately with each version bump.
 FROM python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134 AS build
 
+# Package index defaults to official PyPI. Regional mirrors (e.g. Tsinghua)
+# rate-limit or 403 some networks with "from versions: none"; override via
+# --build-arg PIP_INDEX_URL=... (compose passes PIP_INDEX_URL from .env).
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+    PIP_INDEX_URL=${PIP_INDEX_URL}
 
 WORKDIR /build
 
@@ -18,17 +23,23 @@ RUN python -m pip wheel --no-build-isolation --no-deps --wheel-dir /wheels .
 
 FROM python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134 AS runtime
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
     API_HOST=0.0.0.0 \
     API_PORT=8000
 
 WORKDIR /app
 
-RUN sed -i -e 's|http://deb.debian.org/debian-security|http://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
-        -e 's|http://deb.debian.org/debian|http://mirrors.tuna.tsinghua.edu.cn/debian|g' \
+# apt mirror defaults to official Debian; override when a regional mirror is
+# reachable (the same ARG-style override as PIP_INDEX_URL).
+ARG DEBIAN_APT_MIRROR=deb.debian.org
+
+RUN sed -i -e "s|http://deb.debian.org/debian-security|http://${DEBIAN_APT_MIRROR}/debian-security|g" \
+        -e "s|http://deb.debian.org/debian|http://${DEBIAN_APT_MIRROR}/debian|g" \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install -y --no-install-recommends \

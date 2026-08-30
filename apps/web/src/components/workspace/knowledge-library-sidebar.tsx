@@ -24,6 +24,7 @@ type KnowledgeLibrarySidebarProps = {
   onOpenDueReview?: () => void;
   onSwitchSpace?: () => void;
   onOpenClassroom?: () => void;
+  onOpenAccount?: () => void;
   onOpenSettings?: () => void;
 };
 
@@ -40,6 +41,7 @@ export function KnowledgeLibrarySidebar({
   onOpenDueReview,
   onSwitchSpace,
   onOpenClassroom,
+  onOpenAccount,
   onOpenSettings,
 }: KnowledgeLibrarySidebarProps) {
   const inputId = useId();
@@ -69,6 +71,7 @@ export function KnowledgeLibrarySidebar({
   };
 
   const utilityActions = [
+    ["账户", onOpenAccount],
     ["导入教材", onOpenImport],
     ["待复习", onOpenDueReview],
     ["切换空间", onSwitchSpace],

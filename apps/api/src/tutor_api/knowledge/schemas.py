@@ -80,6 +80,8 @@ class KnowledgeSearchRequest(BaseModel):
 
     query: str
     limit: int = Field(default=10, ge=1, le=MAX_RESULTS)
+    # full=true 时返回完整分块原文（上限约 1200 字/块）而非 500 字检索摘要。
+    full: bool = False
 
     @field_validator("query")
     @classmethod
@@ -100,6 +102,12 @@ class KnowledgeSearchResultResponse(BaseModel):
 
 class KnowledgeSearchResponse(BaseModel):
     results: list[KnowledgeSearchResultResponse]
+
+
+class KnowledgeDocumentChunkResponse(BaseModel):
+    ordinal: int
+    content: str
+    page_number: int | None
 
 
 class CreateKnowledgeCandidateBatchRequest(BaseModel):

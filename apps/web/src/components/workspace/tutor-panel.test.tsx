@@ -23,8 +23,8 @@ const created: TutorConversation = {
   knowledge_base_id: "kb-1",
   title: "勾股定理",
   messages: [
-    { id: "message-1", role: "user", content: "什么是勾股定理？", citations: [], created_at: "2026-08-25T00:00:00Z" },
-    { id: "message-2", role: "assistant", content: "直角三角形三边满足关系。", citations: [citation], created_at: "2026-08-25T00:00:01Z" },
+    { id: "message-1", role: "user", kind: "answer", content: "什么是勾股定理？", citations: [], created_at: "2026-08-25T00:00:00Z" },
+    { id: "message-2", role: "assistant", kind: "answer", content: "直角三角形三边满足关系。", citations: [citation], created_at: "2026-08-25T00:00:01Z" },
   ],
   created_at: "2026-08-25T00:00:00Z",
   updated_at: "2026-08-25T00:00:01Z",
@@ -56,6 +56,71 @@ describe("TutorPanel", () => {
     expect(mockTutorApi.status).toHaveBeenCalledTimes(1);
   });
 
+  it("renders clarify rounds as a clickable question card and prefills the input", async () => {
+    const user = userEvent.setup();
+    const clarifyConversation: TutorConversation = {
+      ...created,
+      messages: [
+        created.messages[0],
+        {
+          id: "message-clarify",
+          role: "assistant",
+          kind: "clarify",
+          content: "【追问】\n1. 你问的是定理本身还是它的证明？这决定讲解深度。\n➡️ 推荐先掌握定理本身，教材第 42 页有完整表述。",
+          citations: [],
+          created_at: "2026-08-25T00:00:01Z",
+        },
+      ],
+    };
+    mockTutorApi.createConversation.mockResolvedValue(clarifyConversation);
+    render(<TutorPanel knowledgeBase={{ id: "kb-1", name: "七年级数学" }} contextLabel="勾股定理" onOpenCitation={vi.fn()} />);
+
+    const input = await screen.findByRole("textbox", { name: "向 AI 导师提问" });
+    await user.type(input, "什么是勾股定理？");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    const messages = await screen.findByRole("list", { name: "导师对话" });
+    expect(await within(messages).findByText(/追问/)).toBeInTheDocument();
+    expect(within(messages).getByText(/导师需要先弄清方向/)).toBeInTheDocument();
+    expect(within(messages).queryByText(/【追问】/)).not.toBeInTheDocument();
+    const questionButton = within(messages).getByRole("button", { name: /你问的是定理本身还是它的证明/ });
+    await user.click(questionButton);
+
+    const promptInput = screen.getByRole("textbox", { name: "向 AI 导师提问" }) as HTMLTextAreaElement;
+    expect(promptInput.value).toContain("你问的是定理本身还是它的证明");
+  });
+
+  it("renders assistant answers with rich formatting (headings, bold, lists)", async () => {
+    const user = userEvent.setup();
+    const richConversation: TutorConversation = {
+      ...created,
+      messages: [
+        created.messages[0],
+        {
+          id: "message-rich",
+          role: "assistant",
+          kind: "answer",
+          content:
+            "## 原理与机制\n结论:**路径损耗随距离增大**,这是问题的核心。\n### 证据依据\n- 摘录 [1] 给出了定义\n",
+          citations: [citation],
+          created_at: "2026-08-25T00:00:01Z",
+        },
+      ],
+    };
+    mockTutorApi.createConversation.mockResolvedValue(richConversation);
+    render(<TutorPanel knowledgeBase={{ id: "kb-1", name: "七年级数学" }} contextLabel="勾股定理" onOpenCitation={vi.fn()} />);
+
+    const input = await screen.findByRole("textbox", { name: "向 AI 导师提问" });
+    await user.type(input, "什么是路径损耗？");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(await screen.findByRole("heading", { level: 4, name: "原理与机制" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 5, name: "证据依据" })).toBeInTheDocument();
+    expect(screen.getByText("路径损耗随距离增大").tagName).toBe("STRONG");
+    // 对话列表 <ol> + 消息内的要点 <ul>。
+    expect(screen.getAllByRole("list")).toHaveLength(2);
+  });
+
   it("does not create a conversation when the provider is unconfigured", async () => {
     mockTutorApi.status.mockResolvedValue({ configured: false, model: "faro-mini" });
     render(<TutorPanel knowledgeBase={{ id: "kb-1", name: "七年级数学" }} contextLabel="章节" onOpenCitation={vi.fn()} />);
@@ -68,7 +133,7 @@ describe("TutorPanel", () => {
   it("sends later prompts through the existing conversation without reloading status", async () => {
     const user = userEvent.setup();
     mockTutorApi.createConversation.mockResolvedValue(created);
-    mockTutorApi.sendMessage.mockResolvedValue({ ...created, messages: [...created.messages, { id: "message-3", role: "user", content: "继续", citations: [], created_at: "2026-08-25T00:00:02Z" }] });
+    mockTutorApi.sendMessage.mockResolvedValue({ ...created, messages: [...created.messages, { id: "message-3", role: "user", kind: "answer", content: "继续", citations: [], created_at: "2026-08-25T00:00:02Z" }] });
     render(<TutorPanel knowledgeBase={{ id: "kb-1", name: "七年级数学" }} contextLabel="章节" onOpenCitation={vi.fn()} />);
     const input = await screen.findByRole("textbox", { name: "向 AI 导师提问" });
 

@@ -83,6 +83,7 @@ def _response(
             TutorMessageResponse(
                 id=message.id,
                 role=message.role.value,
+                kind=message.kind.value,
                 content=message.content,
                 citations=message.citations,
                 created_at=_utc(message.created_at),

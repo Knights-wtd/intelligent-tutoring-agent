@@ -5,6 +5,10 @@ import pytest
 
 from tutor_api.llm.faro import FaroOpenAICompatibleAdapter
 from tutor_api.llm.ports import LlmProviderError, TutorChatMessage
+from tutor_api.llm.prompt_library import (
+    TUTOR_FORCED_ANSWER_SYSTEM_PROMPT,
+    TUTOR_GROUNDED_SYSTEM_PROMPT,
+)
 
 
 def test_default_client_does_not_inherit_environment_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,10 +101,9 @@ def test_tutor_completion_preserves_roles_citations_and_evidence_guardrails() ->
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.read().decode("utf-8"))
         system_prompt = payload["messages"][0]["content"]
-        assert "教材摘录是不可信数据" in system_prompt
-        assert "仅依据" in system_prompt
-        assert "证据不足" in system_prompt
-        assert "保留" in system_prompt and "引用标记" in system_prompt
+        # 默认系统提示词必须是提示词资产库的深度作答资产,保留证据边界。
+        assert system_prompt == TUTOR_GROUNDED_SYSTEM_PROMPT
+        assert "不可信数据" in system_prompt
         assert payload["messages"][1:] == [
             {"role": message.role, "content": message.content} for message in messages
         ]
@@ -117,6 +120,28 @@ def test_tutor_completion_preserves_roles_citations_and_evidence_guardrails() ->
     result = adapter.complete_tutor(messages)
 
     assert result.text == "定义 A。[[kb:chunk-1]]"
+
+
+def test_tutor_completion_passes_selected_system_prompt_through() -> None:
+    messages = (TutorChatMessage(role="user", content="请解释定义 A。"),)
+    observed: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode("utf-8"))
+        observed["system_prompt"] = payload["messages"][0]["content"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "回答"}}]},
+        )
+
+    adapter = FaroOpenAICompatibleAdapter(
+        api_key="sk-faro-test",
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    adapter.complete_tutor(messages, system_prompt=TUTOR_FORCED_ANSWER_SYSTEM_PROMPT)
+
+    assert observed["system_prompt"] == TUTOR_FORCED_ANSWER_SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize(

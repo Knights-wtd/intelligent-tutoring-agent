@@ -3,6 +3,13 @@ export type LearnerQuestion = {
   question_version_id: string;
   question_type: string;
   prompt: string;
+  choices: ChoiceOption[] | null;
+  difficulty: number | null;
+};
+
+export type ChoiceOption = {
+  key: string;
+  text: string;
 };
 
 export type AttemptAssessment = {
@@ -13,6 +20,9 @@ export type AttemptAssessment = {
   needs_review: boolean;
   review_due_at: string;
   review_interval_days: number;
+  /** 交卷后揭示：正确答案（选择题为选项 key）与解析。 */
+  expected_answer: string | null;
+  explanation: string | null;
 };
 
 export type ReviewItem = AttemptAssessment & {
@@ -38,6 +48,16 @@ export type ReviewItemsResponse = PaginatedResponse<ReviewItem>;
 export type ListReviewItemsOptions = {
   scope?: "all" | "due";
   limit?: number;
+};
+
+export type QuestionGeneration = {
+  generation_id: string;
+  state: "processing" | "completed" | "failed";
+  failure_code: string | null;
+  requested_question_count: number;
+  question_count: number;
+  created_at: string;
+  completed_at: string | null;
 };
 
 export class QuestionBankApiError extends Error {
@@ -72,6 +92,32 @@ export const questionBankApi = {
     return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/questions`, {
       signal,
     });
+  },
+
+  /**
+   * 让 AI 基于整个知识库生成一套由简到难的选择题；后端入队异步任务，
+   * 前端用 getQuestionGeneration 轮询直到 completed/failed。
+   */
+  generateQuestions(knowledgeBaseId: string, count: number, signal?: AbortSignal): Promise<QuestionGeneration> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/question-generations`,
+      {
+        method: "POST",
+        body: JSON.stringify({ count }),
+        signal,
+      },
+    );
+  },
+
+  getQuestionGeneration(
+    knowledgeBaseId: string,
+    generationId: string,
+    signal?: AbortSignal,
+  ): Promise<QuestionGeneration> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/question-generations/${resource(generationId)}`,
+      { signal },
+    );
   },
 
   submitAttempt(

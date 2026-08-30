@@ -358,6 +358,7 @@ describe("WorkspaceShell", () => {
         {
           id: "message-user",
           role: "user",
+          kind: "answer",
           content: "解释路径损耗",
           citations: [],
           created_at: "2026-08-26T00:00:00Z",
@@ -365,6 +366,7 @@ describe("WorkspaceShell", () => {
         {
           id: "message-assistant",
           role: "assistant",
+          kind: "answer",
           content: "路径损耗随距离增加而增大。",
           citations: [
             {

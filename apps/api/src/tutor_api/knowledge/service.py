@@ -9,7 +9,7 @@ from typing import BinaryIO
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -175,6 +175,63 @@ def list_knowledge_documents(
             )
         )
     return summaries
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeDocumentChunk:
+    ordinal: int
+    content: str
+    page_number: int | None
+
+
+def list_document_chunks(
+    session: Session,
+    user: User,
+    knowledge_base_id: UUID,
+    document_id: UUID,
+) -> list[KnowledgeDocumentChunk]:
+    """返回一个文档在活动索引里的详细分块内容（完整原文，非检索摘要）。
+
+    学习者在资料查看器里阅读的就是这些分块；文档尚未完成索引时返回空列表。
+    """
+
+    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
+    version = session.scalar(
+        select(DocumentVersion)
+        .where(
+            DocumentVersion.document_id == document_id,
+            DocumentVersion.knowledge_base_id == knowledge_base.id,
+            DocumentVersion.space_id == knowledge_base.space_id,
+            DocumentVersion.state == DocumentVersionState.READY,
+        )
+        .order_by(DocumentVersion.version_number.desc(), DocumentVersion.id.desc())
+        .limit(1)
+    )
+    if version is None:
+        return []
+    rows = session.execute(
+        select(Chunk.ordinal, Chunk.content, Page.page_number)
+        .join(
+            IndexVersion,
+            and_(
+                IndexVersion.id == Chunk.index_version_id,
+                IndexVersion.state == IndexVersionState.ACTIVE,
+                IndexVersion.knowledge_base_id == knowledge_base.id,
+                IndexVersion.space_id == knowledge_base.space_id,
+            ),
+        )
+        .outerjoin(Page, Page.id == Chunk.page_id)
+        .where(
+            Chunk.document_version_id == version.id,
+            Chunk.knowledge_base_id == knowledge_base.id,
+            Chunk.space_id == knowledge_base.space_id,
+        )
+        .order_by(Chunk.ordinal)
+    ).all()
+    return [
+        KnowledgeDocumentChunk(ordinal=ordinal, content=content, page_number=page_number)
+        for ordinal, content, page_number in rows
+    ]
 
 
 def get_document_processing_state(

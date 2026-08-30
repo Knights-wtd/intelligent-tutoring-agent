@@ -20,6 +20,7 @@ class TutorMessageResponse(BaseModel):
 
     id: UUID
     role: str
+    kind: str
     content: str
     citations: list[TutorCitationResponse]
     created_at: datetime

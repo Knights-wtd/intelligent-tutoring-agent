@@ -175,6 +175,7 @@ class IngestionJobKind(StrEnum):
     BUILD_INDEX = "build_index"
     GENERATE_MARKDOWN = "generate_markdown"
     INDEX_MARKDOWN_LINKS = "index_markdown_links"
+    GENERATE_QUESTIONS = "generate_questions"
 
 
 class IngestionJobState(StrEnum):
@@ -1035,6 +1036,9 @@ class IngestionJob(Base):
             "AND index_version_id IS NOT NULL) OR "
             "(kind IN ('generate_markdown', 'index_markdown_links') AND document_id IS NOT NULL "
             "AND document_version_id IS NOT NULL AND page_id IS NULL "
+            "AND index_version_id IS NULL) OR "
+            "(kind = 'generate_questions' AND document_id IS NULL "
+            "AND document_version_id IS NULL AND page_id IS NULL "
             "AND index_version_id IS NULL)",
             name="ck_ingestion_target_matches_kind",
         ),

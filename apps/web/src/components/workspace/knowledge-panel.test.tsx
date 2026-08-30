@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -759,5 +759,107 @@ describe("KnowledgePanel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "候选生成失败：Faro API 密钥无效。请在 .env 中配置真实的 FARO_API_KEY 并重启服务。",
     );
+  });
+});
+
+describe("KnowledgePanel restored documents", () => {
+  it("offers refresh and candidate generation for documents uploaded in earlier sessions", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.workspace.mockResolvedValue({
+      knowledge_base_id: knowledgeBase.id,
+      documents: [
+        {
+          document_id: "doc-restored",
+          document_version_id: "version-restored",
+          source_name: "restored.docx",
+          content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          processing_state: "searchable",
+          created_at: "2026-08-28T00:00:00Z",
+          updated_at: "2026-08-28T00:00:00Z",
+        },
+      ],
+      candidate_batch: null,
+      notes: [],
+    });
+    mockKnowledgeApi.documentStatus.mockResolvedValue({
+      document_id: "doc-restored",
+      document_version_id: "version-restored",
+      processing_state: "searchable",
+    });
+    mockKnowledgeApi.startCandidateGeneration.mockResolvedValue({
+      id: "batch-new",
+      document_id: "doc-restored",
+      document_version_id: "version-restored",
+      generation_number: 1,
+      state: "needs_review",
+      failure_code: null,
+      notes: [],
+      links: [],
+      created_at: "2026-08-28T00:00:00Z",
+      updated_at: "2026-08-28T00:00:00Z",
+    });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    const tree = await screen.findByLabelText("知识库内容层级");
+    const refresh = await within(tree).findByRole("button", { name: "刷新处理状态" });
+    const generate = within(tree).getByRole("button", { name: "生成知识候选" });
+    // 生成知识候选按钮位于刷新处理状态下面。
+    expect(refresh.compareDocumentPosition(generate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(refresh);
+    expect(mockKnowledgeApi.documentStatus).toHaveBeenCalledWith(
+      "kb-math",
+      "doc-restored",
+      "version-restored",
+      expect.any(AbortSignal),
+    );
+
+    await user.click(generate);
+    await waitFor(() =>
+      expect(mockKnowledgeApi.startCandidateGeneration).toHaveBeenCalledWith(
+        "kb-math",
+        "version-restored",
+        expect.any(String),
+      ),
+    );
+  });
+
+  it("does not duplicate actions for documents already shown in the session task list", async () => {
+    const user = userEvent.setup();
+    mockKnowledgeApi.upload.mockResolvedValue(uploadResponse());
+    mockKnowledgeApi.documentStatus.mockResolvedValue({
+      document_id: "doc-1",
+      document_version_id: "version-1",
+      processing_state: "searchable",
+    });
+    render(<KnowledgePanel spaceName="七年级数学空间" knowledgeBase={knowledgeBase} />);
+
+    await user.upload(
+      screen.getByLabelText("选择学习资料"),
+      new File(["content"], "chapter.md", { type: "text/markdown" }),
+    );
+    await user.click(screen.getByRole("button", { name: "上传文件" }));
+    // 会话条目刷新为可搜索后,当前任务区才会出现生成按钮。
+    await user.click(await screen.findByRole("button", { name: "刷新处理状态" }));
+    // 上传完成后工作区快照也会包含同一文档;操作按钮只保留在当前任务区。
+    mockKnowledgeApi.workspace.mockResolvedValue({
+      knowledge_base_id: knowledgeBase.id,
+      documents: [
+        {
+          document_id: "doc-1",
+          document_version_id: "version-1",
+          source_name: "chapter.md",
+          content_type: "text/markdown",
+          processing_state: "searchable",
+          created_at: "2026-08-18T00:00:00Z",
+          updated_at: "2026-08-18T00:00:00Z",
+        },
+      ],
+      candidate_batch: null,
+      notes: [],
+    });
+
+    expect(await screen.findAllByRole("button", { name: "刷新处理状态" })).toHaveLength(1);
+    expect(await screen.findAllByRole("button", { name: "生成知识候选" })).toHaveLength(1);
   });
 });

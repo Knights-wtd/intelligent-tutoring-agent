@@ -5,10 +5,10 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, exists, or_, select, text
+from sqlalchemy import and_, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, load_only
 
@@ -22,6 +22,9 @@ from tutor_api.knowledge.models import (
     DocumentVersionState,
     IndexVersion,
     IndexVersionState,
+    IngestionJob,
+    IngestionJobKind,
+    IngestionJobState,
     KnowledgeBase,
 )
 from tutor_api.knowledge.retrieval import chunk_id_from_citation
@@ -161,6 +164,8 @@ def list_questions(session: Session, user: User, knowledge_base_id: UUID) -> lis
                 QuestionVersion.version_number,
                 QuestionVersion.question_type,
                 QuestionVersion.prompt,
+                QuestionVersion.choices,
+                QuestionVersion.difficulty,
             ),
         )
         .join(
@@ -176,7 +181,12 @@ def list_questions(session: Session, user: User, knowledge_base_id: UUID) -> lis
             Question.space_id == knowledge_base.space_id,
             QuestionVersion.version_number == 1,
         )
-        .order_by(Question.created_at, Question.id)
+        # 生成题目带难度（1-5）：按由简到难排列；手动题目无难度排在后面。
+        .order_by(
+            QuestionVersion.difficulty.asc().nulls_last(),
+            Question.created_at,
+            Question.id,
+        )
     ).all()
     return [QuestionResult(question=question, version=version) for question, version in rows]
 
@@ -199,6 +209,8 @@ def get_question(
                 QuestionVersion.version_number,
                 QuestionVersion.question_type,
                 QuestionVersion.prompt,
+                QuestionVersion.choices,
+                QuestionVersion.difficulty,
             ),
         )
         .join(
@@ -222,6 +234,101 @@ def get_question(
     return QuestionResult(question=question, version=version)
 
 
+def _active_index_or_none(session: Session, knowledge_base: KnowledgeBase) -> IndexVersion | None:
+    return session.scalar(
+        select(IndexVersion).where(
+            IndexVersion.knowledge_base_id == knowledge_base.id,
+            IndexVersion.space_id == knowledge_base.space_id,
+            IndexVersion.state == IndexVersionState.ACTIVE,
+        )
+    )
+
+
+def create_question_generation(
+    session: Session,
+    user: User,
+    knowledge_base_id: UUID,
+    *,
+    requested_question_count: int,
+) -> IngestionJob:
+    """为整个知识库入队一次 AI 课后题生成（由简到难的选择题）。
+
+    同一用户在同一知识库上的进行中任务会被复用，避免重复入队；
+    没有可检索分块时拒绝而不是入队一个注定失败的任务。
+    """
+
+    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
+    existing = session.scalar(
+        select(IngestionJob)
+        .where(
+            IngestionJob.knowledge_base_id == knowledge_base.id,
+            IngestionJob.space_id == knowledge_base.space_id,
+            IngestionJob.kind == IngestionJobKind.GENERATE_QUESTIONS,
+            IngestionJob.created_by_user_id == user.id,
+            IngestionJob.state.in_(
+                (
+                    IngestionJobState.QUEUED,
+                    IngestionJobState.RUNNING,
+                    IngestionJobState.RETRY_WAIT,
+                )
+            ),
+        )
+        .order_by(IngestionJob.created_at.desc(), IngestionJob.id.desc())
+        .limit(1)
+    )
+    if existing is not None:
+        return existing
+    active_index = _active_index_or_none(session, knowledge_base)
+    chunk_count = 0
+    if active_index is not None:
+        chunk_count = session.scalar(
+            select(func.count())
+            .select_from(Chunk)
+            .where(
+                Chunk.index_version_id == active_index.id,
+                Chunk.knowledge_base_id == knowledge_base.id,
+                Chunk.space_id == knowledge_base.space_id,
+            )
+        )
+    if not chunk_count:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="知识库还没有可出题的内容，请先上传资料并等待解析完成。",
+        )
+    job = IngestionJob(
+        space_id=knowledge_base.space_id,
+        knowledge_base_id=knowledge_base.id,
+        kind=IngestionJobKind.GENERATE_QUESTIONS,
+        state=IngestionJobState.QUEUED,
+        idempotency_key=f"questions:{knowledge_base.id}:{user.id}:{uuid4()}",
+        checkpoint={"requested_question_count": requested_question_count},
+        created_by_user_id=user.id,
+    )
+    session.add(job)
+    session.flush()
+    return job
+
+
+def get_question_generation(
+    session: Session,
+    user: User,
+    knowledge_base_id: UUID,
+    generation_id: UUID,
+) -> IngestionJob:
+    knowledge_base = get_readable_knowledge_base(session, user, knowledge_base_id)
+    job = session.scalar(
+        select(IngestionJob).where(
+            IngestionJob.id == generation_id,
+            IngestionJob.knowledge_base_id == knowledge_base.id,
+            IngestionJob.space_id == knowledge_base.space_id,
+            IngestionJob.kind == IngestionJobKind.GENERATE_QUESTIONS,
+        )
+    )
+    if job is None:
+        raise _not_found()
+    return job
+
+
 _IDEMPOTENCY_VALUE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
@@ -230,6 +337,9 @@ class AttemptResult:
     attempt: QuestionAttempt
     assessment: QuestionAttemptAssessment
     replayed: bool
+    # 答题后才揭示的正确答案与解析（教学要求）；列表/详情接口仍不泄露。
+    expected_answer: str | None
+    explanation: str | None
 
 
 @dataclass(frozen=True)
@@ -299,7 +409,7 @@ def _replayed_attempt_result(
     session: Session,
     *,
     user_id: UUID,
-    question_version_id: UUID,
+    version: QuestionVersion,
     request_key_hash: str,
 ) -> AttemptResult | None:
     row = session.execute(
@@ -318,7 +428,7 @@ def _replayed_attempt_result(
         )
         .where(
             QuestionAttempt.user_id == user_id,
-            QuestionAttempt.question_version_id == question_version_id,
+            QuestionAttempt.question_version_id == version.id,
             QuestionAttempt.request_key_hash == request_key_hash,
         )
     ).one_or_none()
@@ -327,7 +437,13 @@ def _replayed_attempt_result(
     attempt, assessment = row
     if assessment is None:
         raise _legacy_attempt_conflict()
-    return AttemptResult(attempt=attempt, assessment=assessment, replayed=True)
+    return AttemptResult(
+        attempt=attempt,
+        assessment=assessment,
+        replayed=True,
+        expected_answer=version.expected_answer,
+        explanation=version.explanation,
+    )
 
 
 def _private_question_version(
@@ -343,6 +459,7 @@ def _private_question_version(
                 QuestionVersion.question_type,
                 QuestionVersion.expected_answer,
                 QuestionVersion.expected_keywords,
+                QuestionVersion.explanation,
             )
         )
         .where(
@@ -374,7 +491,7 @@ def record_attempt(
     replay = _replayed_attempt_result(
         session,
         user_id=user.id,
-        question_version_id=version.id,
+        version=version,
         request_key_hash=request_key_hash,
     )
     if replay is not None:
@@ -445,13 +562,19 @@ def record_attempt(
         replay = _replayed_attempt_result(
             session,
             user_id=user.id,
-            question_version_id=version.id,
+            version=version,
             request_key_hash=request_key_hash,
         )
         if replay is None:
             raise
         return replay
-    return AttemptResult(attempt=attempt, assessment=assessment, replayed=False)
+    return AttemptResult(
+        attempt=attempt,
+        assessment=assessment,
+        replayed=False,
+        expected_answer=version.expected_answer,
+        explanation=version.explanation,
+    )
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:

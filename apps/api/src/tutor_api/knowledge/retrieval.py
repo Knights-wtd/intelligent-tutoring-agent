@@ -385,8 +385,14 @@ def search_knowledge(
     limit: int,
     embedding_adapter: EmbeddingAdapter,
     citation_secret: str,
+    full_content: bool = False,
 ) -> list[SearchHit]:
-    """Search only one readable knowledge base's active immutable index."""
+    """Search only one readable knowledge base's active immutable index.
+
+    ``full_content`` feeds the caller the complete chunk text instead of the
+    bounded search excerpt. The AI tutor turns this on so its answers ground
+    on the knowledge base itself; the search panel keeps the bounded excerpts.
+    """
 
     if not 1 <= limit <= MAX_RESULTS:
         raise ValueError("result limit is out of bounds")
@@ -438,7 +444,11 @@ def search_knowledge(
     )
     return [
         SearchHit(
-            excerpt=bounded_excerpt(candidate.chunk.content, query_terms),
+            excerpt=(
+                " ".join(candidate.chunk.content.split())
+                if full_content
+                else bounded_excerpt(candidate.chunk.content, query_terms)
+            ),
             citation=SearchCitation(
                 id=citation_id_for_chunk(candidate.chunk.id, knowledge_base.id, citation_secret),
                 source_name=candidate.source_name,

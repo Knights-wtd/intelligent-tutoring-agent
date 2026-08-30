@@ -34,4 +34,6 @@ class MarkdownLlmAdapter(Protocol):
 
 
 class TutorChatAdapter(Protocol):
-    def complete_tutor(self, messages: Sequence[TutorChatMessage]) -> LlmCompletion: ...
+    def complete_tutor(
+        self, messages: Sequence[TutorChatMessage], *, system_prompt: str
+    ) -> LlmCompletion: ...

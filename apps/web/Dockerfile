@@ -1,10 +1,14 @@
 # Keep the readable tag; update its digest deliberately with each version bump.
 FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS build
 
+# npm registry defaults to npmmirror; override with
+# --build-arg NPM_CONFIG_REGISTRY=... if a mirror rate-limits or 403s.
+ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
-    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
-    COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+    NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY} \
+    COREPACK_NPM_REGISTRY=${NPM_CONFIG_REGISTRY}
 
 RUN corepack enable \
     && corepack prepare pnpm@11.19.0 --activate
@@ -23,12 +27,14 @@ RUN pnpm --dir apps/web build
 
 FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS runtime
 
+ARG NPM_CONFIG_REGISTRY=https://registry.npmmirror.com
+
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
-    NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
-    COREPACK_NPM_REGISTRY=https://registry.npmmirror.com
+    NPM_CONFIG_REGISTRY=${NPM_CONFIG_REGISTRY} \
+    COREPACK_NPM_REGISTRY=${NPM_CONFIG_REGISTRY}
 
 RUN corepack enable \
     && corepack prepare pnpm@11.19.0 --activate

@@ -37,11 +37,23 @@ from tutor_api.llm.ports import (
     LlmUsage,
     TutorChatMessage,
 )
+from tutor_api.llm.prompt_library import (
+    TUTOR_CLARIFY_MARKER,
+    TUTOR_FORCED_ANSWER_SYSTEM_PROMPT,
+    TUTOR_GROUNDED_SYSTEM_PROMPT,
+    TUTOR_NO_EVIDENCE_SYSTEM_PROMPT,
+)
 from tutor_api.main import create_app
 from tutor_api.spaces.models import Space, SpaceKind
-from tutor_api.tutor.models import TutorConversation, TutorMessage, TutorMessageRole
+from tutor_api.tutor.models import (
+    TutorConversation,
+    TutorMessage,
+    TutorMessageKind,
+    TutorMessageRole,
+)
 from tutor_api.tutor.schemas import TutorSendRequest
 from tutor_api.tutor.service import (
+    MAX_TUTOR_EVIDENCE_CHARACTERS,
     MAX_TUTOR_HISTORY_MESSAGES,
     MAX_TUTOR_SOURCES,
     TutorServiceError,
@@ -73,9 +85,13 @@ class RecordingTutorAdapter:
     def __init__(self, response_text: str) -> None:
         self.response_text = response_text
         self.messages: tuple[TutorChatMessage, ...] = ()
+        self.system_prompts: list[str] = []
 
-    def complete_tutor(self, messages: Sequence[TutorChatMessage]) -> LlmCompletion:
+    def complete_tutor(
+        self, messages: Sequence[TutorChatMessage], *, system_prompt: str
+    ) -> LlmCompletion:
         self.messages = tuple(messages)
+        self.system_prompts.append(system_prompt)
         return LlmCompletion(
             text=self.response_text,
             request_id="tutor-test",
@@ -88,8 +104,10 @@ class FailingTutorAdapter:
         self.code = code
         self.detail = detail
 
-    def complete_tutor(self, messages: Sequence[TutorChatMessage]) -> LlmCompletion:
-        del messages
+    def complete_tutor(
+        self, messages: Sequence[TutorChatMessage], *, system_prompt: str
+    ) -> LlmCompletion:
+        del messages, system_prompt
         error = LlmProviderError(self.code)
         error.add_note(self.detail)
         raise error
@@ -250,8 +268,10 @@ def test_provider_call_is_bounded_by_concurrency_semaphore(session: Session) -> 
     completion = LlmCompletion(text="ok", request_id="r", usage=LlmUsage(1, 1, 2))
 
     class BlockingTutorAdapter:
-        def complete_tutor(self, messages: Sequence[TutorChatMessage]) -> LlmCompletion:
-            del messages
+        def complete_tutor(
+            self, messages: Sequence[TutorChatMessage], *, system_prompt: str
+        ) -> LlmCompletion:
+            del messages, system_prompt
             entered.set()
             assert release.wait(timeout=10), "adapter was never released"
             return completion
@@ -307,8 +327,10 @@ def test_provider_call_runs_after_read_transaction_is_committed(
     monkeypatch.setattr(session, "commit", recording_commit)
 
     class OrderingAdapter:
-        def complete_tutor(self, messages: Sequence[TutorChatMessage]) -> LlmCompletion:
-            del messages
+        def complete_tutor(
+            self, messages: Sequence[TutorChatMessage], *, system_prompt: str
+        ) -> LlmCompletion:
+            del messages, system_prompt
             assert commit_seen.wait(timeout=5), (
                 "provider call started before the read transaction was committed"
             )
@@ -1005,3 +1027,195 @@ def test_http_validation_does_not_echo_grounded_prompt_or_secrets(
     assert response.status_code == 422
     assert "sk-client-secret" not in response.text
     assert "untrusted textbook excerpt" not in response.text.casefold()
+
+def test_clarify_rounds_are_marked_then_forced_to_answer(session: Session) -> None:
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+    clarify_text = (
+        f"{TUTOR_CLARIFY_MARKER}\n"
+        "1. 你问的是远场还是近场路径损耗？这决定使用的公式。\n"
+        "➡️ 推荐按远场理解，摘录 [1] 讨论的是远场传播。"
+    )
+    adapter = RecordingTutorAdapter(clarify_text)
+
+    first = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="路径损耗怎么算？",
+        conversation_id=None,
+        adapter=adapter,
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+    conversation_id = first.conversation.id
+    assert first.messages[-1].kind is TutorMessageKind.CLARIFY
+    assert adapter.system_prompts == [TUTOR_GROUNDED_SYSTEM_PROMPT]
+
+    second = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="远场",
+        conversation_id=conversation_id,
+        adapter=RecordingTutorAdapter(clarify_text),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+    del second
+
+    # 连续两轮追问后预算耗尽:即使模型仍输出追问标记,也按最终作答落库。
+    forced_adapter = RecordingTutorAdapter(
+        f"{TUTOR_CLARIFY_MARKER}\n还想追问,但预算已用完。"
+    )
+    third = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="还是不明白",
+        conversation_id=conversation_id,
+        adapter=forced_adapter,
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+    assert third.messages[-1].kind is TutorMessageKind.ANSWER
+    assert forced_adapter.system_prompts == [TUTOR_FORCED_ANSWER_SYSTEM_PROMPT]
+
+
+def test_retrieval_query_anchors_to_conversation_context(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+    observed_queries: list[str] = []
+
+    def fake_search(
+        *args: object, query: str, limit: int, **kwargs: object
+    ) -> list[object]:
+        del args, limit, kwargs
+        observed_queries.append(query)
+        return []
+
+    monkeypatch.setattr("tutor_api.tutor.service.search_knowledge", fake_search)
+
+    first = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="无线传播模型有哪些",
+        conversation_id=None,
+        adapter=RecordingTutorAdapter("第一条回答"),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+    send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="为什么？",
+        conversation_id=first.conversation.id,
+        adapter=RecordingTutorAdapter("第二条回答"),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+
+    assert observed_queries[0] == "无线传播模型有哪些"
+    assert "为什么？" in observed_queries[1]
+    assert "无线传播模型有哪些" in observed_queries[1]
+
+
+def test_no_evidence_uses_dedicated_system_prompt(session: Session) -> None:
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+    session.query(IndexVersion).delete()
+    session.commit()
+    adapter = RecordingTutorAdapter("当前教材没有相关证据。")
+
+    result = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="完全无关的问题",
+        conversation_id=None,
+        adapter=adapter,
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+
+    assert adapter.system_prompts == [TUTOR_NO_EVIDENCE_SYSTEM_PROMPT]
+    assert "evidence is unavailable" in adapter.messages[-1].content.casefold()
+    assert result.messages[-1].kind is TutorMessageKind.ANSWER
+    assert result.messages[-1].citations == []
+
+
+def test_search_feeds_full_knowledge_base_content_to_tutor(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+    observed: dict[str, object] = {}
+
+    def fake_search(*args: object, limit: int, **kwargs: object) -> list[object]:
+        del args
+        observed["limit"] = limit
+        observed.update(kwargs)
+        return []
+
+    monkeypatch.setattr("tutor_api.tutor.service.search_knowledge", fake_search)
+
+    send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="path loss",
+        conversation_id=None,
+        adapter=RecordingTutorAdapter("No evidence available."),
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+
+    assert observed["limit"] == MAX_TUTOR_SOURCES
+    # 导师拿到的是知识库完整原文块,而不是检索摘要切片。
+    assert observed["full_content"] is True
+    assert MAX_TUTOR_SOURCES > 5
+
+
+def test_evidence_budget_truncates_tail_but_keeps_first_hit(
+    session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tutor_api.knowledge.retrieval import SearchCitation, SearchHit
+
+    owner, knowledge_base = seed_searchable_knowledge_base(session)
+
+    def make_hit(ordinal: int) -> SearchHit:
+        return SearchHit(
+            excerpt="证据" * 600,  # 1200 字符
+            citation=SearchCitation(
+                id=f"cite-{ordinal}", source_name=f"doc-{ordinal}.pdf", page_number=ordinal
+            ),
+        )
+
+    total_hits = 20
+    monkeypatch.setattr(
+        "tutor_api.tutor.service.search_knowledge",
+        lambda *args, **kwargs: [make_hit(ordinal) for ordinal in range(total_hits)],
+    )
+    adapter = RecordingTutorAdapter("Based on the excerpts. [1]")
+
+    result = send_tutor_message(
+        session,
+        owner,
+        knowledge_base.id,
+        prompt="总结这一章",
+        conversation_id=None,
+        adapter=adapter,
+        embedding_adapter=FixedEmbeddingAdapter(),
+        citation_secret="test-secret",
+    )
+
+    prompt = adapter.messages[-1].content
+    citations = result.messages[-1].citations
+    # 1200 + 160 开销 = 1360/块;预算 18000 内最多 13 块,第 14 块起截断。
+    assert len(citations) < total_hits
+    assert citations[0]["id"] == "cite-0"
+    assert len(citations) * (1200 + 160) <= MAX_TUTOR_EVIDENCE_CHARACTERS
+    assert f"[{len(citations)}]" in prompt
+    assert f"[{len(citations) + 1}]" not in prompt
+    # 引用列表与提示词中的摘录一一对应,导师引用不会越界。
+    assert prompt.count("doc-") == len(citations)

@@ -136,6 +136,32 @@ class Settings(BaseSettings):
     # used so pre-existing deployments keep working; new deployments receive the
     # variable through compose (`:?` required) and should rotate it independently.
     citation_hmac_secret: SecretStr | None = Field(default=None, repr=False)
+    # Self-service recharge gateways. "mock" never moves money and exists for
+    # local development and CI; "alipay" requires merchant credentials below.
+    # WeChat Pay is intentionally absent until its merchant integration lands.
+    payment_provider: Literal["mock", "alipay", "wechat"] = "mock"
+    alipay_app_id: str = ""
+    alipay_app_private_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    alipay_public_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    alipay_gateway_url: str = "https://openapi.alipay.com/gateway.do"
+    # Public HTTPS origin of this API for gateway callbacks. Named to avoid the
+    # "base_url" token: Settings.__repr__ is asserted to never leak provider
+    # endpoints, and the repr includes non-secret field names.
+    alipay_notify_origin: str = Field(
+        default="", validation_alias=AliasChoices("ALIPAY_NOTIFY_BASE_URL", "alipay_notify_origin")
+    )
+    # WeChat Pay APIv3 (Native 扫码支付). The merchant private key and the APIv3
+    # key are server-only secrets; the notify origin must be reachable from
+    # WeChat Pay servers and therefore is configured independently of WEB_ORIGIN.
+    wechat_mch_id: str = ""
+    wechat_app_id: str = ""
+    wechat_mch_serial_no: str = ""
+    wechat_mch_private_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    wechat_apiv3_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    wechat_gateway_url: str = "https://api.mch.weixin.qq.com"
+    wechat_notify_origin: str = Field(
+        default="", validation_alias=AliasChoices("WECHAT_NOTIFY_BASE_URL", "wechat_notify_origin")
+    )
 
     @property
     def effective_citation_hmac_secret(self) -> str:
@@ -395,6 +421,50 @@ class Settings(BaseSettings):
         if raw != raw.strip() or len(raw) < 32:
             raise ValueError("CITATION_HMAC_SECRET must be a trimmed 32+ character value")
         return value
+
+    @field_validator("alipay_gateway_url")
+    @classmethod
+    def validate_alipay_gateway_url(cls, value: str) -> str:
+        if not value.strip():
+            return value
+        parsed = _parse_absolute_url(value.strip())
+        if parsed is None or parsed.scheme != "https" or parsed.query or parsed.fragment:
+            raise ValueError("ALIPAY_GATEWAY_URL must be an absolute HTTPS URL")
+        return value.strip().rstrip("/")
+
+    @field_validator("alipay_notify_origin")
+    @classmethod
+    def validate_alipay_notify_origin(cls, value: str) -> str:
+        if not value.strip():
+            return ""
+        parsed = _parse_absolute_url(value.strip())
+        if parsed is None or parsed.scheme != "https" or parsed.path not in {"", "/"}:
+            raise ValueError(
+                "ALIPAY_NOTIFY_BASE_URL must be a public HTTPS base URL without a path"
+            )
+        return value.strip().rstrip("/")
+
+    @field_validator("wechat_gateway_url")
+    @classmethod
+    def validate_wechat_gateway_url(cls, value: str) -> str:
+        if not value.strip():
+            return value
+        parsed = _parse_absolute_url(value.strip())
+        if parsed is None or parsed.scheme != "https" or parsed.query or parsed.fragment:
+            raise ValueError("WECHAT_GATEWAY_URL must be an absolute HTTPS URL")
+        return value.strip().rstrip("/")
+
+    @field_validator("wechat_notify_origin")
+    @classmethod
+    def validate_wechat_notify_origin(cls, value: str) -> str:
+        if not value.strip():
+            return ""
+        parsed = _parse_absolute_url(value.strip())
+        if parsed is None or parsed.scheme != "https" or parsed.path not in {"", "/"}:
+            raise ValueError(
+                "WECHAT_NOTIFY_BASE_URL must be a public HTTPS base URL without a path"
+            )
+        return value.strip().rstrip("/")
 
     @field_validator("web_origin")
     @classmethod

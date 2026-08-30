@@ -1297,6 +1297,8 @@ def test_ingestion_job_accepts_only_the_targets_for_its_kind(
         IngestionJobKind.BUILD_INDEX: {"index": index},
         IngestionJobKind.GENERATE_MARKDOWN: {"document": document, "version": version},
         IngestionJobKind.INDEX_MARKDOWN_LINKS: {"document": document, "version": version},
+        # 生成题目任务针对整个知识库，不携带文档/索引目标。
+        IngestionJobKind.GENERATE_QUESTIONS: {},
     }
     session.add(
         _make_job(

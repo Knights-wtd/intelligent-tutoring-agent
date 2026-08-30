@@ -604,6 +604,7 @@ def test_worker_main_registers_parse_build_and_candidate_handlers() -> None:
         IngestionJobKind.PARSE_DOCUMENT,
         IngestionJobKind.BUILD_INDEX,
         IngestionJobKind.GENERATE_MARKDOWN,
+        IngestionJobKind.GENERATE_QUESTIONS,
     }
 
 

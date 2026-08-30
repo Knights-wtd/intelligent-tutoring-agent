@@ -6,12 +6,16 @@ from fastapi import APIRouter, Header, Query, Request, Response, status
 
 from tutor_api.core.database import session_scope
 from tutor_api.identity.router import CurrentUser, _session_factory
+from tutor_api.knowledge.models import IngestionJob, IngestionJobState
 from tutor_api.question_bank.schemas import (
     AttemptHistoryItemResponse,
     AttemptHistoryResponse,
+    ChoiceOptionResponse,
     CreateAttemptRequest,
+    CreateQuestionGenerationRequest,
     CreateQuestionRequest,
     QuestionAttemptAssessmentResponse,
+    QuestionGenerationResponse,
     QuestionResponse,
     ReviewItemResponse,
     ReviewItemsResponse,
@@ -19,6 +23,8 @@ from tutor_api.question_bank.schemas import (
 from tutor_api.question_bank.service import (
     QuestionResult,
     create_question,
+    create_question_generation,
+    get_question_generation,
     list_attempt_history,
     list_questions,
     list_review_items,
@@ -49,8 +55,77 @@ def _question_response(result: QuestionResult) -> QuestionResponse:
         version_number=result.version.version_number,
         question_type=result.version.question_type,
         prompt=result.version.prompt,
+        choices=(
+            [ChoiceOptionResponse(**choice) for choice in result.version.choices]
+            if result.version.choices is not None
+            else None
+        ),
+        difficulty=result.version.difficulty,
         created_at=result.question.created_at,
     )
+
+
+_GENERATION_TERMINAL_STATES = (IngestionJobState.COMPLETED, IngestionJobState.FAILED)
+
+
+def _generation_response(job: IngestionJob) -> QuestionGenerationResponse:
+    if job.state is IngestionJobState.COMPLETED:
+        state: Literal["processing", "completed", "failed"] = "completed"
+    elif job.state in _GENERATION_TERMINAL_STATES:
+        state = "failed"
+    else:
+        state = "processing"
+    requested = job.checkpoint.get("requested_question_count", 10)
+    if isinstance(requested, bool) or not isinstance(requested, int) or not 1 <= requested <= 20:
+        requested = 10
+    question_count = job.checkpoint.get("question_count", 0)
+    if isinstance(question_count, bool) or not isinstance(question_count, int):
+        question_count = 0
+    return QuestionGenerationResponse(
+        generation_id=job.id,
+        state=state,
+        failure_code=job.last_error_code if state == "failed" else None,
+        requested_question_count=requested,
+        question_count=question_count,
+        created_at=job.created_at,
+        completed_at=job.completed_at,
+    )
+
+
+@router.post(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/question-generations",
+    response_model=QuestionGenerationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_question_generation(
+    knowledge_base_id: UUID,
+    payload: CreateQuestionGenerationRequest,
+    request: Request,
+    current_user: CurrentUser,
+) -> QuestionGenerationResponse:
+    with session_scope(_session_factory(request)) as session:
+        job = create_question_generation(
+            session,
+            current_user,
+            knowledge_base_id,
+            requested_question_count=payload.count,
+        )
+        return _generation_response(job)
+
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/question-generations/{generation_id}",
+    response_model=QuestionGenerationResponse,
+)
+def get_question_generation_status(
+    knowledge_base_id: UUID,
+    generation_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> QuestionGenerationResponse:
+    with session_scope(_session_factory(request)) as session:
+        job = get_question_generation(session, current_user, knowledge_base_id, generation_id)
+        return _generation_response(job)
 
 
 @router.post(
@@ -139,6 +214,8 @@ def post_attempt(
             grading_contract_version=result.assessment.grading_contract_version,
             mastery_contract_version=result.assessment.mastery_contract_version,
             review_policy_version=result.assessment.review_policy_version,
+            expected_answer=result.expected_answer,
+            explanation=result.explanation,
         )
 
 

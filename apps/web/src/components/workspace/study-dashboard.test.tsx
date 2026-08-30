@@ -33,6 +33,8 @@ function reviewItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
     needs_review: true,
     review_due_at: "2026-08-26T08:00:00Z",
     review_interval_days: 1,
+    expected_answer: null,
+    explanation: null,
     ...overrides,
   };
 }

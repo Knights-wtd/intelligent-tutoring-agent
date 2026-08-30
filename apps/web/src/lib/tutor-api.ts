@@ -13,6 +13,8 @@ export type TutorCitation = {
 export type TutorMessage = {
   id: string;
   role: "user" | "assistant";
+  /** answer 为正式作答;clarify 为导师的 grill 式追问轮。 */
+  kind: "answer" | "clarify";
   content: string;
   citations: TutorCitation[];
   created_at: string;

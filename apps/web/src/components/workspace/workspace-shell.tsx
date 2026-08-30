@@ -16,6 +16,7 @@ import { classroomApi } from "@/lib/classrooms-api";
 import type { KnowledgeBase } from "@/lib/knowledge-api";
 import type { TutorCitation } from "@/lib/tutor-api";
 
+import { AccountPanel } from "./account-panel";
 import { KnowledgeGraphPanel } from "./knowledge-graph-panel";
 import { KnowledgeLibrarySidebar } from "./knowledge-library-sidebar";
 import { KnowledgePanel } from "./knowledge-panel";
@@ -73,6 +74,7 @@ export function WorkspaceShell({
   const [restoredSpaceIds, setRestoredSpaceIds] = useState<Set<string>>(() => new Set());
   const [isClassroomDialogOpen, setIsClassroomDialogOpen] = useState(false);
   const [isSpaceDialogOpen, setIsSpaceDialogOpen] = useState(false);
+  const [isAccountDialogOpen, setIsAccountDialogOpen] = useState(false);
   const [classroomName, setClassroomName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [classroomError, setClassroomError] = useState<string | null>(null);
@@ -308,6 +310,7 @@ export function WorkspaceShell({
         await createKnowledgeBase(name);
       }}
       onOpenClassroom={openClassroomDialog}
+      onOpenAccount={() => setIsAccountDialogOpen(true)}
       onOpenDueReview={() => dispatchTabs({ type: "focus", tabId: "today" })}
       onOpenGraph={openGraph}
       onRetry={refreshKnowledgeBases}
@@ -566,7 +569,7 @@ export function WorkspaceShell({
               </button>
             </header>
             <p>创建后会生成邀请码；加入已有班级请填写教师提供的邀请码。</p>
-            <form onSubmit={createClassroom}>
+            <form className={styles.classroomForm} onSubmit={createClassroom}>
               <label>
                 班级名称
                 <input
@@ -578,7 +581,7 @@ export function WorkspaceShell({
               </label>
               <button type="submit">创建班级</button>
             </form>
-            <form onSubmit={joinClassroom}>
+            <form className={styles.classroomForm} onSubmit={joinClassroom}>
               <label>
                 邀请码
                 <input
@@ -601,6 +604,8 @@ export function WorkspaceShell({
           </section>
         </div>
       ) : null}
+
+      {isAccountDialogOpen ? <AccountPanel onClose={() => setIsAccountDialogOpen(false)} /> : null}
     </main>
   );
 }

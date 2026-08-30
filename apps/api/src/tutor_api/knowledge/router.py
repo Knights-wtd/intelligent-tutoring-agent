@@ -37,6 +37,7 @@ from tutor_api.knowledge.schemas import (
     KnowledgeCandidateLinkResponse,
     KnowledgeCandidateNoteResponse,
     KnowledgeCitationResponse,
+    KnowledgeDocumentChunkResponse,
     KnowledgeDocumentResponse,
     KnowledgeDocumentStatusResponse,
     KnowledgeGraphEdgeResponse,
@@ -58,6 +59,7 @@ from tutor_api.knowledge.service import (
     create_knowledge_base,
     get_document_processing_state,
     get_knowledge_base,
+    list_document_chunks,
     list_knowledge_bases,
     list_knowledge_documents,
     upload_prepared_knowledge_document,
@@ -282,6 +284,7 @@ def post_knowledge_search(
             limit=payload.limit,
             embedding_adapter=embedding_adapter,
             citation_secret=_citation_secret(request),
+            full_content=payload.full,
         )
     return KnowledgeSearchResponse(
         results=[
@@ -317,6 +320,33 @@ def get_knowledge_documents(
                 created_at=summary.created_at,
             )
             for summary in list_knowledge_documents(session, current_user, knowledge_base_id)
+        ]
+
+
+@router.get(
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/chunks",
+    response_model=list[KnowledgeDocumentChunkResponse],
+)
+def get_knowledge_document_chunks(
+    knowledge_base_id: UUID,
+    document_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> list[KnowledgeDocumentChunkResponse]:
+    with session_scope(_session_factory(request)) as session:
+        chunks = list_document_chunks(
+            session,
+            current_user,
+            knowledge_base_id,
+            document_id,
+        )
+        return [
+            KnowledgeDocumentChunkResponse(
+                ordinal=chunk.ordinal,
+                content=chunk.content,
+                page_number=chunk.page_number,
+            )
+            for chunk in chunks
         ]
 
 

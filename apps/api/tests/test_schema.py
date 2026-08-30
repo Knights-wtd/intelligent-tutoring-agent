@@ -473,7 +473,7 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0015_tutor_conversations"
+        assert version == "0019_recharge_gateway_creation"
     finally:
         engine.dispose()
 
@@ -501,7 +501,7 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0015_tutor_conversations"
+        assert version == "0019_recharge_gateway_creation"
     finally:
         engine.dispose()
 
@@ -746,7 +746,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
                 MigrationContext.configure(connection), Base.metadata
             ) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0015_tutor_conversations"
+                "0019_recharge_gateway_creation"
             )
     finally:
         engine.dispose()
@@ -1499,7 +1499,7 @@ def test_tutor_migration_matches_model_metadata(tmp_path) -> None:
                 MigrationContext.configure(connection), Base.metadata
             ) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0015_tutor_conversations"
+                "0019_recharge_gateway_creation"
             )
     finally:
         engine.dispose()

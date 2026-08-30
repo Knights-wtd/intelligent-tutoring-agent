@@ -139,13 +139,13 @@
 .classroomDialog header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .classroomDialog h2 { margin: 3px 0 0; color: #38336e; font-size: 20px; }
 .classroomDialog p { margin: 0; color: #7973a2; line-height: 1.5; }
-.classroomDialog form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.classroomForm { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
 .classroomDialog label { display: grid; gap: 7px; color: #655e9c; font-size: 12px; font-weight: 700; }
 .classroomDialog input { min-height: 40px; padding: 8px 10px; border: 1px solid #d3cde8; border-radius: 8px; color: var(--text); font: inherit; }
 .classroomDialog button { min-height: 40px; padding: 8px 12px; border: 1px solid #d4cee9; border-radius: 8px; background: #faf8fe; color: #524b8a; font: inherit; font-weight: 700; cursor: pointer; }
-.classroomDialog form button { border-color: var(--purple); background: var(--purple); color: #faf8fe; }
+.classroomForm button { border-color: var(--purple); background: var(--purple); color: #faf8fe; }
 .classroomDialog button:hover { border-color: #a193dd; background: #f3f0fd; color: #4b419d; }
-.classroomDialog form button:hover { border-color: #5145ad; background: #5145ad; color: #faf8fe; }
+.classroomForm button:hover { border-color: #5145ad; background: #5145ad; color: #faf8fe; }
 .classroomError { color: #b14253 !important; }
 .inviteCode { border-radius: 8px; background: #f0ebfc; padding: 10px; color: #4c429a !important; font-weight: 700; }
 
@@ -219,7 +219,36 @@
 .tutorMessageUser { justify-self: end; border-color: #d9d2f5; background: #f2eefd; }
 .tutorMessageAssistant { justify-self: start; }
 .tutorMessageUser p, .tutorMessageAssistant p { margin: 0; line-height: 1.6; white-space: pre-wrap; }
+.tutorRich { display: grid; gap: 6px; min-width: 0; }
+.tutorRichHeading1 { margin: 6px 0 0; color: var(--text, #2e2a52); font-size: 16px; font-weight: 700; line-height: 1.4; }
+.tutorRichHeading2 { margin: 5px 0 0; color: #3f3694; font-size: 14.5px; font-weight: 700; line-height: 1.4; }
+.tutorRichHeading3 { margin: 4px 0 0; color: #4c4488; font-size: 13.5px; font-weight: 700; line-height: 1.4; }
+.tutorRichParagraph { margin: 0; line-height: 1.65; white-space: pre-wrap; }
+.tutorRichList { display: grid; gap: 4px; margin: 0; padding-left: 20px; line-height: 1.65; }
+.tutorRichStrong { color: #3f3694; font-weight: 700; }
+.tutorRichCode { padding: 1px 5px; border-radius: 5px; background: #efeafd; color: #5549aa; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }
+.choiceList { display: grid; gap: 8px; }
+.choiceOption { display: flex; align-items: baseline; gap: 9px; padding: 10px 12px; border: 1px solid #d9d2f5; border-radius: 9px; background: #fff; cursor: pointer; line-height: 1.55; }
+.choiceOption:hover { border-color: #b6a9ec; background: #f7f4ff; }
+.choiceOption:has(input:checked) { border-color: var(--purple-deep, #6558c9); background: #f2eefd; }
+.choiceOption input { accent-color: var(--purple-deep, #6558c9); }
+.choiceKey { color: #5549aa; font-weight: 700; }
+.choiceOption:has(input:checked) .choiceKey { color: #493f9e; }
+.revealedAnswer { color: #3f3694 !important; font-weight: 700; }
+.explanation { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid #ded6f6; border-radius: 9px; background: #fff; }
+.explanation strong { color: #4c4488; font-size: 13px; }
+.chunkViewer { display: grid; gap: 10px; margin-top: 4px; }
+.chunkViewer > strong { color: #463f80; font-size: 14px; }
+.chunkCard { display: grid; gap: 7px; padding: 12px 14px; border: 1px solid #e3dcf7; border-radius: 10px; background: #fff; }
+.chunkMeta { color: #7a74a0; font-size: 12px; font-weight: 700; }
+.searchResultContent { min-width: 0; }
 .tutorMessageRole { color: #6558c9; font-size: 12px; font-weight: 700; }
+.tutorMessageClarify { border-color: #b7a8f0; background: #f4f0ff; }
+.tutorClarify { display: grid; gap: 8px; }
+.tutorClarifyHint { margin: 0; color: #6558c9; font-size: 12px; line-height: 1.5; }
+.tutorClarifyQuestions { display: grid; gap: 7px; }
+.tutorClarifyQuestions button { min-height: 0; padding: 8px 11px; text-align: left; font-weight: 400; line-height: 1.55; white-space: pre-wrap; }
+.tutorClarifyQuestions button:hover { border-color: var(--purple, #6558c9); background: #fff; }
 .tutorCitations { display: flex; flex-wrap: wrap; gap: 7px; }
 .tutorPanel button { min-height: 40px; padding: 8px 12px; border: 1px solid #d4cee9; border-radius: 8px; background: #faf8fe; color: #524b8a; font: inherit; font-weight: 700; cursor: pointer; }
 .tutorCitations button { min-height: 34px; padding: 6px 9px; border-color: #d8d0f4; background: #f3f0fc; color: #5549aa; font-size: 12px; }
@@ -231,6 +260,48 @@
 .tutorPanel button:focus-visible, .tutorForm textarea:focus-visible { outline: 3px solid #c3b5f4; outline-offset: 2px; }
 .tutorError { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 12px; border: 1px solid #ecc9cf; border-radius: 9px; background: #fff7f8; color: #9a3445; }
 .tutorError p { margin: 0; }
+
+/* Account panel (recharge / balance) */
+.accountBalanceCard { display: grid; gap: 4px; padding: 14px 16px; border: 1px solid #d9d2f5; border-radius: 12px; background: linear-gradient(135deg, #f2eefd, #faf8fe); }
+.accountBalanceLabel { color: #655e9c; font-size: 12px; font-weight: 700; }
+.accountBalanceValue { color: var(--text, #2e2a52); font-size: 28px; line-height: 1.2; }
+.accountBalanceUnit { font-size: 13px; font-weight: 400; color: #7a74a0; }
+.accountBalanceHint { color: #7a74a0; font-size: 12px; }
+.accountRechargeForm { display: grid; gap: 12px; }
+.accountFieldset { display: grid; gap: 8px; margin: 0; padding: 10px 12px 12px; border: 1px solid var(--line, #e7e4ec); border-radius: 10px; }
+.accountFieldset legend { padding: 0 6px; color: #6558c9; font-size: 12px; font-weight: 700; }
+.accountAmountChips { display: flex; flex-wrap: wrap; gap: 8px; }
+.accountAmountChips button { min-height: 36px; padding: 7px 13px; border: 1px solid #d4cee9; border-radius: 999px; background: #faf8fe; color: #524b8a; font: inherit; font-weight: 700; cursor: pointer; }
+.accountAmountChips button[aria-pressed="true"] { border-color: var(--purple, #6558c9); background: var(--purple, #6558c9); color: #faf8fe; }
+.accountCustomLabel { color: #655e9c; font-size: 12px; font-weight: 700; }
+.accountRechargeForm input[type="number"] { box-sizing: border-box; width: 100%; padding: 9px 11px; border: 1px solid #d3cde8; border-radius: 9px; background: #faf8fe; color: var(--text, #2e2a52); font: inherit; }
+.accountProviderRow { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.accountProviderOption { padding: 7px 13px; border: 1px solid var(--purple, #6558c9); border-radius: 999px; background: #f2eefd; color: var(--purple, #6558c9); font-size: 13px; font-weight: 700; }
+.accountProviderDisabled { color: #9a96b8; font-size: 13px; }
+.accountError { margin: 0; }
+.accountRechargeForm .accountError { color: #9a3445; font-size: 13px; }
+.accountRechargeForm .accountSubmitButton { min-height: 42px; justify-self: stretch; border: 1px solid var(--purple, #6558c9); border-radius: 9px; background: var(--purple, #6558c9); color: #faf8fe; }
+.accountRechargeForm .accountSubmitButton:hover:not(:disabled) { border-color: #5145ad; background: #5145ad; color: #faf8fe; }
+.accountRechargeForm .accountSubmitButton:disabled { cursor: not-allowed; opacity: .48; }
+.accountAwaiting { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid #d9d2f5; border-radius: 10px; background: #f4f0ff; }
+.accountAwaiting p { margin: 0; line-height: 1.55; }
+.accountAwaiting button { min-height: 0; align-self: start; padding: 7px 12px; border: 1px solid #d4cee9; border-radius: 8px; background: #faf8fe; color: #524b8a; font: inherit; font-weight: 700; cursor: pointer; }
+.accountPayLink { padding: 7px 12px; border: 1px solid var(--purple, #6558c9); border-radius: 8px; background: var(--purple, #6558c9); color: #faf8fe; font: inherit; font-size: 14px; font-weight: 700; text-decoration: none; justify-self: start; }
+.accountQrBlock { display: grid; justify-items: center; gap: 8px; padding: 10px; border: 1px solid #d9d2f5; border-radius: 10px; background: #fff; justify-self: start; }
+.accountQrImage { width: 200px; height: 200px; }
+.accountQrPlaceholder { margin: 0; min-height: 200px; display: grid; place-items: center; color: #7a74a0; font-size: 13px; }
+.accountQrBlock .accountQrHint { margin: 0; color: #655e9c; font-size: 12px; }
+.accountSuccess { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border: 1px solid #bfe3d2; border-radius: 10px; background: #f0faf5; color: #167c59; }
+.accountSuccess p { margin: 0; }
+.accountSuccess button { min-height: 0; padding: 7px 12px; border: 1px solid #bfe3d2; border-radius: 8px; background: #fff; color: #167c59; font: inherit; font-weight: 700; cursor: pointer; }
+.accountHistory { display: grid; gap: 8px; }
+.accountHistory h3 { margin: 0; color: var(--text, #2e2a52); font-size: 14px; }
+.accountHistoryEmpty { margin: 0; color: #7a74a0; font-size: 13px; }
+.accountHistoryList { display: grid; gap: 6px; margin: 0; max-height: 200px; overflow: auto; padding: 0; list-style: none; }
+.accountHistoryRow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line, #e7e4ec); border-radius: 8px; background: #faf8fe; font-size: 13px; }
+.accountEntryType { color: #6558c9; font-weight: 700; }
+.accountEntryAmount { flex: 1; color: var(--text, #2e2a52); font-variant-numeric: tabular-nums; }
+.accountEntryTime { color: #7a74a0; font-size: 12px; }
 @media (max-width: 767px) { .tutorPanel { padding: 16px; } .tutorHeader { flex-direction: column; } .tutorMessageUser, .tutorMessageAssistant { max-width: 100%; } .tutorForm { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .tutorPanel * { scroll-behavior: auto; transition-duration: .01ms !important; } }
 /* Workspace knowledge library sidebar */
@@ -371,6 +442,76 @@
 .explorerFolder > strong {
   display: block;
   padding: 7px 8px;
+}
+
+.explorerFolderToggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.explorerFolderToggle:hover,
+.explorerFolderToggle:focus-visible {
+  background: rgba(64, 91, 136, 0.1);
+}
+
+.explorerFolderToggle strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.documentActions {
+  display: grid;
+  gap: 6px;
+  padding: 0 0 6px 20px;
+}
+
+.documentActions button {
+  min-height: 0;
+  justify-self: start;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.noteRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.noteToggle {
+  flex: none;
+  min-height: 0;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--purple, #6558c9);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.noteToggle:hover,
+.noteToggle:focus-visible {
+  background: rgba(64, 91, 136, 0.1);
+}
+
+.noteTogglePlaceholder {
+  flex: none;
+  width: 17px;
 }
 
 .explorerFolder ul {

@@ -161,6 +161,12 @@ export type KnowledgeDocumentSummary = {
   created_at: string;
 };
 
+export type KnowledgeDocumentChunk = {
+  ordinal: number;
+  content: string;
+  page_number: number | null;
+};
+
 export type KnowledgePreview = {
   blob: Blob;
   contentType: string;
@@ -311,13 +317,28 @@ export const knowledgeApi = {
     query: string,
     limit = 10,
     signal?: AbortSignal,
+    full = true,
   ): Promise<KnowledgeSearchResponse> {
     const boundedLimit = Math.min(MAX_KNOWLEDGE_RESULTS, Math.max(1, Math.trunc(limit)));
     return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/search`, {
       method: "POST",
-      body: JSON.stringify({ query, limit: boundedLimit }),
+      body: JSON.stringify({ query, limit: boundedLimit, full }),
       signal,
     });
+  },
+
+  /**
+   * 文档在活动索引中的详细分块内容（完整原文，非检索摘要）。
+   */
+  documentChunks(
+    knowledgeBaseId: string,
+    documentId: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeDocumentChunk[]> {
+    return requestJson(
+      `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/documents/${resource(documentId)}/chunks`,
+      { signal },
+    );
   },
 
   documents(knowledgeBaseId: string, signal?: AbortSignal): Promise<KnowledgeDocumentSummary[]> {

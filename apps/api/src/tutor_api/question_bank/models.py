@@ -90,6 +90,10 @@ class QuestionVersion(Base):
         CheckConstraint(
             _sha256_check("source_content_sha256"), name="ck_question_version_source_sha256"
         ),
+        CheckConstraint(
+            "difficulty IS NULL OR difficulty BETWEEN 1 AND 5",
+            name="ck_question_version_difficulty",
+        ),
         ForeignKeyConstraint(
             ["question_id", "knowledge_base_id", "space_id"],
             ["questions.id", "questions.knowledge_base_id", "questions.space_id"],
@@ -124,6 +128,15 @@ class QuestionVersion(Base):
     expected_keywords: Mapped[list[str] | None] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql")
     )
+    # AI 生成的选择题专有字段：choices 为 [{key: "A", text: ...}, ...]，
+    # expected_answer 存选项 key（如 "A"）；手动创建的题目保持为 NULL。
+    choices: Mapped[list[dict[str, str]] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    explanation: Mapped[str | None] = mapped_column(Text)
+    difficulty: Mapped[int | None] = mapped_column(Integer)
+    # 溯源：指向生成该题的 ingestion_jobs.id（GENERATE_QUESTIONS），仅作记录不建外键。
+    generation_job_id: Mapped[UUID | None] = mapped_column(index=True)
     source_chunk_id: Mapped[UUID] = mapped_column(nullable=False, index=True)
     source_chunk_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
     source_pointer: Mapped[str] = mapped_column(String(2048), nullable=False)

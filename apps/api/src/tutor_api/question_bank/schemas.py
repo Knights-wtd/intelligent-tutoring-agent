@@ -1,8 +1,9 @@
 import unicodedata
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from tutor_api.question_bank.models import AssessmentErrorType, QuestionType
 
@@ -87,6 +88,11 @@ class CreateQuestionRequest(BaseModel):
             raise ValueError("open questions require an expected answer or keywords")
 
 
+class ChoiceOptionResponse(BaseModel):
+    key: str
+    text: str
+
+
 class QuestionResponse(BaseModel):
     id: UUID
     question_version_id: UUID
@@ -95,6 +101,9 @@ class QuestionResponse(BaseModel):
     version_number: int
     question_type: QuestionType
     prompt: str
+    # choices 只含选项文本，不泄露正确性；答案与解析仅在提交作答后返回。
+    choices: list[ChoiceOptionResponse] | None = None
+    difficulty: int | None = None
     created_at: datetime
 
 
@@ -127,6 +136,9 @@ class QuestionAttemptAssessmentResponse(BaseModel):
     grading_contract_version: str
     mastery_contract_version: str
     review_policy_version: str
+    # 交卷后揭示：正确答案（选择题为选项 key）与解析。
+    expected_answer: str | None = None
+    explanation: str | None = None
 
 
 class ReviewItemResponse(BaseModel):
@@ -174,3 +186,19 @@ class AttemptHistoryItemResponse(BaseModel):
 class AttemptHistoryResponse(BaseModel):
     items: list[AttemptHistoryItemResponse]
     next_cursor: str | None
+
+
+class CreateQuestionGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    count: int = Field(default=10, ge=1, le=20)
+
+
+class QuestionGenerationResponse(BaseModel):
+    generation_id: UUID
+    state: Literal["processing", "completed", "failed"]
+    failure_code: str | None = None
+    requested_question_count: int
+    question_count: int
+    created_at: datetime
+    completed_at: datetime | None = None
