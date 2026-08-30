@@ -187,6 +187,13 @@ class IngestionJobState(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ObjectDeletionState(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    RETRY_WAIT = "retry_wait"
+    COMPLETED = "completed"
+
+
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
     __table_args__ = (
@@ -1215,6 +1222,52 @@ class IngestionJob(Base):
         ForeignKey("users.id"), nullable=False, index=True
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ObjectDeletionOutbox(Base):
+    __tablename__ = "knowledge_object_deletion_outbox"
+    __table_args__ = (
+        UniqueConstraint("object_key", name="uq_knowledge_object_deletion_key"),
+        CheckConstraint("attempt_count >= 0", name="ck_object_deletion_attempt_nonnegative"),
+        CheckConstraint(
+            "(state = 'running' AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL) "
+            "OR (state <> 'running' AND lease_owner IS NULL AND lease_expires_at IS NULL)",
+            name="ck_object_deletion_lease_matches_state",
+        ),
+        CheckConstraint(
+            "(state = 'completed' AND completed_at IS NOT NULL) "
+            "OR (state <> 'completed' AND completed_at IS NULL)",
+            name="ck_object_deletion_completed_at_matches_state",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    state: Mapped[ObjectDeletionState] = mapped_column(
+        _enum(ObjectDeletionState, "object_deletion_state"),
+        nullable=False,
+        default=ObjectDeletionState.PENDING,
+        server_default=ObjectDeletionState.PENDING.value,
+        index=True,
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(255), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

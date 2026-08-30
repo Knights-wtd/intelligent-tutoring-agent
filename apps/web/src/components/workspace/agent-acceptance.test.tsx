@@ -82,11 +82,20 @@ const functionsKnowledgeBase: KnowledgeBase = {
 const agentSession = {
   id: "session-acceptance",
   title: "Workspace 验收",
+  knowledge_base_id: wireless.id,
+  space_id: personalSpace.id,
   provider: "faro",
   model: "gemini-3.7-flash-tiered",
   state: "waiting_input",
   last_event_sequence: 1,
   is_legacy: false,
+};
+const classroomAgentSession = {
+  ...agentSession,
+  id: "session-functions",
+  title: "函数知识库验收",
+  knowledge_base_id: functionsKnowledgeBase.id,
+  space_id: classroomSpace.id,
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -96,10 +105,13 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function agentEvent(citations: Record<string, unknown>[]): AgentEventEnvelope {
+function agentEvent(
+  citations: Record<string, unknown>[],
+  sessionId = agentSession.id,
+): AgentEventEnvelope {
   return {
-    event_id: "event-acceptance-1",
-    session_id: agentSession.id,
+    event_id: `event-${sessionId}-1`,
+    session_id: sessionId,
     turn_id: "turn-acceptance-1",
     sequence: 1,
     event_type: "model_text_delta",
@@ -163,8 +175,13 @@ beforeEach(() => {
         provider_secret_configured: true,
       });
     }
-    if (url.includes(`/api/v1/agent/sessions/${agentSession.id}/events`)) {
-      const events = mockAgentNetwork.citations.length > 0 ? [agentEvent(mockAgentNetwork.citations)] : [];
+    const eventSession = [agentSession, classroomAgentSession].find(
+      (session) => url.includes(`/api/v1/agent/sessions/${session.id}/events`),
+    );
+    if (eventSession) {
+      const events = mockAgentNetwork.citations.length > 0
+        ? [agentEvent(mockAgentNetwork.citations, eventSession.id)]
+        : [];
       return jsonResponse(events);
     }
     if (url.includes(`/api/v1/agent/sessions/${agentSession.id}/turns`)) {
@@ -178,7 +195,9 @@ beforeEach(() => {
       }
       return jsonResponse({ turn_id: "turn-retried", native_session_id: "native-session" }, 202);
     }
-    if (url.endsWith("/api/v1/agent/sessions")) return jsonResponse([agentSession]);
+    if (url.endsWith("/api/v1/agent/sessions")) {
+      return jsonResponse([agentSession, classroomAgentSession]);
+    }
     if (url.includes("/api/v1/knowledge-bases/") && url.includes("/vault/files/")) {
       mockAgentNetwork.vaultRequests += 1;
       return jsonResponse({

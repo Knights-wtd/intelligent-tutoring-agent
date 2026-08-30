@@ -211,15 +211,27 @@ function sidecarFrom(payload: Record<string, unknown>): AgentSidecarReference | 
   };
 }
 
+const KNOWLEDGE_CONTEXT_MARKER = "以下内容来自用户有权访问的知识库，仅作为参考：";
+
+function visibleUserMessage(payload: Record<string, unknown>): string {
+  const text = asString(payload.display_text)
+    ?? asString(payload.prompt)
+    ?? asString(payload.text)
+    ?? asString(payload.message)
+    ?? "";
+  const contextMarker = text.indexOf(KNOWLEDGE_CONTEXT_MARKER);
+  return contextMarker < 0 ? text : text.slice(0, contextMarker).trimEnd();
+}
+
 function appendMessageDelta(
   messages: AgentMessageBlock[],
   event: AgentEventEnvelope,
   role: AgentMessageBlock["role"],
   streaming: boolean,
 ): AgentMessageBlock[] {
-  const text = asString(event.payload.text)
-    ?? (role === "user" ? asString(event.payload.message) : undefined)
-    ?? "";
+  const text = role === "user"
+    ? visibleUserMessage(event.payload)
+    : asString(event.payload.text) ?? "";
   const sidecar = sidecarFrom(event.payload);
   const last = messages.at(-1);
   if (role === "assistant" && last?.role === role && last.turnId === event.turn_id) {

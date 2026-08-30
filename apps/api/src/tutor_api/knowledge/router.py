@@ -55,6 +55,7 @@ from tutor_api.knowledge.service import (
     PreparedUpload,
     _prepare_upload,
     create_knowledge_base,
+    delete_knowledge_base,
     get_document_processing_state,
     get_knowledge_base,
     list_knowledge_bases,
@@ -214,6 +215,20 @@ def get_knowledge_base_detail(
         return KnowledgeBaseResponse.model_validate(
             get_knowledge_base(session, current_user, knowledge_base_id)
         )
+
+
+@router.delete(
+    "/api/v1/knowledge-bases/{knowledge_base_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_knowledge_base(
+    knowledge_base_id: UUID,
+    request: Request,
+    current_user: CurrentUser,
+) -> Response:
+    with session_scope(_session_factory(request)) as session:
+        delete_knowledge_base(session, current_user, knowledge_base_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

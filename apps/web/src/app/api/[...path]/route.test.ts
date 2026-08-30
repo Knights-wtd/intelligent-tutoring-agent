@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 describe("API proxy route", () => {
   afterEach(() => {
@@ -41,5 +41,22 @@ describe("API proxy route", () => {
     expect(await upstreamRequest.json()).toMatchObject({ username: "learner" });
     expect(response.status).toBe(201);
     expect(response.headers.get("set-cookie")).toContain("session=token");
+  });
+
+  it("does not cache mutable GET responses from the runtime API", async () => {
+    vi.stubEnv("API_INTERNAL_URL", "http://api:8010/");
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ processing_state: "processing" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await GET(
+      new Request("http://localhost:3000/api/v1/knowledge-bases/kb-1/workspace"),
+      { params: Promise.resolve({ path: ["v1", "knowledge-bases", "kb-1", "workspace"] }) },
+    );
+
+    const upstreamRequest = fetchMock.mock.calls[0]?.[0] as Request;
+    expect(upstreamRequest.cache).toBe("no-store");
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 });

@@ -323,18 +323,34 @@ def parse_pdf(
         max_total_text_chars=max_total_text_chars,
         max_blocks=max_blocks,
     )
+    pdfium_document: object | None = None
     try:
         reader = PdfReader(BytesIO(data), strict=True)
-        if reader.is_encrypted:
-            _raise(ParseErrorCode.INVALID_FORMAT)
         page_count = _preflight_pdf_page_tree(reader, max_pages=max_pages)
+        if reader.is_encrypted:
+            import pypdfium2 as pdfium
+
+            pdfium_document = pdfium.PdfDocument(data, password="")
+            if len(pdfium_document) != page_count:
+                _raise(ParseErrorCode.INVALID_FORMAT)
         pages: list[ParsedPage] = []
         all_blocks: list[ParsedBlock] = []
         total_text_chars = 0
         for page_index in range(page_count):
             page_number = page_index + 1
-            page = reader.get_page(page_index)
-            text = page.extract_text() or ""
+            if pdfium_document is None:
+                text = reader.get_page(page_index).extract_text() or ""
+            else:
+                page = pdfium_document[page_index]
+                try:
+                    text_page = page.get_textpage()
+                    try:
+                        text = text_page.get_text_range()
+                    finally:
+                        text_page.close()
+                finally:
+                    page.close()
+            text = text.replace("\x00", " ")
             if len(text) > max_page_text_chars:
                 _raise(ParseErrorCode.LIMIT_EXCEEDED)
             total_text_chars += len(text)
@@ -378,6 +394,12 @@ def parse_pdf(
         raise
     except Exception:
         _raise(ParseErrorCode.INVALID_FORMAT)
+    finally:
+        if pdfium_document is not None:
+            try:
+                pdfium_document.close()
+            except Exception:
+                pass
 
 
 def _normalize_archive_path(raw_path: str, *, is_directory: bool) -> str:

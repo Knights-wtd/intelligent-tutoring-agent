@@ -73,6 +73,7 @@ type RuntimeFailure = {
 };
 
 type FailedTurn = {
+  knowledgeBaseId: string;
   sessionId: string;
   request: AgentSendRequest;
   idempotencyKey: string;
@@ -90,8 +91,40 @@ function failureOf(error: unknown): RuntimeFailure {
   };
 }
 
+function isLegacySession(session: AgentSessionSummary): boolean {
+  return session.is_legacy === true || session.legacy === true;
+}
+
+function normalizeSession<T extends AgentSessionSummary>(session: T): T {
+  const legacy = isLegacySession(session);
+  const provider = typeof session.provider === "string" && session.provider.trim()
+    ? session.provider
+    : legacy ? "legacy" : FARO_PROVIDER;
+  const model = typeof session.model === "string" && session.model.trim()
+    ? session.model
+    : legacy ? "历史助教" : FARO_MODEL;
+  const state = ["running", "waiting_input", "stopped", "failed", "archived"].includes(session.state)
+    ? session.state
+    : legacy ? "archived" : "waiting_input";
+  const lastEventSequence = Number.isSafeInteger(session.last_event_sequence)
+    && session.last_event_sequence >= 0
+    ? session.last_event_sequence
+    : 0;
+  return {
+    ...session,
+    title: typeof session.title === "string" && session.title.trim()
+      ? session.title
+      : "历史助教会话",
+    provider,
+    model,
+    state,
+    last_event_sequence: lastEventSequence,
+    is_legacy: legacy,
+  };
+}
+
 function isFaroSession(session: AgentSessionSummary): boolean {
-  return session.is_legacy !== true
+  return !isLegacySession(session)
     && session.provider === FARO_PROVIDER
     && session.model === FARO_MODEL;
 }
@@ -99,15 +132,52 @@ function isFaroSession(session: AgentSessionSummary): boolean {
 function isWritableSession(session: AgentSessionSummary): boolean {
   return isFaroSession(session)
     && session.state !== "failed"
-    && session.state !== "archived";
+    && session.state !== "archived"
+    && session.state !== "stopped";
 }
 
-function asReadOnlyHistory(session: AgentSessionSummary): AgentSessionSummary {
-  return isFaroSession(session) ? session : { ...session, is_legacy: true };
+function asReadOnlyHistory<T extends AgentSessionSummary>(session: T): T {
+  const normalized = normalizeSession(session);
+  return isFaroSession(normalized)
+    ? normalized
+    : { ...normalized, is_legacy: true, legacy: true };
 }
 
-function normalizeSessions(sessions: readonly AgentSessionSummary[]): AgentSessionSummary[] {
-  return sessions.map(asReadOnlyHistory);
+function normalizeSessions(
+  sessions: readonly AgentSessionSummary[],
+  knowledgeBaseId: string,
+): AgentSessionSummary[] {
+  return sessions
+    .filter((session) => session.knowledge_base_id === knowledgeBaseId)
+    .map(asReadOnlyHistory);
+}
+
+function legacyView(session: AgentSession): AgentView {
+  const next = emptyAgentView();
+  next.sessionState = session.state;
+  next.messages = (Array.isArray(session.messages) ? session.messages : []).flatMap(
+    (message, index) => {
+      if (
+        !message
+        || (message.role !== "user" && message.role !== "assistant")
+        || typeof message.content !== "string"
+      ) {
+        return [];
+      }
+      const id = typeof message.id === "string" && message.id
+        ? message.id
+        : `legacy-${session.id}-${index}`;
+      return [{
+        id,
+        eventId: id,
+        turnId: null,
+        role: message.role,
+        text: message.content,
+        streaming: false,
+      }];
+    },
+  );
+  return next;
 }
 
 function upsertSession(
@@ -124,6 +194,48 @@ function randomIdempotencyKey(): string {
     return globalThis.crypto.randomUUID();
   }
   return `agent-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+const AGENT_CAPABILITY_PREFERENCE_KEY = "agent-capability-preferences-v1";
+const AGENT_CAPABILITY_KEYS = [
+  "mcp_enabled",
+  "skills_enabled",
+  "subagents_enabled",
+  "web_enabled",
+] as const;
+
+type AgentCapabilityPreference = Pick<
+  AgentSettingsValue,
+  (typeof AGENT_CAPABILITY_KEYS)[number]
+>;
+
+function capabilityPreferenceOf(value: AgentSettingsValue): AgentCapabilityPreference {
+  return {
+    mcp_enabled: value.mcp_enabled === true,
+    skills_enabled: value.skills_enabled === true,
+    subagents_enabled: value.subagents_enabled === true,
+    web_enabled: value.web_enabled === true,
+  };
+}
+
+function readCapabilityPreference(storageKey: string): AgentCapabilityPreference | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(storageKey);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!AGENT_CAPABILITY_KEYS.every((key) => typeof parsed[key] === "boolean")) return null;
+    return capabilityPreferenceOf(parsed as AgentSettingsValue);
+  } catch {
+    return null;
+  }
+}
+
+function mergeCapabilityPreference(
+  value: AgentSettingsValue,
+  preference: AgentCapabilityPreference | null,
+): AgentSettingsValue {
+  return fixedAgentServiceSettings(preference ? { ...value, ...preference } : value);
 }
 
 function connectionLabel(state: AgentConnectionState | null): string {
@@ -209,10 +321,14 @@ export function AgentPanel({
   const [retryGeneration, setRetryGeneration] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"sessions" | "settings">("sessions");
+  const capabilityPreferenceKey = `${AGENT_CAPABILITY_PREFERENCE_KEY}:${knowledgeBase.id}`;
 
   const mountedRef = useRef(false);
+  const knowledgeBaseIdRef = useRef(knowledgeBase.id);
+  knowledgeBaseIdRef.current = knowledgeBase.id;
   const sessionIdRef = useRef<string | null>(null);
   const settingsRef = useRef<AgentSettingsValue>(fixedAgentServiceSettings({}));
+  const settingsRevisionRef = useRef(0);
   const viewRef = useRef<AgentView>(emptyAgentView());
   const connectionRef = useRef<AgentEventConnection | null>(null);
   const bootstrapRef = useRef<AbortController | null>(null);
@@ -313,15 +429,22 @@ export function AgentPanel({
   }
 
   async function replaySession(
-    sessionId: string,
+    session: AgentSessionSummary,
     controller: AbortController,
     readOnly = false,
   ) {
+    const sessionId = session.id;
     closeConnection();
     replayRef.current?.abort();
     replayRef.current = controller;
     publishView(emptyAgentView());
     setConnection(null);
+
+    if (isLegacySession(session)) {
+      publishView(legacyView(session as AgentSession));
+      persistCursor(sessionId, 0);
+      return;
+    }
 
     const replay = await agentApi.events(sessionId, 0, controller.signal);
     if (controller.signal.aborted || sessionIdRef.current !== sessionId) return;
@@ -341,7 +464,7 @@ export function AgentPanel({
   }
 
   async function createSession(controller: AbortController): Promise<AgentSession> {
-    return agentApi.create({
+    const created = await agentApi.create({
       knowledge_base_id: knowledgeBase.id,
       provider: FARO_PROVIDER,
       model: FARO_MODEL,
@@ -349,6 +472,11 @@ export function AgentPanel({
       title: knowledgeBase.name,
       linked_contexts: defaultLinkedContexts,
     }, controller.signal);
+    return normalizeSession({
+      ...created,
+      knowledge_base_id: created.knowledge_base_id ?? knowledgeBase.id,
+      space_id: created.space_id ?? space.id,
+    });
   }
 
   useEffect(() => {
@@ -356,12 +484,15 @@ export function AgentPanel({
     const controller = new AbortController();
     bootstrapRef.current?.abort();
     bootstrapRef.current = controller;
+    abortActions();
+    settingsRevisionRef.current += 1;
     replayRef.current?.abort();
     closeConnection();
     sessionIdRef.current = null;
     queueMicrotask(() => {
       if (controller.signal.aborted) return;
       setSelectedSessionId(null);
+      setReadOnlyHistorySelected(false);
       setLoading(true);
       setRuntimeFailure(null);
       setFailedTurn(null);
@@ -378,12 +509,15 @@ export function AgentPanel({
           agentApi.diagnostics(controller.signal),
         ]);
         if (controller.signal.aborted) return;
-        const safeSettings = fixedAgentServiceSettings(loadedSettings);
+        const safeSettings = mergeCapabilityPreference(
+          loadedSettings,
+          readCapabilityPreference(capabilityPreferenceKey),
+        );
         settingsRef.current = safeSettings;
         setSettings(safeSettings);
         setDiagnostics(loadedDiagnostics);
 
-        const nextSessions = normalizeSessions(loadedSessions);
+        const nextSessions = normalizeSessions(loadedSessions, knowledgeBase.id);
         const writableSessions = nextSessions.filter(isWritableSession);
         const preference = resolveAgentSessionPreference({
           search: window.location.search,
@@ -400,7 +534,7 @@ export function AgentPanel({
         }
         setSessions(nextSessions);
         setCurrentSession(selected);
-        await replaySession(selected.id, controller);
+        await replaySession(selected, controller);
       } catch (error) {
         if (!controller.signal.aborted) {
           setRuntimeFailure(failureOf(error));
@@ -415,16 +549,13 @@ export function AgentPanel({
       mountedRef.current = false;
       controller.abort();
       replayRef.current?.abort();
+      abortActions();
       closeConnection();
     };
     // A knowledge-base change deliberately starts a fresh controller lifecycle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [knowledgeBase.id, retryGeneration]);
+  }, [capabilityPreferenceKey, knowledgeBase.id, retryGeneration]);
 
-  useEffect(() => () => {
-    for (const controller of actionControllersRef.current) controller.abort();
-    actionControllersRef.current.clear();
-  }, []);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -441,6 +572,11 @@ export function AgentPanel({
   function closeSettings() {
     setSettingsOpen(false);
     queueMicrotask(() => settingsTriggerRef.current?.focus());
+  }
+
+  function abortActions() {
+    for (const controller of actionControllersRef.current) controller.abort();
+    actionControllersRef.current.clear();
   }
 
   function actionController(): AbortController {
@@ -468,11 +604,12 @@ export function AgentPanel({
     setFailedTurn(null);
     try {
       const selected = await agentApi.get(sessionId, controller.signal);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || selected.knowledge_base_id !== knowledgeBase.id) return;
       const safeSelected = asReadOnlyHistory(selected);
       setSessions((current) => upsertSession(current, safeSelected));
       setCurrentSession(safeSelected);
-      await replaySession(safeSelected.id, controller, !isWritableSession(safeSelected));
+      await replaySession(safeSelected, controller, !isWritableSession(safeSelected));
+      if (!controller.signal.aborted) closeSettings();
     } catch (error) {
       if (!controller.signal.aborted) setRuntimeFailure(failureOf(error));
     } finally {
@@ -489,7 +626,8 @@ export function AgentPanel({
       if (controller.signal.aborted) return;
       setSessions((current) => upsertSession(current, created));
       setCurrentSession(created);
-      await replaySession(created.id, controller);
+      await replaySession(created, controller);
+      if (!controller.signal.aborted) closeSettings();
     } catch (error) {
       if (!controller.signal.aborted) setRuntimeFailure(failureOf(error));
     } finally {
@@ -501,7 +639,13 @@ export function AgentPanel({
     const controller = actionController();
     try {
       await agentApi.archive(sessionId, controller.signal);
-      if (!controller.signal.aborted) updateSessionState(sessionId, "archived");
+      if (controller.signal.aborted) return;
+      updateSessionState(sessionId, "archived");
+      if (sessionIdRef.current === sessionId) {
+        closeConnection();
+        setConnection(null);
+        setReadOnlyHistorySelected(true);
+      }
     } catch (error) {
       if (!controller.signal.aborted) setRuntimeFailure(failureOf(error));
     } finally {
@@ -510,37 +654,41 @@ export function AgentPanel({
   }
 
   async function stopSession(sessionId: string) {
-    try {
-      const stopped = await agentApi.stop(sessionId);
-      setSessions((current) => upsertSession(current, stopped));
-      updateSessionState(sessionId, stopped.state);
-    } catch (error) {
-      setRuntimeFailure(failureOf(error));
-    }
-  }
-
-  async function resumeSession(sessionId: string) {
-    try {
-      const resumed = await agentApi.resume(sessionId);
-      setSessions((current) => upsertSession(current, resumed));
-      updateSessionState(sessionId, resumed.state);
-    } catch (error) {
-      setRuntimeFailure(failureOf(error));
-    }
-  }
-
-  async function branchSession(
-    kind: "rewind" | "fork",
-    sessionId: string,
-    afterSequence: number,
-  ) {
     const controller = actionController();
     try {
-      const branched = await agentApi[kind](sessionId, { after_sequence: afterSequence });
+      await agentApi.stop(sessionId, controller.signal);
       if (controller.signal.aborted) return;
-      setSessions((current) => upsertSession(current, branched));
-      setCurrentSession(branched);
-      await replaySession(branched.id, controller);
+      updateSessionState(sessionId, "stopped");
+      if (sessionIdRef.current === sessionId) {
+        closeConnection();
+        setConnection(null);
+        setReadOnlyHistorySelected(true);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setRuntimeFailure(failureOf(error));
+    } finally {
+      finishAction(controller);
+    }
+  }
+
+  async function forkSession(sessionId: string, afterSequence: number) {
+    const controller = actionController();
+    try {
+      const branched = await agentApi.fork(
+        sessionId,
+        { checkpoint_id: `sequence:${afterSequence}` },
+        controller.signal,
+      );
+      if (controller.signal.aborted || !branched) return;
+      const safeBranched = asReadOnlyHistory({
+        ...branched,
+        knowledge_base_id: branched.knowledge_base_id ?? knowledgeBase.id,
+        space_id: branched.space_id ?? space.id,
+      });
+      setSessions((current) => upsertSession(current, safeBranched));
+      setCurrentSession(safeBranched);
+      await replaySession(safeBranched, controller, !isWritableSession(safeBranched));
+      if (!controller.signal.aborted) closeSettings();
     } catch (error) {
       if (!controller.signal.aborted) setRuntimeFailure(failureOf(error));
     } finally {
@@ -549,55 +697,119 @@ export function AgentPanel({
   }
 
   async function send(request: AgentSendRequest) {
+    const knowledgeBaseId = knowledgeBase.id;
     const sessionId = sessionIdRef.current;
-    const selected = sessions.find((session) => session.id === sessionId);
+    const selected = sessions.find((session) => (
+      session.id === sessionId && session.knowledge_base_id === knowledgeBaseId
+    ));
     if (!sessionId || !selected || !isWritableSession(selected)) return;
+    const controller = actionController();
     const idempotencyKey = randomIdempotencyKey();
     setRuntimeFailure(null);
     setFailedTurn(null);
     try {
-      await agentApi.send(sessionId, request, idempotencyKey);
+      await agentApi.send(sessionId, request, idempotencyKey, controller.signal);
+      if (
+        controller.signal.aborted
+        || knowledgeBaseIdRef.current !== knowledgeBaseId
+        || sessionIdRef.current !== sessionId
+      ) return;
       updateSessionState(sessionId, "running");
     } catch (error) {
-      setFailedTurn({ sessionId, request, idempotencyKey });
+      if (
+        controller.signal.aborted
+        || knowledgeBaseIdRef.current !== knowledgeBaseId
+        || sessionIdRef.current !== sessionId
+      ) return;
+      setFailedTurn({ knowledgeBaseId, sessionId, request, idempotencyKey });
       setRuntimeFailure(failureOf(error));
       updateSessionState(sessionId, "failed");
+    } finally {
+      finishAction(controller);
     }
   }
 
   async function retryRuntime() {
-    if (!failedTurn) {
+    const turn = failedTurn;
+    if (!turn) {
       setRetryGeneration((current) => current + 1);
       return;
     }
-    setRetryingFailedTurn(true);
-    try {
-      await agentApi.send(failedTurn.sessionId, failedTurn.request, failedTurn.idempotencyKey);
+    const selected = sessions.find((session) => (
+      session.id === turn.sessionId
+      && session.knowledge_base_id === turn.knowledgeBaseId
+      && isFaroSession(session)
+      && session.state !== "archived"
+      && session.state !== "stopped"
+    ));
+    if (
+      !selected
+      || turn.knowledgeBaseId !== knowledgeBase.id
+      || knowledgeBaseIdRef.current !== turn.knowledgeBaseId
+      || sessionIdRef.current !== turn.sessionId
+    ) {
       setRuntimeFailure(null);
       setFailedTurn(null);
-      updateSessionState(failedTurn.sessionId, "running");
+      return;
+    }
+    const controller = actionController();
+    setRetryingFailedTurn(true);
+    try {
+      await agentApi.send(
+        turn.sessionId,
+        turn.request,
+        turn.idempotencyKey,
+        controller.signal,
+      );
+      if (
+        controller.signal.aborted
+        || knowledgeBaseIdRef.current !== turn.knowledgeBaseId
+        || sessionIdRef.current !== turn.sessionId
+      ) return;
+      setRuntimeFailure(null);
+      setFailedTurn(null);
+      updateSessionState(turn.sessionId, "running");
     } catch (error) {
+      if (
+        controller.signal.aborted
+        || knowledgeBaseIdRef.current !== turn.knowledgeBaseId
+        || sessionIdRef.current !== turn.sessionId
+      ) return;
       setRuntimeFailure(failureOf(error));
-      updateSessionState(failedTurn.sessionId, "failed");
+      updateSessionState(turn.sessionId, "failed");
     } finally {
-      setRetryingFailedTurn(false);
+      finishAction(controller);
+      if (knowledgeBaseIdRef.current === turn.knowledgeBaseId) {
+        setRetryingFailedTurn(false);
+      }
     }
   }
-
   async function updateSettings(value: AgentSettingsValue) {
     const controller = actionController();
     const safeValue = fixedAgentServiceSettings(value);
+    const revision = settingsRevisionRef.current + 1;
+    settingsRevisionRef.current = revision;
     settingsRef.current = safeValue;
     setSettings(safeValue);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        capabilityPreferenceKey,
+        JSON.stringify(capabilityPreferenceOf(safeValue)),
+      );
+    }
     try {
       const saved = await agentApi.updateSettings(safeValue as AgentApiSettings, controller.signal);
-      if (!controller.signal.aborted) {
-        const safeSaved = fixedAgentServiceSettings(saved);
+      if (!controller.signal.aborted && settingsRevisionRef.current === revision) {
+        const safeSaved = mergeCapabilityPreference(
+          saved,
+          capabilityPreferenceOf(settingsRef.current),
+        );
         settingsRef.current = safeSaved;
         setSettings(safeSaved);
       }
-    } catch (error) {
-      if (!controller.signal.aborted) setRuntimeFailure(failureOf(error));
+    } catch {
+      // The capability preference remains active in this browser even if the
+      // deployment only exposes read-only capability defaults.
     } finally {
       finishAction(controller);
     }
@@ -685,7 +897,6 @@ export function AgentPanel({
             <AgentComposer
               disabled={loading || !selectedSessionId || readOnlyHistorySelected || runtimeFailure !== null}
               linkedContexts={defaultLinkedContexts}
-              onResume={selectedSessionId && !readOnlyHistorySelected ? () => resumeSession(selectedSessionId) : undefined}
               onSend={send}
               onStop={selectedSessionId && !readOnlyHistorySelected ? () => stopSession(selectedSessionId) : undefined}
               state={selectedState}
@@ -755,9 +966,7 @@ export function AgentPanel({
                 <AgentSessionSidebar
                   onArchive={archiveSession}
                   onCreate={startNewSession}
-                  onFork={(sessionId, after) => branchSession("fork", sessionId, after)}
-                  onResume={resumeSession}
-                  onRewind={(sessionId, after) => branchSession("rewind", sessionId, after)}
+                  onFork={forkSession}
                   onSelect={selectSession}
                   onStop={stopSession}
                   selectedSessionId={selectedSessionId}

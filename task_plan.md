@@ -396,3 +396,37 @@ Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 character
 - 真实 Faro 验收：两次均通过；事件包含 `turn_started`、`user_message`、`model_text_delta`、`session_state`，最新模型文本非空。
 - 测试：API `119 passed`；Web `35 files / 232 tests passed`、ESLint 与 production build 通过；Runtime `25 suites / 86 tests passed`、typecheck 与 build 通过。
 <!-- ACTIVE-AI-TUTOR-RECOVERY:END -->
+
+## 2026-08-30 · 最终稳定性收尾（当前执行）
+
+### 目标
+
+在不回归 Faro/Gemini AI 助教、知识库检索上下文、知识候选生成、UUID 标签隐藏和消息正文隔离的前提下，完成以下最终缺陷：
+
+- [x] 上传后“当前任务”处理状态与数据库权威 workspace 状态自动同步，手动刷新不受缓存影响。
+- [x] 真实 PDF 处理失败的 DataError/invalid_format 根因修复或明确、安全地呈现终态。
+- [x] AI 助教会话记录可实际切回历史聊天；四个会话操作不再是无效控件。
+- [x] 服务设置 Capabilities 四项可操作且有明确持久化语义，不改变固定 Faro/Gemini 供应商约束。
+- [x] 知识库提供安全删除入口，包含权限、活动任务、关系数据和对象存储处理边界。
+- [x] 完成知识候选生成与 AI 助教连接的真实回归，并运行 Web/API/Runtime 自动化验证。
+
+### 执行策略
+
+1. 先为每个可复现缺陷补回归测试，再做最小修复。
+2. Web AI 助教、API PDF Worker、数据库删除审计分开并行，避免写集冲突。
+3. 每批修改后先跑聚焦测试，最后集中跑全量 Web、API 聚焦/全量可行集、Runtime 全量与真实浏览器验收。
+4. 不切换 Claude，不暴露密钥，不删除用户数据做试验，不使用强推。
+
+### 状态
+
+- **Status:** in_progress
+
+## 2026-08-30 · 最终交付验收
+
+- [x] Runtime stop/rewind/fork mutation 合同与 204 空响应处理完成；用户确认分叉非必需，不再继续扩展。
+- [x] 知识库刷新、候选生成、Faro/Gemini AI 助教、会话切换/归档/停止、Capabilities 与删除功能完成回归。
+- [x] 隔离用户真实 Vault 删除 E2E：删除接口 204、Worker 首次轮询即清理目录、详情接口 404。
+- [x] Web、API、Agent Runtime 自动化测试及构建通过，Compose 服务健康，迁移位于 0018 head。
+- [x] 完成最终差异审查；Git 提交与推送进入执行。
+
+- **Status:** in_progress

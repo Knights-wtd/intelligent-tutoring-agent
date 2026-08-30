@@ -185,6 +185,18 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
   return response.json() as Promise<T>;
 }
 
+async function requestEmpty(path: string, init: RequestInit = {}): Promise<void> {
+  const response = await fetch(apiUrl(path), {
+    ...init,
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...init.headers,
+    },
+  });
+  if (!response.ok) throw new KnowledgeApiError(response.status);
+}
+
 export const knowledgeApi = {
   list(spaceId: string, signal?: AbortSignal): Promise<KnowledgeBase[]> {
     return requestJson(`/api/v1/spaces/${resource(spaceId)}/knowledge-bases`, { signal });
@@ -194,6 +206,13 @@ export const knowledgeApi = {
     return requestJson(`/api/v1/spaces/${resource(spaceId)}/knowledge-bases`, {
       method: "POST",
       body: JSON.stringify({ name }),
+      signal,
+    });
+  },
+
+  remove(knowledgeBaseId: string, signal?: AbortSignal): Promise<void> {
+    return requestEmpty(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}`, {
+      method: "DELETE",
       signal,
     });
   },
@@ -221,7 +240,10 @@ export const knowledgeApi = {
   },
 
   workspace(knowledgeBaseId: string, signal?: AbortSignal): Promise<KnowledgeWorkspace> {
-    return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/workspace`, { signal });
+    return requestJson(`/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/workspace`, {
+      signal,
+      cache: "no-store",
+    });
   },
 
   note(
@@ -247,7 +269,7 @@ export const knowledgeApi = {
   ): Promise<KnowledgeDocumentStatus> {
     return requestJson(
       `/api/v1/knowledge-bases/${resource(knowledgeBaseId)}/documents/${resource(documentId)}/versions/${resource(documentVersionId)}/status`,
-      { signal },
+      { signal, cache: "no-store" },
     );
   },
   startCandidateGeneration(

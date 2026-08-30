@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AgentConnectionState,
@@ -86,6 +86,7 @@ const runningSession: AgentSessionSummary = {
   state: "running",
   last_event_sequence: 4,
   is_legacy: false,
+  knowledge_base_id: "kb-current",
 };
 
 function session(overrides: Partial<AgentSession> = {}): AgentSession {
@@ -130,6 +131,10 @@ function renderPanel(onOpenCitation = vi.fn()) {
 }
 
 describe("AgentPanel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     window.history.replaceState({}, "", "/workspace");
@@ -218,6 +223,44 @@ describe("AgentPanel", () => {
     });
   });
 
+  it("switches to a historical session, replays its messages, persists the selection, and returns to chat", async () => {
+    const historical = session({
+      id: "session-history",
+      title: "历史会话",
+      state: "waiting_input",
+      last_event_sequence: 1,
+    });
+    mocks.list.mockResolvedValue([runningSession, historical]);
+    mocks.get.mockImplementation(async (sessionId: string) => (
+      sessionId === historical.id ? historical : session({ id: sessionId })
+    ));
+    mocks.events.mockImplementation(async (sessionId: string) => {
+      const historyEvent = {
+        ...event(1, "model_text_delta", {
+          text: sessionId === historical.id ? "历史会话回答" : "当前会话回答",
+        }),
+        event_id: `event-${sessionId}`,
+        session_id: sessionId,
+      };
+      return { events: [historyEvent], last_sequence: 1 };
+    });
+
+    const user = userEvent.setup();
+    renderPanel();
+    expect(await screen.findByText("当前会话回答")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "打开助教设置" }));
+    await user.click(screen.getByRole("button", { name: "切换到历史会话" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Workspace Agent 设置" })).not.toBeInTheDocument();
+    });
+    expect(await screen.findByText("历史会话回答")).toBeVisible();
+    expect(screen.queryByText("当前会话回答")).not.toBeInTheDocument();
+    expect(mocks.events).toHaveBeenCalledWith("session-history", 0, expect.any(AbortSignal));
+    expect(new URL(window.location.href).searchParams.get("agentSession")).toBe("session-history");
+  });
+
   it("creates a session from the current knowledge base when none can be restored", async () => {
     mocks.list.mockResolvedValue([]);
     mocks.create.mockResolvedValue(session({
@@ -255,6 +298,29 @@ describe("AgentPanel", () => {
     expect(within(composer).getByText("知识库：当前知识库")).toBeVisible();
     expect(within(composer).queryByText("kb-current")).not.toBeInTheDocument();
   });
+
+  it("ignores sessions from another knowledge base even when the URL prefers them", async () => {
+    const foreign = session({
+      id: "session-foreign",
+      title: "其他知识库会话",
+      knowledge_base_id: "kb-foreign",
+    });
+    window.history.replaceState({}, "", "/workspace?agentSession=session-foreign&agentAfter=8");
+    mocks.list.mockResolvedValue([foreign, runningSession]);
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await waitFor(() => expect(mocks.events).toHaveBeenCalledWith(
+      "session-running",
+      0,
+      expect.any(AbortSignal),
+    ));
+    expect(mocks.events).not.toHaveBeenCalledWith("session-foreign", expect.anything(), expect.anything());
+    await user.click(screen.getByRole("button", { name: "打开助教设置" }));
+    expect(screen.queryByTestId("agent-session-session-foreign")).not.toBeInTheDocument();
+  });
+
   it.each([
     ["URL", () => window.history.replaceState({}, "", "/workspace?agentSession=session-failed&agentAfter=9")],
     ["localStorage", () => localStorage.setItem("agent-session-preference-v1", JSON.stringify({
@@ -379,7 +445,53 @@ describe("AgentPanel", () => {
     expect(await screen.findByText("一二三")).toBeVisible();
   });
 
-  it("orchestrates composer send, stop, resume, sidebar branching, and settings persistence", async () => {
+  it("uses the deployed API contract for archive, stop, and fork session controls", async () => {
+    const warmSession = session({
+      id: "session-warm",
+      title: "可分叉会话",
+      state: "waiting_input",
+      last_event_sequence: 3,
+    });
+    const archiveTarget = session({
+      id: "session-archive",
+      title: "待归档会话",
+      state: "waiting_input",
+      last_event_sequence: 2,
+    });
+    mocks.list.mockResolvedValue([runningSession, warmSession, archiveTarget]);
+    mocks.fork.mockResolvedValue(session({
+      id: "session-forked",
+      title: "分叉会话",
+      state: "waiting_input",
+      last_event_sequence: 0,
+    }));
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: "打开助教设置" }));
+    await user.click(within(screen.getByTestId("agent-session-session-running")).getByRole("button", { name: "停止" }));
+    await waitFor(() => expect(screen.getByTestId("agent-session-session-running")).toHaveTextContent("stopped"));
+    expect(screen.getByRole("textbox", { name: "向 Agent 发送消息" })).toBeDisabled();
+
+    await user.click(within(screen.getByTestId("agent-session-session-archive")).getByRole("button", { name: "归档" }));
+    await waitFor(() => expect(screen.getByTestId("agent-session-session-archive")).toHaveTextContent("archived"));
+
+    await user.click(within(screen.getByTestId("agent-session-session-warm")).getByRole("button", { name: "分叉" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Workspace Agent 设置" })).not.toBeInTheDocument();
+    });
+    expect(new URL(window.location.href).searchParams.get("agentSession")).toBe("session-forked");
+
+    expect(mocks.stop).toHaveBeenCalledWith("session-running", expect.any(AbortSignal));
+    expect(mocks.archive).toHaveBeenCalledWith("session-archive", expect.any(AbortSignal));
+    expect(mocks.fork).toHaveBeenCalledWith(
+      "session-warm",
+      { checkpoint_id: "sequence:3" },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("orchestrates composer send and settings persistence", async () => {
     mocks.events.mockResolvedValue({
       events: [event(1, "session_state", { state: "waiting_input" })],
       last_sequence: 1,
@@ -394,19 +506,11 @@ describe("AgentPanel", () => {
       "session-running",
       { text: "完整长任务", linked_contexts: [{ knowledge_base_id: "kb-current", label: "知识库：当前知识库" }] },
       expect.any(String),
+      expect.any(AbortSignal),
     );
-
-    await user.click(within(composer).getByRole("button", { name: "停止" }));
-    expect(mocks.stop).toHaveBeenCalledWith("session-running");
-    await user.click(within(composer).getByRole("button", { name: "继续" }));
-    expect(mocks.resume).toHaveBeenCalledWith("session-running");
 
     await user.click(screen.getByRole("button", { name: "打开助教设置" }));
     const dialog = screen.getByRole("dialog", { name: "Workspace Agent 设置" });
-    const row = within(dialog).getByTestId("agent-session-session-running");
-    await user.click(within(row).getByRole("button", { name: "分叉" }));
-    expect(mocks.fork).toHaveBeenCalledWith("session-running", { after_sequence: 4 });
-
     await user.click(within(dialog).getByRole("tab", { name: "服务设置" }));
     fireEvent.change(within(dialog).getByRole("combobox", { name: "Permission mode" }), {
       target: { value: "plan" },
@@ -420,6 +524,112 @@ describe("AgentPanel", () => {
       }),
       expect.any(AbortSignal),
     ));
+  });
+
+  it("ignores a late failed send from knowledge base A after switching to B", async () => {
+    const sessionB = session({
+      id: "session-b",
+      title: "知识库 B 会话",
+      knowledge_base_id: "kb-b",
+      state: "waiting_input",
+      last_event_sequence: 0,
+    });
+    let rejectSendA!: (reason: Error) => void;
+    const sendA = new Promise<Record<string, unknown>>((_, reject) => {
+      rejectSendA = reject;
+    });
+    mocks.list
+      .mockResolvedValueOnce([runningSession])
+      .mockResolvedValueOnce([sessionB]);
+    mocks.events.mockImplementation(async (sessionId: string) => ({
+      events: [{
+        ...event(1, "session_state", { state: "waiting_input" }),
+        event_id: `event-${sessionId}`,
+        session_id: sessionId,
+      }],
+      last_sequence: 1,
+    }));
+    mocks.send.mockReturnValueOnce(sendA);
+    const onOpenCitation = vi.fn();
+    const panel = renderPanel(onOpenCitation);
+    const user = userEvent.setup();
+
+    const composerA = await screen.findByRole("region", { name: "Agent composer" });
+    await user.type(within(composerA).getByRole("textbox", { name: "向 Agent 发送消息" }), "来自 A 的问题");
+    await user.click(within(composerA).getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1));
+    const sendSignal = mocks.send.mock.calls[0]?.[3] as AbortSignal | undefined;
+    expect(sendSignal).toBeInstanceOf(AbortSignal);
+    expect(sendSignal?.aborted).toBe(false);
+
+    panel.rerender(
+      <AgentPanel
+        contextLabel="第二章 / 知识库 B"
+        joinedSpaceIds={["space-current"]}
+        knowledgeBase={{ id: "kb-b", name: "知识库 B" }}
+        onOpenCitation={onOpenCitation}
+        readableVaultScopes={[{ spaceId: "space-current", knowledgeBaseId: "kb-b" }]}
+        space={{ id: "space-current", name: "个人空间" }}
+      />,
+    );
+
+    await waitFor(() => expect(sendSignal?.aborted).toBe(true));
+    await waitFor(() => expect(mocks.events).toHaveBeenCalledWith(
+      "session-b",
+      0,
+      expect.any(AbortSignal),
+    ));
+    await act(async () => {
+      rejectSendA(new Error("knowledge base A failed late"));
+      await sendA.catch(() => undefined);
+    });
+
+    expect(screen.getByText("当前上下文：第二章 / 知识库 B")).toBeVisible();
+    expect(screen.queryByText("Runtime unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试失败的 Agent 消息" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "向 Agent 发送消息" })).toBeEnabled();
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
+  it("keeps capability toggles interactive and locally persistent when the server returns deployment defaults", async () => {
+    const deploymentDefaults: AgentSettings = {
+      ...settings,
+      mcp_enabled: false,
+      skills_enabled: false,
+      subagents_enabled: true,
+      web_enabled: true,
+    };
+    mocks.settings.mockResolvedValue(deploymentDefaults);
+    mocks.updateSettings.mockResolvedValue(deploymentDefaults);
+    const user = userEvent.setup();
+    const first = renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: "打开助教设置" }));
+    await user.click(screen.getByRole("tab", { name: "服务设置" }));
+    const mcp = screen.getByRole("checkbox", { name: "MCP" });
+    const web = screen.getByRole("checkbox", { name: "Web" });
+    expect(mcp).not.toBeChecked();
+    expect(web).toBeChecked();
+
+    await user.click(mcp);
+    await user.click(web);
+    await waitFor(() => {
+      expect(mcp).toBeChecked();
+      expect(web).not.toBeChecked();
+    });
+    expect(JSON.parse(localStorage.getItem("agent-capability-preferences-v1:kb-current") ?? "null")).toEqual({
+      mcp_enabled: true,
+      skills_enabled: false,
+      subagents_enabled: true,
+      web_enabled: false,
+    });
+
+    first.unmount();
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "打开助教设置" }));
+    await user.click(screen.getByRole("tab", { name: "服务设置" }));
+    expect(screen.getByRole("checkbox", { name: "MCP" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Web" })).not.toBeChecked();
+    expect(screen.getByText(/当前浏览器中的工作区偏好/)).toBeVisible();
   });
 
   it("shows a retryable Runtime unavailable state without crashing other panel content", async () => {
@@ -462,6 +672,7 @@ describe("AgentPanel", () => {
       state: "waiting_input",
       last_event_sequence: 2,
       is_legacy: false,
+      knowledge_base_id: "kb-current",
     };
     mocks.list.mockResolvedValue([legacySession]);
     mocks.create.mockResolvedValue(session({
@@ -476,6 +687,11 @@ describe("AgentPanel", () => {
     mocks.get.mockResolvedValue({
       ...legacySession,
       knowledge_base_id: "kb-current",
+      legacy: true,
+      messages: [
+        { id: "legacy-user", role: "user", content: "旧问题原文" },
+        { id: "legacy-assistant", role: "assistant", content: "旧回答正文" },
+      ],
     });
     const user = userEvent.setup();
     renderPanel();
@@ -501,7 +717,8 @@ describe("AgentPanel", () => {
     expect(within(legacyRow).getByText("claude · fable")).toBeVisible();
     expect(within(legacyRow).queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
     expect(within(legacyRow).queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    expect(within(legacyRow).queryByRole("button", { name: "分叉" })).not.toBeInTheDocument();
+    expect(within(legacyRow).getByRole("button", { name: "回退" })).toBeDisabled();
+    expect(within(legacyRow).getByRole("button", { name: "分叉" })).toBeDisabled();
 
     await user.click(within(legacyRow).getByRole("button", { name: "切换到旧助教记录" }));
     expect(await screen.findByText(/此旧会话仅供查看/)).toBeVisible();

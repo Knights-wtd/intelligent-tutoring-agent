@@ -123,8 +123,6 @@ function SessionRow({
   onSelect,
   onArchive,
   onStop,
-  onResume,
-  onRewind,
   onFork,
 }: {
   session: AgentSessionSummary;
@@ -138,7 +136,25 @@ function SessionRow({
 }) {
   const archived = session.state === "archived";
   const running = session.state === "running";
+  const stopped = session.state === "stopped" || session.state === "failed";
   const native = !session.is_legacy && !archived;
+  const canFork = native && session.last_event_sequence > 0 && Boolean(onFork);
+  const rewindReason = session.is_legacy
+    ? "旧版会话不支持回退。"
+    : archived
+      ? "已归档会话不支持回退。"
+      : "Faro 当前不提供可选择的回退检查点。";
+  const forkReason = session.is_legacy
+    ? "旧版会话不支持分叉。"
+    : archived
+      ? "已归档会话不支持分叉。"
+      : session.last_event_sequence <= 0
+        ? "会话还没有可分叉的历史。"
+        : undefined;
+  const resumeReason = stopped
+    ? "停止后的继续暂不可用；请新建会话继续提问。"
+    : undefined;
+  const hints = [resumeReason, rewindReason, forkReason].filter(Boolean);
 
   return (
     <li className={styles.sessionRow} data-testid={`agent-session-${session.id}`}>
@@ -155,53 +171,39 @@ function SessionRow({
       </button>
 
       <div className={styles.sessionActions}>
-        {!archived && onArchive ? (
+        <button
+          disabled={archived || !onArchive}
+          onClick={!archived && onArchive ? sessionAction(onArchive, session.id) : undefined}
+          title={archived ? "会话已经归档" : undefined}
+          type="button"
+        >
+          归档
+        </button>
+        {running ? (
           <button
-            onClick={sessionAction(onArchive, session.id)}
-            type="button"
-          >
-            归档
-          </button>
-        ) : null}
-        {native && running && onStop ? (
-          <button
-            onClick={sessionAction(onStop, session.id)}
+            disabled={!native || !onStop}
+            onClick={native && onStop ? sessionAction(onStop, session.id) : undefined}
+            title={!native ? "此会话仅供查看" : undefined}
             type="button"
           >
             停止
           </button>
+        ) : stopped ? (
+          <button disabled title={resumeReason} type="button">继续</button>
         ) : null}
-        {native && !running && onResume ? (
-          <button
-            onClick={sessionAction(onResume, session.id)}
-            type="button"
-          >
-            继续
-          </button>
-        ) : null}
-        {native ? (
-          <>
-            {onRewind ? (
-              <button
-                onClick={branchAction(onRewind, session)}
-                title={`回退 ${session.title}`}
-                type="button"
-              >
-                回退
-              </button>
-            ) : null}
-            {onFork ? (
-              <button
-                onClick={branchAction(onFork, session)}
-                title={`分叉 ${session.title}`}
-                type="button"
-              >
-                分叉
-              </button>
-            ) : null}
-          </>
-        ) : null}
+        <button disabled title={rewindReason} type="button">回退</button>
+        <button
+          disabled={!canFork}
+          onClick={canFork && onFork ? branchAction(onFork, session) : undefined}
+          title={forkReason ?? `分叉 ${session.title}`}
+          type="button"
+        >
+          分叉
+        </button>
       </div>
+      {hints.length > 0 ? (
+        <small className={styles.sessionActionHint}>{hints.join(" ")}</small>
+      ) : null}
     </li>
   );
 }

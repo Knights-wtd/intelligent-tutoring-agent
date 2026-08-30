@@ -8,6 +8,7 @@ import zlib
 from io import BytesIO
 
 import pytest
+from pypdf import PdfReader, PdfWriter
 
 from tutor_api.knowledge.parsers import (
     ParsedBlockKind,
@@ -97,6 +98,16 @@ def make_single_page_pdf(text: str) -> bytes:
         ).encode()
     )
     return bytes(output)
+
+
+def make_passwordless_encrypted_pdf() -> bytes:
+    reader = PdfReader(BytesIO(make_pdf()), strict=True)
+    writer = PdfWriter()
+    writer.append_pages_from_reader(reader)
+    writer.encrypt("", "owner-password", algorithm="RC4-128")
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 def make_docx_from_xml(document_xml: bytes) -> bytes:
@@ -228,6 +239,29 @@ def test_pdf_failures_use_stable_public_error() -> None:
     assert raised.value.code is ParseErrorCode.INVALID_FORMAT
     assert raised.value.public_message == "source could not be parsed"
     assert "secret" not in str(raised.value)
+
+
+def test_pdf_removes_nul_characters_before_returning_persistable_blocks() -> None:
+    parsed = parse_pdf(
+        make_single_page_pdf("Prefix\x00suffix with enough native text to avoid OCR."),
+        source_name="nul.pdf",
+    )
+
+    assert [block.text for block in parsed.blocks] == [
+        "Prefix suffix with enough native text to avoid OCR."
+    ]
+    assert all("\x00" not in block.text for block in parsed.blocks)
+
+
+def test_pdf_accepts_passwordless_encryption_without_optional_crypto_dependency() -> None:
+    parsed = parse_pdf(make_passwordless_encrypted_pdf(), source_name="encrypted.pdf")
+
+    assert [page.page_number for page in parsed.pages] == [1, 2]
+    assert [block.text for block in parsed.pages[0].blocks] == [
+        "Native PDF text is long enough to parse.",
+        "Second ordered block remains on page one.",
+    ]
+    assert parsed.pages[1].needs_ocr is True
 
 
 def test_docx_preserves_heading_paragraph_table_order() -> None:

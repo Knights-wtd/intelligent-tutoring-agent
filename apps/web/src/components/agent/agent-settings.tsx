@@ -185,6 +185,9 @@ export function AgentSettings({
 
       <fieldset className={styles.capabilities}>
         <legend>Capabilities</legend>
+        <p className={styles.capabilityHelp}>
+          这些开关是当前浏览器中的工作区偏好，刷新后仍会保留；固定的 Faro、Gemini 3.7 Flash 和 32,000 tokens 不受影响。
+        </p>
         {([
           ["MCP", "mcp_enabled"],
           ["Skills", "skills_enabled"],

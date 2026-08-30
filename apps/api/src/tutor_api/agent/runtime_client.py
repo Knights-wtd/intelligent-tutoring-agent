@@ -51,10 +51,16 @@ class RuntimeClient:
         payload: dict[str, Any] | None = None,
         *,
         request_id: str | None = None,
+        idempotency_key: str | None = None,
+        workspace_capability: str | None = None,
     ) -> dict[str, Any]:
         headers = dict(self._headers)
         if request_id:
             headers["X-Request-ID"] = request_id
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        if workspace_capability:
+            headers["X-Workspace-Capability"] = workspace_capability
         try:
             response = await self._client.request(
                 method,
@@ -64,9 +70,14 @@ class RuntimeClient:
                 timeout=self._timeout,
             )
             response.raise_for_status()
-            data = response.json()
+            if response.status_code == 204:
+                return {}
+            try:
+                data = response.json()
+            except ValueError as error:
+                raise RuntimeRejected("runtime_response_invalid", status_code=502) from error
             if not isinstance(data, dict):
-                raise RuntimeRejected("runtime_response_invalid")
+                raise RuntimeRejected("runtime_response_invalid", status_code=502)
             return data
         except (httpx.ConnectError, httpx.TimeoutException) as error:
             raise RuntimeUnavailable("runtime_unavailable") from error
@@ -94,23 +105,57 @@ class RuntimeClient:
             )
         )
 
-    async def stop(self, session_id: UUID) -> None:
-        await self._request("POST", f"/v1/sessions/{session_id}/stop")
+    async def stop(self, session_id: UUID, *, capability: str, idempotency_key: str) -> None:
+        await self._request(
+            "POST",
+            f"/v1/sessions/{session_id}/stop",
+            idempotency_key=idempotency_key,
+            workspace_capability=capability,
+        )
 
     async def resume(self, session_id: UUID) -> None:
         await self._request("POST", f"/v1/sessions/{session_id}/resume")
 
-    async def rewind(self, session_id: UUID, checkpoint_id: str) -> None:
+    async def rewind(
+        self,
+        session_id: UUID,
+        checkpoint_id: str,
+        *,
+        capability: str,
+        idempotency_key: str,
+    ) -> None:
         await self._request(
-            "POST", f"/v1/sessions/{session_id}/rewind", {"checkpoint_id": checkpoint_id}
+            "POST",
+            f"/v1/sessions/{session_id}/rewind",
+            {"checkpoint_id": checkpoint_id},
+            idempotency_key=idempotency_key,
+            workspace_capability=capability,
         )
 
-    async def fork(self, session_id: UUID, checkpoint_id: str) -> RuntimeForkResponse:
-        return RuntimeForkResponse.model_validate(
+    async def fork(
+        self,
+        session_id: UUID,
+        checkpoint_id: str,
+        fork_session_id: UUID,
+        *,
+        capability: str,
+        idempotency_key: str,
+    ) -> RuntimeForkResponse:
+        result = RuntimeForkResponse.model_validate(
             await self._request(
-                "POST", f"/v1/sessions/{session_id}/fork", {"checkpoint_id": checkpoint_id}
+                "POST",
+                f"/v1/sessions/{session_id}/fork",
+                {
+                    "checkpoint_id": checkpoint_id,
+                    "fork_session_id": str(fork_session_id),
+                },
+                idempotency_key=idempotency_key,
+                workspace_capability=capability,
             )
         )
+        if result.session_id != fork_session_id:
+            raise RuntimeRejected("runtime_fork_session_mismatch", status_code=502)
+        return result
 
     async def health(self) -> RuntimeHealth:
         try:

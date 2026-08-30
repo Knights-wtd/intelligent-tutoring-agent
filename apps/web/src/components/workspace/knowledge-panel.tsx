@@ -203,6 +203,9 @@ function KnowledgePanelForKnowledgeBase({
         if (controller.signal.aborted) return;
         setWorkspaceNotice(null);
         setWorkspaceDocuments(snapshot.documents);
+        setUploadsByKnowledgeBase((current) =>
+          reconcileUploadsFromWorkspace(current, selectedKnowledgeBaseId, snapshot.documents),
+        );
         setPublishedNotes(snapshot.notes);
         workspaceHasRunningTaskRef.current =
           snapshot.documents.some((document) => document.processing_state === "processing") ||
@@ -351,7 +354,14 @@ function KnowledgePanelForKnowledgeBase({
         ...current,
         [knowledgeBaseId]: (current[knowledgeBaseId] ?? []).map((item) =>
           item.id === entry.id
-            ? { ...item, processingState: status.processing_state, statusRefreshFailed: false }
+            ? {
+                ...item,
+                processingState: mergeProcessingState(
+                  item.processingState,
+                  status.processing_state,
+                ),
+                statusRefreshFailed: false,
+              }
             : item,
         ),
       }));
@@ -841,6 +851,97 @@ function KnowledgePanelForKnowledgeBase({
       </>
     </section>
   );
+}
+
+function reconcileUploadsFromWorkspace(
+  current: Record<string, UploadEntry[]>,
+  knowledgeBaseId: string,
+  documents: KnowledgeWorkspaceDocument[],
+): Record<string, UploadEntry[]> {
+  const entries = current[knowledgeBaseId] ?? [];
+  const documentsByVersion = new Map<string, KnowledgeWorkspaceDocument>();
+  for (const document of documents) {
+    documentsByVersion.set(documentVersionKey(document.document_id, document.document_version_id), document);
+  }
+
+  const seenVersions = new Set<string>();
+  const nextEntries: UploadEntry[] = [];
+  let changed = false;
+
+  for (const entry of entries) {
+    if (entry.status !== "accepted" || !entry.response) {
+      nextEntries.push(entry);
+      continue;
+    }
+
+    const versionKey = documentVersionKey(
+      entry.response.document_id,
+      entry.response.document_version_id,
+    );
+    if (seenVersions.has(versionKey)) {
+      changed = true;
+      continue;
+    }
+    seenVersions.add(versionKey);
+
+    const document = documentsByVersion.get(versionKey);
+    if (!document) {
+      nextEntries.push(entry);
+      continue;
+    }
+
+    const processingState = mergeProcessingState(
+      entry.processingState,
+      document.processing_state,
+    );
+    if (processingState === entry.processingState && !entry.statusRefreshFailed) {
+      nextEntries.push(entry);
+      continue;
+    }
+
+    changed = true;
+    nextEntries.push({ ...entry, processingState, statusRefreshFailed: false });
+  }
+
+  for (const [versionKey, document] of documentsByVersion) {
+    if (seenVersions.has(versionKey)) continue;
+    changed = true;
+    nextEntries.push(uploadEntryFromWorkspace(knowledgeBaseId, document));
+  }
+
+  return changed ? { ...current, [knowledgeBaseId]: nextEntries } : current;
+}
+
+function uploadEntryFromWorkspace(
+  knowledgeBaseId: string,
+  document: KnowledgeWorkspaceDocument,
+): UploadEntry {
+  const versionKey = documentVersionKey(document.document_id, document.document_version_id);
+  return {
+    id: `workspace-${knowledgeBaseId}-${versionKey}`,
+    file: new File([], document.source_name, { type: document.content_type }),
+    idempotencyKey: `workspace-${knowledgeBaseId}-${versionKey}`,
+    status: "accepted",
+    response: {
+      document_id: document.document_id,
+      document_version_id: document.document_version_id,
+      source_name: document.source_name,
+      created_at: document.created_at,
+    },
+    processingState: document.processing_state,
+  };
+}
+
+function documentVersionKey(documentId: string, documentVersionId: string): string {
+  return `${documentId}\u0000${documentVersionId}`;
+}
+
+function mergeProcessingState(
+  current: UploadEntry["processingState"],
+  incoming: NonNullable<UploadEntry["processingState"]>,
+): NonNullable<UploadEntry["processingState"]> {
+  if (current === "searchable" || current === "failed") return current;
+  return incoming;
 }
 
 function replaceUpload(entries: UploadEntry[], next: UploadEntry): UploadEntry[] {

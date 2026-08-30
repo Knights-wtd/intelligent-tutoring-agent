@@ -473,7 +473,7 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0016_agent_workspace"
+        assert version == "0018_object_deletion_outbox"
     finally:
         engine.dispose()
 
@@ -498,7 +498,7 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0016_agent_workspace"
+        assert version == "0018_object_deletion_outbox"
     finally:
         engine.dispose()
 
@@ -654,6 +654,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
         "chunks",
         "ingestion_jobs",
         "knowledge_upload_requests",
+        "knowledge_object_deletion_outbox",
     }
 
     command.upgrade(config, "head")
@@ -677,6 +678,30 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
             "ck_ingestion_checkpoint_object_sqlite",
         }.issubset(
             {constraint["name"] for constraint in inspector.get_check_constraints("ingestion_jobs")}
+        )
+        assert {
+            "object_deletion_state",
+            "ck_object_deletion_attempt_nonnegative",
+            "ck_object_deletion_lease_matches_state",
+            "ck_object_deletion_completed_at_matches_state",
+        }.issubset(
+            {
+                constraint["name"]
+                for constraint in inspector.get_check_constraints(
+                    "knowledge_object_deletion_outbox"
+                )
+            }
+        )
+        assert {
+            "ix_knowledge_object_deletion_outbox_state",
+            "ix_knowledge_object_deletion_outbox_available_at",
+            "ix_knowledge_object_deletion_outbox_lease_owner",
+            "ix_knowledge_object_deletion_outbox_lease_expires_at",
+        }.issubset(
+            {
+                index["name"]
+                for index in inspector.get_indexes("knowledge_object_deletion_outbox")
+            }
         )
         chunk_foreign_keys = {
             (
@@ -734,7 +759,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
             assert "trg_chunks_validate_embedding_update" in trigger_names
             assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0016_agent_workspace"
+                "0018_object_deletion_outbox"
             )
     finally:
         engine.dispose()
@@ -1507,7 +1532,7 @@ def test_tutor_migration_matches_model_metadata(tmp_path) -> None:
         with engine.connect() as connection:
             assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0016_agent_workspace"
+                "0018_object_deletion_outbox"
             )
     finally:
         engine.dispose()

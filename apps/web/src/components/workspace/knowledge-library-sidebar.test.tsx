@@ -26,6 +26,7 @@ function baseProps() {
     onSelect: vi.fn(),
     onOpenGraph: vi.fn(),
     onCreate: vi.fn().mockResolvedValue(undefined),
+    onDelete: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -83,6 +84,49 @@ describe("KnowledgeLibrarySidebar", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("创建知识库失败");
     expect(screen.getByRole("button", { name: "创建知识库" })).toBeEnabled();
+  });
+
+  it("requires an inline name confirmation before permanently deleting", async () => {
+    const props = baseProps();
+    const user = userEvent.setup();
+    render(<KnowledgeLibrarySidebar {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "删除无线通信" }));
+    const confirmation = screen.getByRole("group", { name: "确认删除无线通信" });
+    expect(confirmation).toHaveTextContent("无线通信");
+    expect(confirmation).toHaveTextContent("不可撤销");
+    const input = screen.getByRole("textbox", { name: "输入知识库名称无线通信以确认" });
+    const confirmButton = screen.getByRole("button", { name: "永久删除无线通信" });
+    expect(confirmButton).toBeDisabled();
+
+    await user.type(input, "无线");
+    expect(confirmButton).toBeDisabled();
+    await user.type(input, "通信");
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    expect(props.onDelete).toHaveBeenCalledWith(wireless);
+    expect(screen.queryByRole("group", { name: "确认删除无线通信" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the confirmation open and explains a running-task conflict", async () => {
+    const props = baseProps();
+    props.onDelete.mockRejectedValueOnce({ name: "KnowledgeApiError", status: 409 });
+    const user = userEvent.setup();
+    render(<KnowledgeLibrarySidebar {...props} />);
+
+    await user.click(screen.getByRole("button", { name: "删除数字通信" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "输入知识库名称数字通信以确认" }),
+      "数字通信",
+    );
+    await user.click(screen.getByRole("button", { name: "永久删除数字通信" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "仍有文件处理或知识候选生成任务运行",
+    );
+    expect(screen.getByRole("group", { name: "确认删除数字通信" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择数字通信" })).toBeInTheDocument();
   });
 
   it("renders loading, empty, and failure states with a real retry", async () => {

@@ -32,6 +32,7 @@ class RuntimeStartResponse(BaseModel):
 
 
 class RuntimeForkResponse(BaseModel):
+    session_id: UUID
     native_session_id: str
 
 

@@ -28,16 +28,23 @@ async function proxy(request: Request, context: ApiRouteContext): Promise<Respon
     headers,
     redirect: "manual",
   };
+  if (request.method === "GET" || request.method === "HEAD") {
+    init.cache = "no-store";
+  }
   if (!BODYLESS_METHODS.has(request.method)) {
     init.body = request.body;
     init.duplex = "half";
   }
 
   const upstreamResponse = await fetch(new Request(upstreamUrl, init));
+  const responseHeaders = new Headers(upstreamResponse.headers);
+  if (request.method === "GET" || request.method === "HEAD") {
+    responseHeaders.set("Cache-Control", "no-store");
+  }
   return new Response(upstreamResponse.body, {
     status: upstreamResponse.status,
     statusText: upstreamResponse.statusText,
-    headers: upstreamResponse.headers,
+    headers: responseHeaders,
   });
 }
 

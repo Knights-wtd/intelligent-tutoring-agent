@@ -46,6 +46,27 @@ describe("knowledgeApi", () => {
     );
   });
 
+  it("deletes an encoded knowledge base and accepts an empty 204 response", async () => {
+    const json = vi.fn(() => {
+      throw new Error("204 responses must not be parsed as JSON");
+    });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 204, json });
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(knowledgeApi.remove("kb/1", controller.signal)).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/knowledge-bases/kb%2F1",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+        signal: controller.signal,
+      }),
+    );
+    expect(json).not.toHaveBeenCalled();
+  });
+
   it("uploads multipart data with an idempotency key and without overriding its content type", async () => {
     const payload = {
       document_id: "doc-1",
@@ -188,12 +209,38 @@ describe("knowledgeApi", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/api/v1/knowledge-bases/kb%2F1/workspace",
-      expect.objectContaining({ credentials: "include" }),
+      expect.objectContaining({ credentials: "include", cache: "no-store" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/v1/knowledge-bases/kb%2F1/notes/note%2F1",
       expect.objectContaining({ credentials: "include" }),
+    );
+  });
+
+  it("loads document processing status without reusing a cached response", async () => {
+    const status = {
+      document_id: "doc/1",
+      document_version_id: "version/1",
+      processing_state: "searchable",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(status), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await expect(
+      knowledgeApi.documentStatus("kb/1", "doc/1", "version/1", controller.signal),
+    ).resolves.toEqual(status);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/knowledge-bases/kb%2F1/documents/doc%2F1/versions/version%2F1/status",
+      expect.objectContaining({
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal,
+      }),
     );
   });
 

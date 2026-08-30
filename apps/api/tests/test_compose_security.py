@@ -235,7 +235,7 @@ def test_agent_runtime_is_host_isolated_and_not_a_required_service_dependency() 
     web = _service_block(compose, "web", "volumes")
 
     assert environment["AGENT_RUNTIME_URL"] == "http://host.docker.internal:8765"
-    assert environment["AGENT_CONTEXT_WINDOW"] == "1000000"
+    assert environment["AGENT_CONTEXT_WINDOW"] == "32000"
     assert "agent-runtime:" not in compose
     for service in (api, worker):
         assert "AGENT_RUNTIME_URL:" in service

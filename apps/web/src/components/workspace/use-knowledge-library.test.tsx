@@ -5,7 +5,7 @@ import type { KnowledgeBase } from "@/lib/knowledge-api";
 
 import { useKnowledgeLibrary } from "./use-knowledge-library";
 
-const mockKnowledgeApi = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn() }));
+const mockKnowledgeApi = vi.hoisted(() => ({ list: vi.fn(), create: vi.fn(), remove: vi.fn() }));
 
 vi.mock("@/lib/knowledge-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/knowledge-api")>();
@@ -19,6 +19,7 @@ const notes: KnowledgeBase = { ...wireless, id: "notes", name: "学习笔记" };
 beforeEach(() => {
   mockKnowledgeApi.list.mockReset();
   mockKnowledgeApi.create.mockReset();
+  mockKnowledgeApi.remove.mockReset();
 });
 
 describe("useKnowledgeLibrary", () => {
@@ -62,9 +63,99 @@ describe("useKnowledgeLibrary", () => {
     expect(result.current.selectedKnowledgeBaseId).toBe("notes");
   });
 
+  it("removes a knowledge base and selects its next adjacent item", async () => {
+    mockKnowledgeApi.list.mockResolvedValue([wireless, digital, notes]);
+    mockKnowledgeApi.remove.mockResolvedValue(undefined);
+    const { result } = renderHook(() => useKnowledgeLibrary("personal"));
+    await waitFor(() => expect(result.current.items).toEqual([wireless, digital, notes]));
+    act(() => result.current.select("digital"));
+
+    await act(() => result.current.remove("digital"));
+
+    expect(mockKnowledgeApi.remove).toHaveBeenCalledWith("digital", expect.any(AbortSignal));
+    expect(result.current.items).toEqual([wireless, notes]);
+    expect(result.current.selectedKnowledgeBaseId).toBe("notes");
+    expect(result.current.deletingKnowledgeBaseId).toBeNull();
+  });
+
+  it("preserves a later explicit selection while deletion is pending", async () => {
+    let resolveDelete!: () => void;
+    mockKnowledgeApi.list.mockResolvedValue([wireless, digital, notes]);
+    mockKnowledgeApi.remove.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveDelete = resolve;
+    }));
+    const { result } = renderHook(() => useKnowledgeLibrary("personal"));
+    await waitFor(() => expect(result.current.items).toEqual([wireless, digital, notes]));
+    act(() => result.current.select("digital"));
+
+    let deletion!: Promise<unknown>;
+    act(() => {
+      deletion = result.current.remove("digital");
+    });
+    act(() => result.current.select("wireless"));
+    await act(async () => {
+      resolveDelete();
+      await deletion;
+    });
+
+    expect(result.current.selectedKnowledgeBaseId).toBe("wireless");
+    await expect(deletion).resolves.toEqual({
+      removed: true,
+      selectedKnowledgeBaseId: "wireless",
+    });
+  });
+
+  it("keeps the knowledge base when deletion fails and rethrows the API error", async () => {
+    const deleteError = new Error("delete failed");
+    mockKnowledgeApi.list.mockResolvedValue([wireless, digital]);
+    mockKnowledgeApi.remove.mockRejectedValue(deleteError);
+    const { result } = renderHook(() => useKnowledgeLibrary("personal"));
+    await waitFor(() => expect(result.current.items).toEqual([wireless, digital]));
+
+    await expect(act(() => result.current.remove("wireless"))).rejects.toBe(deleteError);
+
+    expect(result.current.items).toEqual([wireless, digital]);
+    expect(result.current.selectedKnowledgeBaseId).toBe("wireless");
+    expect(result.current.deletingKnowledgeBaseId).toBeNull();
+  });
+
+  it("ignores a delete result that settles after the space changes", async () => {
+    let resolveDelete!: () => void;
+    let deleteSignal: AbortSignal | undefined;
+    mockKnowledgeApi.list
+      .mockResolvedValueOnce([wireless, digital])
+      .mockResolvedValueOnce([notes]);
+    mockKnowledgeApi.remove.mockImplementation((_id: string, signal?: AbortSignal) => {
+      deleteSignal = signal;
+      return new Promise<void>((resolve) => {
+        resolveDelete = resolve;
+      });
+    });
+    const { result, rerender } = renderHook(({ spaceId }) => useKnowledgeLibrary(spaceId), {
+      initialProps: { spaceId: "personal" },
+    });
+    await waitFor(() => expect(result.current.items).toEqual([wireless, digital]));
+    let deletion!: ReturnType<typeof result.current.remove>;
+    act(() => {
+      deletion = result.current.remove("wireless");
+    });
+
+    rerender({ spaceId: "classroom" });
+    expect(deleteSignal?.aborted).toBe(true);
+    await waitFor(() => expect(result.current.items).toEqual([notes]));
+    await act(async () => {
+      resolveDelete();
+      await deletion;
+    });
+
+    expect(result.current.items).toEqual([notes]);
+    expect(result.current.selectedKnowledgeBaseId).toBe("notes");
+  });
+
   it("aborts old list and create requests when the space changes", async () => {
     let listSignal: AbortSignal | undefined;
     let createSignal: AbortSignal | undefined;
+    let deleteSignal: AbortSignal | undefined;
     mockKnowledgeApi.list
       .mockImplementationOnce((_spaceId: string, signal?: AbortSignal) => {
         listSignal = signal;
@@ -78,16 +169,23 @@ describe("useKnowledgeLibrary", () => {
       },
     );
 
+    mockKnowledgeApi.remove.mockImplementation((_id: string, signal?: AbortSignal) => {
+      deleteSignal = signal;
+      return new Promise<void>(() => undefined);
+    });
+
     const { result, rerender } = renderHook(({ spaceId }) => useKnowledgeLibrary(spaceId), {
       initialProps: { spaceId: "personal" },
     });
     act(() => {
       void result.current.create("学习笔记");
+      void result.current.remove("wireless");
     });
     rerender({ spaceId: "classroom" });
 
     expect(listSignal?.aborted).toBe(true);
     expect(createSignal?.aborted).toBe(true);
+    expect(deleteSignal?.aborted).toBe(true);
     await waitFor(() => expect(result.current.items).toEqual([digital]));
     expect(result.current.selectedKnowledgeBaseId).toBe("digital");
   });
@@ -165,6 +263,7 @@ describe("useKnowledgeLibrary", () => {
   it("aborts in-flight requests when unmounted", () => {
     let listSignal: AbortSignal | undefined;
     let createSignal: AbortSignal | undefined;
+    let deleteSignal: AbortSignal | undefined;
     mockKnowledgeApi.list.mockImplementation((_spaceId: string, signal?: AbortSignal) => {
       listSignal = signal;
       return new Promise<KnowledgeBase[]>(() => undefined);
@@ -176,13 +275,20 @@ describe("useKnowledgeLibrary", () => {
       },
     );
 
+    mockKnowledgeApi.remove.mockImplementation((_id: string, signal?: AbortSignal) => {
+      deleteSignal = signal;
+      return new Promise<void>(() => undefined);
+    });
+
     const { result, unmount } = renderHook(() => useKnowledgeLibrary("personal"));
     act(() => {
       void result.current.create("学习笔记");
+      void result.current.remove("wireless");
     });
     unmount();
 
     expect(listSignal?.aborted).toBe(true);
     expect(createSignal?.aborted).toBe(true);
+    expect(deleteSignal?.aborted).toBe(true);
   });
 });

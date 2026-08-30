@@ -12,15 +12,26 @@ export interface AgentSessionSummary {
   state: AgentSessionState;
   last_event_sequence: number;
   is_legacy: boolean;
+  legacy?: boolean;
+  knowledge_base_id?: string | null;
+  space_id?: string | null;
+}
+
+export interface AgentLegacyMessage {
+  id?: string;
+  role: "user" | "assistant";
+  content: string;
+  citations?: unknown[];
+  created_at?: string;
 }
 
 export interface AgentSession extends AgentSessionSummary {
-  knowledge_base_id?: string | null;
   permission_mode?: "bypassPermissions";
   context_window?: number;
   parent_session_id?: string | null;
   created_at?: string;
   updated_at?: string;
+  messages?: AgentLegacyMessage[];
   [key: string]: unknown;
 }
 
@@ -58,9 +69,7 @@ export interface AgentSendRequest {
 }
 
 export interface AgentBranchRequest {
-  after_sequence?: number;
-  turn_id?: string;
-  title?: string;
+  checkpoint_id: string;
 }
 
 export interface AgentEventsResponse {
@@ -145,11 +154,17 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
   return response.json() as Promise<T>;
 }
 
-function post<T>(path: string, body?: unknown, headers?: HeadersInit): Promise<T> {
+function post<T>(
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+  headers?: HeadersInit,
+): Promise<T> {
   return requestJson<T>(path, {
     method: "POST",
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     ...(headers ? { headers } : {}),
+    signal,
   });
 }
 
@@ -171,8 +186,8 @@ export const agentApi = {
   },
 
   archive(sessionId: string, signal?: AbortSignal): Promise<void> {
-    return requestJson<void>(`/api/v1/agent/sessions/${resource(sessionId)}/archive`, {
-      method: "POST",
+    return requestJson<void>(`/api/v1/agent/sessions/${resource(sessionId)}`, {
+      method: "DELETE",
       signal,
     });
   },
@@ -195,20 +210,24 @@ export const agentApi = {
     });
   },
 
-  stop(sessionId: string): Promise<AgentSession> {
-    return post(`/api/v1/agent/sessions/${resource(sessionId)}/stop`);
+  stop(sessionId: string, signal?: AbortSignal): Promise<void> {
+    return post<void>(`/api/v1/agent/sessions/${resource(sessionId)}/stop`, undefined, signal);
   },
 
-  resume(sessionId: string): Promise<AgentSession> {
-    return post(`/api/v1/agent/sessions/${resource(sessionId)}/resume`);
+  resume(sessionId: string, signal?: AbortSignal): Promise<void> {
+    return post<void>(`/api/v1/agent/sessions/${resource(sessionId)}/resume`, undefined, signal);
   },
 
-  rewind(sessionId: string, input: AgentBranchRequest): Promise<AgentSession> {
-    return post(`/api/v1/agent/sessions/${resource(sessionId)}/rewind`, input);
+  rewind(sessionId: string, input: AgentBranchRequest, signal?: AbortSignal): Promise<void> {
+    return post<void>(`/api/v1/agent/sessions/${resource(sessionId)}/rewind`, input, signal);
   },
 
-  fork(sessionId: string, input: AgentBranchRequest = {}): Promise<AgentSession> {
-    return post(`/api/v1/agent/sessions/${resource(sessionId)}/fork`, input);
+  fork(
+    sessionId: string,
+    input: AgentBranchRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentSession> {
+    return post(`/api/v1/agent/sessions/${resource(sessionId)}/fork`, input, signal);
   },
 
   async events(sessionId: string, after = 0, signal?: AbortSignal): Promise<AgentEventsResponse> {

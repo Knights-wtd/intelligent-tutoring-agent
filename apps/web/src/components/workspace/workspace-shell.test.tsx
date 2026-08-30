@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ import { WorkspaceShell } from "./workspace-shell";
 const mockKnowledgeApi = vi.hoisted(() => ({
   list: vi.fn(),
   create: vi.fn(),
+  remove: vi.fn(),
   upload: vi.fn(),
   search: vi.fn(),
   pagePreview: vi.fn(),
@@ -53,13 +54,16 @@ vi.mock("./use-workspace-breakpoint", () => ({
 vi.mock("./agent-panel", () => ({
   AgentPanel: ({
     contextLabel,
+    knowledgeBase,
     onOpenCitation,
   }: {
     contextLabel: string;
+    knowledgeBase: KnowledgeBase;
     onOpenCitation: (citation: typeof mockAgentPanel.citation) => void;
   }) => (
     <section aria-label="Workspace Agent" role="region">
       <p>Agent 上下文：{contextLabel}</p>
+      <p>Agent 知识库：{knowledgeBase.name}</p>
       {mockAgentPanel.runtimeUnavailable ? <p role="alert">Runtime unavailable</p> : null}
       <button onClick={() => onOpenCitation(mockAgentPanel.citation)} type="button">
         打开 Agent Vault 引用
@@ -105,6 +109,7 @@ beforeEach(() => {
   for (const mock of Object.values(mockQuestionBankApi)) mock.mockReset();
   for (const mock of Object.values(mockClassroomApi)) mock.mockReset();
   mockKnowledgeApi.list.mockResolvedValue([wireless, digital]);
+  mockKnowledgeApi.remove.mockResolvedValue(undefined);
   mockKnowledgeApi.graph.mockResolvedValue({ nodes: [], edges: [] });
   mockKnowledgeApi.workspace.mockImplementation((knowledgeBaseId: string) =>
     Promise.resolve({
@@ -162,6 +167,65 @@ describe("WorkspaceShell", () => {
 
     await user.click(screen.getByRole("button", { name: "打开数字通信关联图" }));
     expect(screen.getAllByRole("tab", { name: "关联图 · 数字通信" })).toHaveLength(1);
+  });
+
+  it("clears deleted knowledge-base tabs, previews, preferences, and Agent context", async () => {
+    mockAgentPanel.citation = {
+      spaceId: "personal",
+      knowledgeBaseId: digital.id,
+      vaultFileId: "file-digital",
+      path: "数字通信.md",
+      heading: "调制",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            vault_file_id: "file-digital",
+            relative_path: "数字通信.md",
+            markdown: "# 数字通信",
+          }),
+      }),
+    );
+    const user = userEvent.setup();
+    render(<WorkspaceShell spaces={[personalSpace]} />);
+
+    await user.click(await screen.findByRole("button", { name: "选择数字通信" }));
+    await user.click(screen.getByRole("button", { name: "打开数字通信关联图" }));
+    expect(screen.getByRole("tab", { name: "关联图 · 数字通信" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "打开 Agent Vault 引用" }));
+    expect(await screen.findByRole("region", { name: "Vault 文件" })).toHaveTextContent("数字通信.md");
+
+    await user.click(screen.getByRole("button", { name: "删除数字通信" }));
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "输入知识库名称数字通信以确认" }),
+      { target: { value: "数字通信" } },
+    );
+    expect(screen.getByRole("textbox", { name: "输入知识库名称数字通信以确认" })).toHaveValue("数字通信");
+    expect(screen.getByRole("button", { name: "永久删除数字通信" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "永久删除数字通信" }));
+
+    await waitFor(() =>
+      expect(mockKnowledgeApi.remove).toHaveBeenCalledWith(digital.id, expect.any(AbortSignal)),
+    );
+    expect(screen.queryByRole("button", { name: "选择数字通信" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "关联图 · 数字通信" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Vault 文件" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "选择无线通信" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("region", { name: "Workspace Agent" })).toHaveTextContent(
+      "Agent 知识库：无线通信",
+    );
+    await waitFor(() =>
+      expect(JSON.parse(localStorage.getItem("workspace:personal") ?? "null")).toMatchObject({
+        selectedKnowledgeBaseId: wireless.id,
+      }),
+    );
+    expect(localStorage.getItem("workspace:personal")).not.toContain(digital.id);
   });
 
   it("opens a graph from the knowledge page without embedding it below the file explorer", async () => {

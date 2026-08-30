@@ -63,7 +63,7 @@ describe("AgentSessionSidebar", () => {
     );
   });
 
-  it("offers exact resume, rewind, and fork controls with the minimal native props", () => {
+  it("keeps supported native controls active and explains unavailable controls", () => {
     render(
       <AgentSessionSidebar
         onFork={vi.fn()}
@@ -73,12 +73,14 @@ describe("AgentSessionSidebar", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "继续" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "回退" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "继续" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "回退" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "分叉" })).toBeEnabled();
+    expect(screen.getByText(/停止后的继续暂不可用/)).toBeVisible();
+    expect(screen.getByText(/Faro 当前不提供可选择的回退检查点/)).toBeVisible();
   });
 
-  it("supports create, switch, archive, stop, resume, rewind, and fork", async () => {
+  it("supports create, switch, archive, stop, and fork while blocking unsupported controls", async () => {
     const handlers = callbacks();
     const user = userEvent.setup();
     render(
@@ -95,17 +97,45 @@ describe("AgentSessionSidebar", () => {
     await user.click(screen.getByRole("button", { name: "切换到运行任务" }));
     await user.click(within(screen.getByTestId("agent-session-running")).getByRole("button", { name: "停止" }));
     await user.click(within(screen.getByTestId("agent-session-running")).getByRole("button", { name: "归档" }));
-    await user.click(within(screen.getByTestId("agent-session-stopped")).getByRole("button", { name: "继续" }));
-    await user.click(within(screen.getByTestId("agent-session-stopped")).getByRole("button", { name: "回退" }));
-    await user.click(within(screen.getByTestId("agent-session-stopped")).getByRole("button", { name: "分叉" }));
+    const stoppedRow = screen.getByTestId("agent-session-stopped");
+    expect(within(stoppedRow).getByRole("button", { name: "继续" })).toBeDisabled();
+    expect(within(stoppedRow).getByRole("button", { name: "回退" })).toBeDisabled();
+    await user.click(within(stoppedRow).getByRole("button", { name: "分叉" }));
 
     expect(handlers.onCreate).toHaveBeenCalledOnce();
     expect(handlers.onSelect).toHaveBeenCalledWith("running");
     expect(handlers.onStop).toHaveBeenCalledWith("running");
     expect(handlers.onArchive).toHaveBeenCalledWith("running");
-    expect(handlers.onResume).toHaveBeenCalledWith("stopped");
-    expect(handlers.onRewind).toHaveBeenCalledWith("stopped", 13);
+    expect(handlers.onResume).not.toHaveBeenCalled();
+    expect(handlers.onRewind).not.toHaveBeenCalled();
     expect(handlers.onFork).toHaveBeenCalledWith("stopped", 13);
+  });
+
+  it("disables unsupported session operations with an explicit reason instead of presenting dead buttons", () => {
+    render(
+      <AgentSessionSidebar
+        {...callbacks()}
+        sessions={[
+          session("running", { title: "运行任务", state: "running", last_event_sequence: 8 }),
+          session("stopped", { title: "暂停任务", state: "stopped", last_event_sequence: 8 }),
+          session("empty", { title: "空会话", state: "waiting_input", last_event_sequence: 0 }),
+        ]}
+      />,
+    );
+
+    const running = screen.getByTestId("agent-session-running");
+    expect(within(running).getByRole("button", { name: "停止" })).toBeEnabled();
+    expect(within(running).getByRole("button", { name: "回退" })).toBeDisabled();
+    expect(within(running).getByText(/Faro 当前不提供可选择的回退检查点/)).toBeVisible();
+    expect(within(running).getByRole("button", { name: "分叉" })).toBeEnabled();
+
+    const stopped = screen.getByTestId("agent-session-stopped");
+    expect(within(stopped).getByRole("button", { name: "继续" })).toBeDisabled();
+    expect(within(stopped).getByText(/停止后的继续暂不可用/)).toBeVisible();
+
+    const empty = screen.getByTestId("agent-session-empty");
+    expect(within(empty).getByRole("button", { name: "分叉" })).toBeDisabled();
+    expect(within(empty).getByText(/会话还没有可分叉的历史/)).toBeVisible();
   });
 
   it("keeps legacy Tutor sessions viewable and archivable without native controls", () => {
@@ -119,7 +149,12 @@ describe("AgentSessionSidebar", () => {
     const row = screen.getByTestId("agent-session-legacy");
     expect(within(row).getByRole("button", { name: "切换到历史答疑" })).toBeEnabled();
     expect(within(row).getByRole("button", { name: "归档" })).toBeEnabled();
-    expect(within(row).queryByRole("button", { name: /停止|继续|回退|分叉/ })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "继续" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "回退" })).toBeDisabled();
+    expect(within(row).getByRole("button", { name: "分叉" })).toBeDisabled();
+    expect(within(row).getByText(/旧版会话不支持回退/)).toBeVisible();
+    expect(within(row).getByText(/旧版会话不支持分叉/)).toBeVisible();
   });
 });
 

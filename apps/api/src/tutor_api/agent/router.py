@@ -5,7 +5,7 @@ import hashlib
 from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
@@ -19,6 +19,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
+from tutor_api.agent.capability import issue_workspace_capability
 from tutor_api.agent.diagnostics import collect_agent_diagnostics
 from tutor_api.agent.event_store import EventStoreError, acknowledge_runtime_event, list_events
 from tutor_api.agent.legacy import get_legacy_session, list_legacy_sessions
@@ -104,6 +105,11 @@ def _runtime_error(error: RuntimeErrorBase) -> HTTPException:
     )
 
 
+def _mutation_idempotency_key(request: Request) -> str:
+    supplied = request.headers.get("idempotency-key", "").strip()
+    return supplied if 0 < len(supplied) <= 512 else str(uuid4())
+
+
 @router.post("/sessions", status_code=201)
 def post_session(payload: SessionCreateRequest, request: Request, current_user: CurrentUser):
     with session_scope(_session_factory(request)) as db:
@@ -179,8 +185,15 @@ async def post_turn(
 async def stop(session_id: UUID, request: Request, current_user: CurrentUser):
     with session_scope(_session_factory(request)) as db:
         owned_session(db, current_user, session_id)
+        capability = issue_workspace_capability(
+            db, current_user, session_id=session_id, settings=request.app.state.settings
+        )
     try:
-        await _runtime(request).stop(session_id)
+        await _runtime(request).stop(
+            session_id,
+            capability=capability,
+            idempotency_key=_mutation_idempotency_key(request),
+        )
     except RuntimeErrorBase as error:
         raise _runtime_error(error) from None
     with session_scope(_session_factory(request)) as db:
@@ -207,8 +220,16 @@ async def rewind(
 ):
     with session_scope(_session_factory(request)) as db:
         owned_session(db, current_user, session_id)
+        capability = issue_workspace_capability(
+            db, current_user, session_id=session_id, settings=request.app.state.settings
+        )
     try:
-        await _runtime(request).rewind(session_id, payload.checkpoint_id)
+        await _runtime(request).rewind(
+            session_id,
+            payload.checkpoint_id,
+            capability=capability,
+            idempotency_key=_mutation_idempotency_key(request),
+        )
     except RuntimeErrorBase as error:
         raise _runtime_error(error) from None
     with session_scope(_session_factory(request)) as db:
@@ -220,15 +241,32 @@ async def fork(
     session_id: UUID, payload: RewindRequest, request: Request, current_user: CurrentUser
 ):
     with session_scope(_session_factory(request)) as db:
-        source = owned_session(db, current_user, session_id)
+        owned_session(db, current_user, session_id)
+        capability = issue_workspace_capability(
+            db, current_user, session_id=session_id, settings=request.app.state.settings
+        )
+    fork_session_id = uuid4()
     try:
-        result = await _runtime(request).fork(session_id, payload.checkpoint_id)
+        result = await _runtime(request).fork(
+            session_id,
+            payload.checkpoint_id,
+            fork_session_id,
+            capability=capability,
+            idempotency_key=_mutation_idempotency_key(request),
+        )
     except RuntimeErrorBase as error:
         raise _runtime_error(error) from None
     with session_scope(_session_factory(request)) as db:
         source = owned_session(db, current_user, session_id)
         return _response(
-            fork_session(db, current_user, source, result.native_session_id, payload.checkpoint_id)
+            fork_session(
+                db,
+                current_user,
+                source,
+                result.session_id,
+                result.native_session_id,
+                payload.checkpoint_id,
+            )
         )
 
 

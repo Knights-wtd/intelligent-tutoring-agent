@@ -536,3 +536,26 @@ Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 character
 - **验收证据：** Runtime diagnostics 仅报告 `faro` 且为 `ok`；真实 Faro smoke 两次成功并收到非空 `model_text_delta`；API 119 项、Web 232 项、Runtime 86 项测试全部通过，Web lint/build 与 Runtime typecheck/build 通过。
 - **运行状态：** Host Runtime PID `35704`；API/Web/PostgreSQL/Redis healthy，Worker/MinIO running；API health 为 `ok`，Web 入口 HTTP 200。
 - **安全约束：** 验证过程未打印 Faro key、Runtime token 或 Capability secret；没有 reset/clean、删除卷、覆盖其他未提交改动或恢复退休 Tutor 写接口。
+
+## 2026-08-30 · 最终稳定性收尾调查
+
+- 正常 Markdown 已真实验证上传、Worker 完成、手动刷新到“可搜索”，说明状态 API 与基础 Worker 链路不是全面失效。
+- 已确认 Web 存在双状态源缺陷：workspace 轮询只更新 `workspaceDocuments`，不会按 `document_id + document_version_id` 把权威 `processing_state` 合并到 `uploadsByKnowledgeBase`，所以“原始资料”可已就绪而“当前任务”仍停留在处理中。
+- `knowledgeApi.workspace()` 与 `documentStatus()` 的易变 GET 未显式 `cache: no-store`，存在复用旧状态的风险。
+- 数据库中发现两条真实 PDF 失败：一条 parse_document 最终为 `DataError/worker_unhandled_error`，一条为 `ParseError/invalid_format`；需安全重放定位，禁止泄露正文和异常敏感细节。
+- 用户补充最终缺陷范围：会话记录无法返回旧聊天、四个会话功能无效、Capabilities 四按钮不可操作、知识库无删除入口；这些均纳入本轮收尾。
+
+## 2026-08-30 · Runtime mutation contract blocker
+
+- 真实分叉 400 的根因是 API RuntimeClient 未发送 Runtime 对 stop/rewind/fork 强制要求的 `Idempotency-Key` 与 `X-Workspace-Capability`。
+- fork 请求还缺少预生成的 `fork_session_id`；Runtime 返回体包含该 `session_id` 与 `native_session_id`，API 数据库必须使用相同 session UUID，避免双端会话 ID 分裂。
+- resume 使用完整 RuntimeStartRequest，是另一套合同；前端目前明确禁用继续，本轮不把它伪装成可用能力。
+- 调查中一次误用 `apps/runtime/src` 路径失败；真实 Runtime 路径为 `apps/agent-runtime/src`，后续已改用正确路径。
+
+## 2026-08-30 · Vault 删除真实 E2E 与最终取舍
+
+- 用户明确表示分叉功能不是必需项，因此最终收尾不再为分叉增加新能力；已经完成并通过的修复保留，避免无收益改动。
+- 使用全新隔离账号和个人知识库执行真实删除，不接触用户主知识库；在 Worker 实际 gent_vault_root 下创建 cleanup-proof.md 后调用删除接口。
+- 验收结果：DELETE /api/v1/knowledge-bases/{id} 返回 204；Worker 第一次 500ms 轮询前已清理 <vault_root>/spaces/<space_id>/<knowledge_base_id>；随后详情 GET 返回 404。
+- 这证明数据库硬删除、durable object-deletion outbox、Worker 领取任务与本地 Vault scope 清理已在真实 Compose/PostgreSQL 环境闭环。
+- 第一次隔离注册使用了过长用户名并收到 422；改用符合长度约束的短用户名后一次通过。该失败属于验收数据不符合既有校验，不是产品缺陷。

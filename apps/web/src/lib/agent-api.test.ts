@@ -121,9 +121,9 @@ describe("agent API client", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: "session" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: "turn" }), { status: 202 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ state: "stopped" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ state: "running" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "rewound" }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ id: "forked" }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ events: [], last_sequence: 8 }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ context_window: 1_000_000 }), { status: 200 }))
@@ -142,8 +142,8 @@ describe("agent API client", () => {
     await agentApi.send("session/1", { text: longText, linked_contexts: [{ vault_file_id: "file/1" }] }, "send-key");
     await agentApi.stop("session/1");
     await agentApi.resume("session/1");
-    await agentApi.rewind("session/1", { after_sequence: 4 });
-    await agentApi.fork("session/1", { after_sequence: 4, title: "branch" });
+    await agentApi.rewind("session/1", { checkpoint_id: "checkpoint-4" });
+    await agentApi.fork("session/1", { checkpoint_id: "checkpoint-4" });
     await agentApi.events("session/1", 8);
     await agentApi.settings();
     await agentApi.updateSettings({ context_window: 1_000_000, permission_mode: "bypassPermissions" });
@@ -170,6 +170,19 @@ describe("agent API client", () => {
       }),
     );
     expect(new Headers(fetchMock.mock.calls[4][1]?.headers).has("Idempotency-Key")).toBe(false);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/v1/agent/sessions/session%2F1",
+      expect.objectContaining({ method: "DELETE", credentials: "include" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      8,
+      "/api/v1/agent/sessions/session%2F1/rewind",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ checkpoint_id: "checkpoint-4" }),
+      }),
+    );
     expect(fetchMock).toHaveBeenNthCalledWith(
       10,
       "/api/v1/agent/sessions/session%2F1/events?after=8",

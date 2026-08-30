@@ -226,14 +226,26 @@
 .knowledgeLibraryStatus { margin: 0; padding: 16px 10px; color: #716d79; font-size: 13px; line-height: 1.5; text-align: center; }
 .knowledgeLibraryError { display: grid; gap: 10px; margin: 4px; padding: 12px; border: 1px solid #ecc9cf; border-radius: 9px; background: #fff7f8; color: #9a3445; }
 .knowledgeLibraryError p { margin: 0; font-size: 13px; line-height: 1.5; }
-.knowledgeBaseList { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
-.knowledgeBaseRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: stretch; gap: 3px; }
-.knowledgeBaseName, .knowledgeGraphButton, .knowledgeLibraryFooter button { min-height: 36px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #514d60; font: inherit; cursor: pointer; }
+.knowledgeBaseList { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.knowledgeBaseItem { display: grid; gap: 6px; }
+.knowledgeBaseRow { display: grid; grid-template-columns: minmax(0, 1fr) 36px 46px; align-items: stretch; gap: 3px; }
+.knowledgeBaseName, .knowledgeGraphButton, .knowledgeDeleteButton, .knowledgeLibraryFooter button { min-height: 36px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #514d60; font: inherit; cursor: pointer; }
 .knowledgeBaseName { min-width: 0; padding: 7px 9px; overflow: hidden; font-size: 13px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .knowledgeBaseName[aria-current="page"] { border-color: #d8d1f5; background: #eeeafd; color: #493f9e; font-weight: 750; }
 .knowledgeGraphButton { display: grid; width: 36px; place-items: center; padding: 0; color: #716d79; }
 .knowledgeGraphButton svg { width: 17px; height: 17px; stroke: currentColor; stroke-width: 1.7; }
+.knowledgeDeleteButton { width: 46px; padding: 0 5px; color: #8f4050; font-size: 11px; font-weight: 750; }
 .knowledgeBaseName:hover, .knowledgeGraphButton:hover, .knowledgeLibraryFooter button:hover { background: #f1eff5; color: #493f9e; }
+.knowledgeDeleteButton:hover { border-color: #ecc9cf; background: #fff2f4; color: #a22f45; }
+.knowledgeDeleteConfirm { display: grid; gap: 8px; margin: 0 2px 5px; padding: 11px; border: 1px solid #e8c6cd; border-radius: 9px; background: #fff8f9; color: #653b45; }
+.knowledgeDeleteConfirm strong { color: #8d2f42; font-size: 12px; }
+.knowledgeDeleteConfirm p { margin: 0; font-size: 11px; line-height: 1.5; }
+.knowledgeDeleteConfirm label { color: #625763; font-size: 11px; font-weight: 700; }
+.knowledgeDeleteConfirm input { min-height: 34px; box-sizing: border-box; padding: 6px 8px; border: 1px solid #d8c8cc; border-radius: 7px; background: #fff; color: var(--text, #282733); font: inherit; }
+.knowledgeDeleteError { color: #9a3445; }
+.knowledgeDeleteActions { display: flex; justify-content: flex-end; gap: 7px; }
+.knowledgeDeleteActions button { min-height: 34px; padding: 6px 9px; border: 1px solid #d0c8cc; border-radius: 7px; background: #fff; color: #5f5962; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.knowledgeDeleteActions button[type="submit"] { border-color: #a83d52; background: #a83d52; color: #fff; }
 .knowledgeLibraryFooter { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 10px 8px 12px; border-top: 1px solid var(--line, #e7e4ec); }
 .knowledgeLibraryFooter button { padding: 7px 8px; font-size: 12px; text-align: left; }
 .knowledgeLibraryFooter button:nth-last-child(1):nth-child(odd) { grid-column: 1 / -1; }

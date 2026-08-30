@@ -1827,10 +1827,14 @@ def run_worker_forever(
     *,
     config: WorkerConfig,
     should_stop: Callable[[], bool] | None = None,
+    maintenance: Callable[[], bool] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     stop = should_stop or (lambda: False)
     while not stop():
         worked = run_worker_once(session_factory, handlers, config=config)
-        if not worked and not stop():
+        if stop():
+            break
+        maintenance_worked = maintenance() if maintenance is not None else False
+        if not worked and not maintenance_worked and not stop():
             sleep(config.idle_sleep_seconds)

@@ -4,7 +4,7 @@ from collections.abc import Generator
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -15,9 +15,10 @@ from sqlalchemy.orm import sessionmaker
 import tutor_api.agent.models  # noqa: F401
 import tutor_api.knowledge.models  # noqa: F401
 import tutor_api.vault.models  # noqa: F401
+from tutor_api.agent.capability import verify_workspace_capability
 from tutor_api.agent.models import AgentProviderSetting, AgentSession, AgentSessionState
 from tutor_api.agent.runtime_client import RuntimeUnavailable
-from tutor_api.agent.schemas import RuntimeStartResponse, SessionCreateRequest
+from tutor_api.agent.schemas import RuntimeForkResponse, RuntimeStartResponse, SessionCreateRequest
 from tutor_api.agent.service import create_session
 from tutor_api.core.config import Settings
 from tutor_api.core.database import Base, create_engine_from_url
@@ -660,3 +661,194 @@ def test_invalid_runtime_configuration_does_not_block_api_startup(tmp_path: Path
         status="unavailable", code="runtime_configuration_invalid"
     )
     engine.dispose()
+
+
+def test_stop_passes_source_capability_and_idempotency_key_to_runtime(
+    api_context: tuple[TestClient, dict[str, object]],
+) -> None:
+    client, context = api_context
+    app = context["app"]
+    assert isinstance(app, FastAPI)
+
+    class RecordingRuntime:
+        call: tuple[UUID, str, str] | None = None
+
+        async def stop(
+            self,
+            session_id: UUID,
+            *,
+            capability: str,
+            idempotency_key: str,
+        ) -> None:
+            self.call = (session_id, capability, idempotency_key)
+
+    runtime = RecordingRuntime()
+    app.state.agent_runtime_client = runtime
+    created = client.post(
+        "/api/v1/agent/sessions",
+        json={
+            "knowledge_base_id": str(context["knowledge_base_id"]),
+            "provider": "faro",
+            "model": "gemini-3.7-flash-tiered",
+            "context_window": 32_000,
+        },
+    )
+    source_session_id = UUID(created.json()["id"])
+
+    response = client.post(
+        f"/api/v1/agent/sessions/{source_session_id}/stop",
+        headers={"Idempotency-Key": "stop-api-key"},
+    )
+
+    assert response.status_code == 204
+    assert runtime.call is not None
+    called_session_id, capability, idempotency_key = runtime.call
+    assert called_session_id == source_session_id
+    assert idempotency_key == "stop-api-key"
+    verified = verify_workspace_capability(
+        capability,
+        settings=app.state.settings,
+        expected_session_id=source_session_id,
+        expected_user_id=context["user_id"],
+    )
+    assert verified["session_id"] == str(source_session_id)
+    with context["factory"]() as db:
+        stored = db.get(AgentSession, source_session_id)
+        assert stored is not None
+        assert stored.state == AgentSessionState.STOPPED
+
+
+def test_rewind_passes_source_capability_and_idempotency_key_to_runtime(
+    api_context: tuple[TestClient, dict[str, object]],
+) -> None:
+    client, context = api_context
+    app = context["app"]
+    assert isinstance(app, FastAPI)
+
+    class RecordingRuntime:
+        call: tuple[UUID, str, str, str] | None = None
+
+        async def rewind(
+            self,
+            session_id: UUID,
+            checkpoint_id: str,
+            *,
+            capability: str,
+            idempotency_key: str,
+        ) -> None:
+            self.call = (session_id, checkpoint_id, capability, idempotency_key)
+
+    runtime = RecordingRuntime()
+    app.state.agent_runtime_client = runtime
+    created = client.post(
+        "/api/v1/agent/sessions",
+        json={
+            "knowledge_base_id": str(context["knowledge_base_id"]),
+            "provider": "faro",
+            "model": "gemini-3.7-flash-tiered",
+            "context_window": 32_000,
+        },
+    )
+    source_session_id = UUID(created.json()["id"])
+
+    response = client.post(
+        f"/api/v1/agent/sessions/{source_session_id}/rewind",
+        json={"checkpoint_id": "checkpoint-api-rewind"},
+        headers={"Idempotency-Key": "rewind-api-key"},
+    )
+
+    assert response.status_code == 204
+    assert runtime.call is not None
+    called_session_id, checkpoint_id, capability, idempotency_key = runtime.call
+    assert called_session_id == source_session_id
+    assert checkpoint_id == "checkpoint-api-rewind"
+    assert idempotency_key == "rewind-api-key"
+    verified = verify_workspace_capability(
+        capability,
+        settings=app.state.settings,
+        expected_session_id=source_session_id,
+        expected_user_id=context["user_id"],
+    )
+    assert verified["session_id"] == str(source_session_id)
+    with context["factory"]() as db:
+        stored = db.get(AgentSession, source_session_id)
+        assert stored is not None
+        assert stored.rewind_checkpoint_id == "checkpoint-api-rewind"
+
+
+def test_fork_preallocates_db_id_and_uses_source_scoped_mutation_contract(
+    api_context: tuple[TestClient, dict[str, object]],
+) -> None:
+    client, context = api_context
+    app = context["app"]
+    assert isinstance(app, FastAPI)
+
+    class RecordingRuntime:
+        call: tuple[UUID, str, UUID, str, str] | None = None
+
+        async def fork(
+            self,
+            session_id: UUID,
+            checkpoint_id: str,
+            fork_session_id: UUID,
+            *,
+            capability: str,
+            idempotency_key: str,
+        ) -> RuntimeForkResponse:
+            self.call = (
+                session_id,
+                checkpoint_id,
+                fork_session_id,
+                capability,
+                idempotency_key,
+            )
+            return RuntimeForkResponse(
+                session_id=fork_session_id, native_session_id="runtime-native-fork"
+            )
+
+    runtime = RecordingRuntime()
+    app.state.agent_runtime_client = runtime
+    created = client.post(
+        "/api/v1/agent/sessions",
+        json={
+            "knowledge_base_id": str(context["knowledge_base_id"]),
+            "provider": "faro",
+            "model": "gemini-3.7-flash-tiered",
+            "context_window": 32_000,
+        },
+    )
+    source_session_id = UUID(created.json()["id"])
+
+    response = client.post(
+        f"/api/v1/agent/sessions/{source_session_id}/fork",
+        json={"checkpoint_id": "checkpoint-api-fork"},
+        headers={"Idempotency-Key": "fork-api-key"},
+    )
+
+    assert response.status_code == 201
+    assert runtime.call is not None
+    (
+        called_session_id,
+        checkpoint_id,
+        requested_fork_session_id,
+        capability,
+        idempotency_key,
+    ) = runtime.call
+    assert called_session_id == source_session_id
+    assert checkpoint_id == "checkpoint-api-fork"
+    assert idempotency_key == "fork-api-key"
+    assert response.json()["id"] == str(requested_fork_session_id)
+    verified = verify_workspace_capability(
+        capability,
+        settings=app.state.settings,
+        expected_session_id=source_session_id,
+        expected_user_id=context["user_id"],
+    )
+    assert verified["session_id"] == str(source_session_id)
+    with context["factory"]() as db:
+        forked = db.get(AgentSession, requested_fork_session_id)
+        assert forked is not None
+        assert forked.id == requested_fork_session_id
+        assert forked.parent_session_id == source_session_id
+        assert forked.native_session_id == "runtime-native-fork"
+        assert forked.rewind_checkpoint_id == "checkpoint-api-fork"

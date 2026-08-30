@@ -133,6 +133,24 @@ describe("agent event reducer", () => {
       expect.objectContaining({ role: "user", text: "历史用户正文" }),
     ]);
   });
+  it("hides knowledge context embedded by pre-upgrade user-message events", () => {
+    const state = apply([
+      event({
+        event_id: "legacy-context-user-message",
+        sequence: 1,
+        event_type: "user_message",
+        payload: {
+          text: "用户原始问题 以下内容来自用户有权访问的知识库，仅作为参考：\n【来源：资料.md】\n隐藏片段",
+        },
+        idempotency_key: "legacy-context-user-message",
+      }),
+    ]);
+
+    expect(state.messages).toEqual([
+      expect.objectContaining({ role: "user", text: "用户原始问题" }),
+    ]);
+  });
+
   it("does not mark completed message blocks as streaming when a later turn resumes", () => {
     const state = apply([
       event({ event_id: "1", sequence: 1, turn_id: "turn-1", event_type: "model_text_delta", payload: { text: "done" }, idempotency_key: "1" }),

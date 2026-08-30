@@ -641,3 +641,68 @@ Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 character
 ### 结论
 
 AI 助教“连接不上”的根因已修复。当前实际聊天链路为 `AgentPanel → /api/v1/agent → Agent Runtime → Faro → Gemini 3.7 Flash`，并已由真实模型响应验证，不再使用 Claude。
+
+## 2026-08-30 · 最终稳定性收尾启动
+
+- [x] 恢复 planning-with-files 上下文并确认工作树仅有既存 `.tmp/` 未跟踪文件。
+- [x] 真实复现正常 Markdown 上传状态链路；确认前端 workspace 与当前上传任务状态不同步。
+- [x] 获取只读子代理报告，确认状态 URL/字段合同正确，建议补 snapshot 同步与 no-store 测试。
+- [x] 将会话历史/Capabilities、PDF Worker、知识库删除与最终回归审计拆成不冲突并行任务。
+- [ ] 主线程：实现上传状态同步与 no-store 回归测试。
+- [ ] 主线程：依据删除审计实现安全知识库删除。
+- [ ] 集成 AI 助教设置修复和 PDF Worker 修复。
+- [ ] 重建并完成真实页面、候选生成、AI 连接和全量测试回归。
+
+## 2026-08-30 · 上传处理状态前端修复
+
+- [x] 先新增 2 个失败测试，分别覆盖 workspace 权威状态自动同步为 `searchable` 与 `failed`，证实旧实现会让“当前任务”永久停留在“处理中”。
+- [x] `knowledge-panel.tsx` 按 `document_id + document_version_id` 将 workspace snapshot 合并到当前知识库的 accepted upload entry；不会影响无 response 的上传中任务或其他知识库。
+- [x] 手动刷新采用单调终态合并，避免迟到的 `processing` 响应把已确认的 `searchable/failed` 回退。
+- [x] workspace/status GET 与 Next 同源代理 GET/HEAD 显式使用 `cache: no-store`，代理响应写入 `Cache-Control: no-store`。
+- [x] 聚焦 Web 回归：3 files / 28 tests passed。
+
+## 2026-08-30 · 最终收尾续跑记录
+
+- AI 会话/Capabilities 子代理已完成：历史选择后关闭设置并回到聊天；归档改用 DELETE；停止按 204 处理；分叉按 checkpoint 合同调用；继续/回退在当前 Faro 合同不支持时明确禁用并说明；Capabilities 改为按知识库保存在当前浏览器，固定 Faro/Gemini/32000 不变。
+- Web 聚焦回归：6 files / 61 tests passed（会话、设置、AgentPanel、上传状态、knowledge API、Next API proxy）。
+- Parser + Worker 并行聚焦测试中 Parser/绝大多数 Worker 用例通过，但 `test_successful_semantic_sibling_does_not_overwrite_failed_change_set` 失败；运行时后端删除子代理正在改 apps/api，stderr 显示临时 IntegrityError，故该结果不作为稳定基线，待代理结束后串行重跑并诊断，避免重复并发测试。
+- 已启动两个互不冲突子代理：后端安全硬删除/outbox；前端删除确认与状态清理。
+- 2026-08-30：第一次通过 PowerShell 管道调用 `apply_patch` 因补丁参数编码不是 UTF-8 失败；改用项目 Python 以 UTF-8 定向替换，未重复同一失败方式。
+- Agent Runtime 全量回归串行通过：25 suites / 92 tests；typecheck 通过；build 通过。
+- 同时修正 `apps/web/src/lib/agent-api.ts` 的遗留 REST 合同：归档改为真实 DELETE，stop/resume/rewind 正确处理 204，branch payload 改为 `checkpoint_id`；对应 Agent API/会话/AgentPanel 3 files / 42 tests passed。
+
+## 2026-08-30 · 最终收尾主线程复核（续）
+
+- 恢复工作树并确认分支 `feature/platform-foundation-wip`、HEAD `06189d0`，既存 `.tmp/` 保留未动；初始 `git diff --check` 通过。
+- Web 聚焦回归：10 files / 113 tests passed。
+- API 聚焦回归（删除、outbox、Parser、Worker、知识库、schema、vault watcher）：225 tests passed；先前并发失败的 Worker 用例本次串行通过。
+- Web 全量：35 files / 261 tests passed；Next production build passed。ESLint 仅发现会话侧栏 2 个未使用参数 warning，已交由前端专项审查消除。
+- Agent Runtime：25 suites / 92 tests passed；typecheck、build passed。
+- API 全量首次直接运行受本机真实 `.env` 影响，health 测试尝试连接 Docker 内部主机名；用显式非敏感 development 测试覆盖后 `test_health.py` 5 passed。另发现 compose 安全测试仍期待旧 context window `1000000`，与当前固定 `32000` 合同不符，已交由后端专项审查修正。未读取或改写 `.env`。
+- 修改文件 Ruff 聚焦检查通过；Docker 旧构建当前 API/Web/PostgreSQL/Redis healthy，Worker/MinIO running，待代码审查完成后重建。
+
+## 2026-08-30 · 最终收尾继续
+
+- 已复核真实浏览器分叉失败日志和 Runtime server 合同，确认当前关键路径为修复 API stop/rewind/fork mutation 元数据与 fork ID 一致性。
+- 已将测试文件的并行补强交给现有子代理，生产代码由主任务独立修改，避免写入冲突。
+- 错误记录：当前 PowerShell 环境未提供全局 `python` 命令；已改用项目虚拟环境 `apps/api/.venv/Scripts/python.exe` 完成同一编辑与语法检查，未再依赖全局 Python。
+- Runtime mutation 生产代码已完成：Client 发送 mutation headers，fork 请求携带预生成 UUID，Runtime 返回 UUID 受模型校验且必须与请求一致，DB fork session 使用同一 UUID；stop/rewind/fork 路由均签发绑定源会话的 workspace capability。
+- Ruff lint 通过；格式检查首次指出 RuntimeClient 单行签名格式，已用 Ruff formatter 修复。
+- API 聚焦测试 32 项通过；API 全量 pytest 通过，Ruff lint 通过。
+- Runtime 25 suites / 92 tests、typecheck、build 全部通过。
+- 额外执行全仓 `ruff format --check` 时发现 69 个既有文件不符合当前 formatter（与本轮改动无关）；为避免制造大范围无关 diff，没有全仓自动格式化。本轮 Agent 相关 12 个文件的 Ruff format check 已通过。
+- 浏览器真实分叉已成功：从主会话创建 `a1aae3a9-2207-4316-a170-c268f8522a38`，URL 切换到新会话，且新会话可经 Faro 返回 `FORK_OK_20260830`。
+- 第一次用全局“分叉”按钮定位触发 strict-mode 多匹配错误；改为按当前 session test id 精确定位后成功。
+- 运行中停止仍出现 HTTP 500。结合 Runtime stop 的 204 合同，怀疑 RuntimeClient 对 204 空响应仍强制 `response.json()`，需要日志确认并补修，防止把已成功的空响应误报为失败。
+- API 日志确认 stop 500 是 `json.decoder.JSONDecodeError`：Runtime 已按合同返回 204，但 RuntimeClient 对所有成功响应都强制解析 JSON。
+- 已修复 RuntimeClient：204 直接返回空对象；其他成功响应若不是有效 JSON/dict，则稳定转换为 `runtime_response_invalid` 502，避免裸异常成为 500。
+- mutation client 测试已改用真实状态码：stop/rewind=204、fork=201；聚焦 32 项测试、Ruff lint/format 均通过。
+
+## 2026-08-30 · Vault 删除真实验收完成
+
+- 按用户最新优先级停止继续扩展分叉功能；现有分叉修复和测试结果保留。
+- 首次 E2E 注册因测试用户名超过接口允许长度返回 422；已改用短用户名继续，未修改产品校验。
+- 隔离 E2E 账号成功创建个人知识库 d99c4390-efc5-4280-a1e5-ee2bf3ccb322，在 Worker 实际 Vault scope 创建证明文件后执行删除。
+- 真实结果：删除 HTTP 204；Vault 目录在第一次轮询时已不存在；知识库详情 HTTP 404。未删除或修改用户现有知识库。
+- 最终已知验证基线：API Agent 聚焦 32 passed、API 全量 pytest 与 Ruff lint 通过；Runtime 25 suites / 92 tests、typecheck、build 通过；Web 35 files / 267 tests、ESLint、production build 通过。
+- Compose 当前 API/Web/PostgreSQL/Redis healthy，Worker/MinIO running；数据库迁移为  018_object_deletion_outbox (head)。

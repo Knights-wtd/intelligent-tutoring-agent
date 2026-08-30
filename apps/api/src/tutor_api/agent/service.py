@@ -215,10 +215,16 @@ def prepare_turn(
 
 
 def fork_session(
-    db: Session, user: User, source: AgentSession, native_session_id: str, checkpoint_id: str
+    db: Session,
+    user: User,
+    source: AgentSession,
+    fork_session_id: UUID,
+    native_session_id: str,
+    checkpoint_id: str,
 ) -> AgentSession:
     owned_session(db, user, source.id)
     forked = AgentSession(
+        id=fork_session_id,
         user_id=user.id,
         space_id=source.space_id,
         knowledge_base_id=source.knowledge_base_id,

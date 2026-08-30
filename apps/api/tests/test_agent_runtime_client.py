@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -113,3 +114,84 @@ def test_runtime_url_accepts_docker_host_gateway_alias() -> None:
         )
     finally:
         asyncio.run(client.aclose())
+
+
+def test_runtime_mutations_forward_capability_and_idempotency_contract() -> None:
+    async def scenario() -> None:
+        source_session_id = uuid4()
+        fork_session_id = uuid4()
+        expected = [
+            (
+                f"/v1/sessions/{source_session_id}/stop",
+                "stop-capability",
+                "stop-key",
+                None,
+            ),
+            (
+                f"/v1/sessions/{source_session_id}/rewind",
+                "rewind-capability",
+                "rewind-key",
+                {"checkpoint_id": "checkpoint-rewind"},
+            ),
+            (
+                f"/v1/sessions/{source_session_id}/fork",
+                "fork-capability",
+                "fork-key",
+                {
+                    "checkpoint_id": "checkpoint-fork",
+                    "fork_session_id": str(fork_session_id),
+                },
+            ),
+        ]
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            path, capability, idempotency_key, body = expected.pop(0)
+            assert request.method == "POST"
+            assert request.url.path == path
+            assert request.headers["X-Workspace-Capability"] == capability
+            assert request.headers["Idempotency-Key"] == idempotency_key
+            if body is None:
+                assert request.content in {b"", b"null"}
+                return httpx.Response(204)
+            assert json.loads(request.content) == body
+            if request.url.path.endswith("/fork"):
+                return httpx.Response(
+                    201,
+                    json={
+                        "session_id": str(fork_session_id),
+                        "native_session_id": "runtime-native-fork",
+                    },
+                )
+            return httpx.Response(204)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            runtime = RuntimeClient(
+                client,
+                SimpleNamespace(
+                    agent_runtime_url="http://127.0.0.1:8765",
+                    agent_runtime_token="runtime-token",
+                ),
+            )
+            await runtime.stop(
+                source_session_id,
+                capability="stop-capability",
+                idempotency_key="stop-key",
+            )
+            await runtime.rewind(
+                source_session_id,
+                "checkpoint-rewind",
+                capability="rewind-capability",
+                idempotency_key="rewind-key",
+            )
+            forked = await runtime.fork(
+                source_session_id,
+                "checkpoint-fork",
+                fork_session_id,
+                capability="fork-capability",
+                idempotency_key="fork-key",
+            )
+
+        assert forked.native_session_id == "runtime-native-fork"
+        assert expected == []
+
+    asyncio.run(scenario())

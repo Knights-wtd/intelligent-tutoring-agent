@@ -626,8 +626,10 @@ def test_worker_main_starts_watcher_before_worker_and_joins_same_stop_event(
         *,
         config: object,
         should_stop: object,
+        maintenance: object,
     ) -> None:
         del handlers, config
+        assert callable(maintenance)
         assert session_factory is captured["session_factory"]
         assert callable(should_stop) and not should_stop()
         stop_event = captured["stop_event"]
@@ -647,7 +649,8 @@ def test_worker_main_starts_watcher_before_worker_and_joins_same_stop_event(
     session_factory = object()
     monkeypatch.setattr(worker_main, "get_settings", lambda: settings)
     monkeypatch.setattr(worker_main, "create_session_factory", lambda _: session_factory)
-    monkeypatch.setattr(worker_main, "create_handlers", lambda _: {})
+    monkeypatch.setattr(worker_main, "create_object_storage", lambda _: object())
+    monkeypatch.setattr(worker_main, "create_handlers", lambda _, **__: {})
     monkeypatch.setattr(worker_main, "VaultWatcher", FakeWatcher)
     monkeypatch.setattr(worker_main, "start_vault_watcher_thread", fake_start)
     monkeypatch.setattr(worker_main, "run_worker_forever", fake_worker)

@@ -19,13 +19,14 @@ from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.formula_evidence import WikipediaFormulaEvidenceProvider
 from tutor_api.knowledge.indexing import IndexingError
 from tutor_api.knowledge.models import IngestionJobKind
+from tutor_api.knowledge.object_deletion import run_object_deletion_once
 from tutor_api.knowledge.ocr import (
     OCR_BACKEND_DISABLED,
     DisabledOCRAdapter,
     OCRAdapter,
     PDFiumPageRenderer,
 )
-from tutor_api.knowledge.storage import create_object_storage
+from tutor_api.knowledge.storage import ObjectStorage, create_object_storage
 from tutor_api.knowledge.worker import (
     DurableJobKind,
     WorkerConfig,
@@ -77,7 +78,9 @@ class FaroSemanticPlanner:
             raise IndexingError("semantic_plan_invalid") from error
 
 
-def create_handlers(settings: Settings) -> WorkerHandlers:
+def create_handlers(
+    settings: Settings, *, object_storage: ObjectStorage | None = None
+) -> WorkerHandlers:
     """Build immutable runtime handlers from validated application settings."""
 
     adapter = HashEmbeddingAdapter(
@@ -85,7 +88,7 @@ def create_handlers(settings: Settings) -> WorkerHandlers:
         model=settings.embedding_model,
         dimension=settings.embedding_dimension,
     )
-    object_storage = create_object_storage(settings)
+    object_storage = object_storage or create_object_storage(settings)
     provider_http_client = create_faro_http_client(
         proxy_url=settings.faro_proxy_url,
         timeout_seconds=settings.faro_timeout_seconds,
@@ -163,16 +166,26 @@ def main() -> None:
     )
     watcher_thread = start_vault_watcher_thread(watcher, stop_event)
     try:
+        object_storage = create_object_storage(settings)
+        worker_config = WorkerConfig(
+            worker_id=default_worker_id(),
+            # Minute-level spacing lets provider and object-storage jobs ride out
+            # transient reachability windows without a busy retry loop.
+            retry_delay=timedelta(minutes=1),
+        )
         run_worker_forever(
             session_factory,
-            create_handlers(settings),
-            config=WorkerConfig(
-                worker_id=default_worker_id(),
-                # Minute-level spacing lets GENERATE_MARKDOWN jobs ride out
-                # multi-minute provider reachability windows.
-                retry_delay=timedelta(minutes=1),
-            ),
+            create_handlers(settings, object_storage=object_storage),
+            config=worker_config,
             should_stop=stop_event.is_set,
+            maintenance=lambda: run_object_deletion_once(
+                session_factory,
+                object_storage,
+                worker_id=worker_config.worker_id,
+                lease_duration=worker_config.lease_duration,
+                retry_delay=worker_config.retry_delay,
+                vault_root=Path(settings.agent_vault_root),
+            ),
         )
     finally:
         stop_event.set()

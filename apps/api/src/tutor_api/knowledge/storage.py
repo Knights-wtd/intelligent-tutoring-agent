@@ -116,6 +116,8 @@ class ObjectStorage(Protocol):
 
     def get_object_range(self, key: str, *, start: int, length: int) -> StoredObjectRange: ...
 
+    def delete_object(self, key: str) -> None: ...
+
 
 def _contains_control_or_format(value: str) -> bool:
     return any(unicodedata.category(character) in {"Cc", "Cf"} for character in value)
@@ -330,6 +332,13 @@ class S3ObjectStorage:
         except Exception:
             raise RuntimeError("object_storage_request_failed") from None
 
+    def delete_object(self, key: str) -> None:
+        try:
+            with self._request("DELETE", key):
+                return None
+        except ObjectNotFoundError:
+            return None
+
     def put_if_absent(
         self,
         key: str,
@@ -503,6 +512,12 @@ class MemoryObjectStorage:
             _read_bounded(data, self.max_object_bytes),
             content_type=content_type,
         )
+
+    def delete_object(self, key: str) -> None:
+        if not key or key.startswith("/"):
+            raise ValueError("object key must be a non-empty relative path")
+        with self._lock:
+            self._objects.pop(key, None)
 
     def get_object(self, key: str) -> StoredObject:
         with self._lock:

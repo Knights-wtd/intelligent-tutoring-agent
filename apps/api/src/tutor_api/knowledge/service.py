@@ -4,18 +4,20 @@ import re
 import tempfile
 import unicodedata
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import PurePath
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from tutor_api.identity.models import User
 from tutor_api.knowledge import indexing
 from tutor_api.knowledge.access import (
+    get_deletable_knowledge_base,
     get_readable_knowledge_base,
     get_writable_knowledge_base,
     require_space_read_access,
@@ -42,9 +44,12 @@ from tutor_api.knowledge.models import (
     IngestionJobKind,
     IngestionJobState,
     KnowledgeBase,
+    KnowledgeBaseState,
     KnowledgeUploadRequest,
+    ObjectDeletionOutbox,
     Page,
 )
+from tutor_api.knowledge.object_deletion import build_vault_scope_deletion_key
 from tutor_api.knowledge.parsers import ParsedBlock, ParsedBlockKind, ParsedDocument
 from tutor_api.knowledge.storage import (
     ObjectAlreadyExistsError,
@@ -104,7 +109,10 @@ def list_knowledge_bases(
     return list(
         session.scalars(
             select(KnowledgeBase)
-            .where(KnowledgeBase.space_id == space_id)
+            .where(
+                KnowledgeBase.space_id == space_id,
+                KnowledgeBase.state == KnowledgeBaseState.ACTIVE,
+            )
             .order_by(KnowledgeBase.created_at, KnowledgeBase.id)
         )
     )
@@ -114,6 +122,93 @@ def get_knowledge_base(
     session: Session, user: User, knowledge_base_id: UUID
 ) -> KnowledgeBase:
     return get_readable_knowledge_base(session, user, knowledge_base_id)
+
+
+def delete_knowledge_base(
+    session: Session,
+    user: User,
+    knowledge_base_id: UUID,
+) -> None:
+    knowledge_base = get_deletable_knowledge_base(session, user, knowledge_base_id)
+    jobs = list(
+        session.scalars(
+            select(IngestionJob)
+            .where(IngestionJob.knowledge_base_id == knowledge_base.id)
+            .with_for_update()
+        )
+    )
+    if any(job.state == IngestionJobState.RUNNING for job in jobs):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="知识库仍有任务正在运行，请稍后重试",
+        )
+
+    cancelled_at = datetime.now(UTC)
+    for job in jobs:
+        if job.state in {IngestionJobState.QUEUED, IngestionJobState.RETRY_WAIT}:
+            job.state = IngestionJobState.CANCELLED
+            job.lease_owner = None
+            job.lease_expires_at = None
+            job.completed_at = cancelled_at
+            job.last_error_code = "knowledge_base_deleted"
+            job.last_error_detail = None
+    session.flush()
+
+    keys = set(
+        session.scalars(
+            select(DocumentVersion.object_key).where(
+                DocumentVersion.knowledge_base_id == knowledge_base.id
+            )
+        )
+    )
+    page_keys = session.execute(
+        select(Page.text_object_key, Page.image_object_key)
+        .join(DocumentVersion, Page.document_version_id == DocumentVersion.id)
+        .where(DocumentVersion.knowledge_base_id == knowledge_base.id)
+    )
+    for text_key, image_key in page_keys:
+        if text_key:
+            keys.add(text_key)
+        if image_key:
+            keys.add(image_key)
+    if keys:
+        shared_keys = set(
+            session.scalars(
+                select(DocumentVersion.object_key).where(
+                    DocumentVersion.knowledge_base_id != knowledge_base.id,
+                    DocumentVersion.object_key.in_(keys),
+                )
+            )
+        )
+        shared_page_keys = session.execute(
+            select(Page.text_object_key, Page.image_object_key)
+            .join(DocumentVersion, Page.document_version_id == DocumentVersion.id)
+            .where(
+                DocumentVersion.knowledge_base_id != knowledge_base.id,
+                or_(
+                    Page.text_object_key.in_(keys),
+                    Page.image_object_key.in_(keys),
+                ),
+            )
+        )
+        for text_key, image_key in shared_page_keys:
+            if text_key in keys:
+                shared_keys.add(text_key)
+            if image_key in keys:
+                shared_keys.add(image_key)
+        keys.difference_update(shared_keys)
+
+    keys.add(
+        build_vault_scope_deletion_key(
+            knowledge_base.space_id,
+            knowledge_base.id,
+        )
+    )
+    session.add_all(
+        ObjectDeletionOutbox(object_key=object_key) for object_key in sorted(keys)
+    )
+    session.delete(knowledge_base)
+    session.flush()
 
 
 def get_document_processing_state(

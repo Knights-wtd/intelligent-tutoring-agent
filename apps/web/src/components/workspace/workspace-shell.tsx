@@ -62,6 +62,7 @@ type AgentCitationOpenRequest = AgentPanelCitationTarget & {
 
 type VaultFilePreview = {
   requestId: number;
+  knowledgeBaseId: string;
   relativePath: string;
   markdown: string | null;
   heading?: string;
@@ -114,6 +115,8 @@ export function WorkspaceShell({
     error: knowledgeError,
     select: selectKnowledgeBase,
     create: createKnowledgeBase,
+    remove: removeKnowledgeBase,
+    deletingKnowledgeBaseId,
     refresh: refreshKnowledgeBases,
   } = useKnowledgeLibrary(selectedSpace.id);
   const tabsState = tabsBySpace[selectedSpace.id] ?? initialWorkspaceTabs;
@@ -278,6 +281,42 @@ export function WorkspaceShell({
       knowledgeBaseName: knowledgeBase.name,
     });
   };
+  const deleteKnowledgeBase = async (knowledgeBase: KnowledgeBase) => {
+    const removal = await removeKnowledgeBase(knowledgeBase.id);
+    if (!removal.removed) return;
+
+    const spaceId = selectedSpace.id;
+    const closeDeletedGraphTab = (currentTabs: WorkspaceTabsState) =>
+      reduceWorkspaceTabs(currentTabs, {
+        type: "close",
+        tabId: `graph:${knowledgeBase.id}`,
+      });
+    const cleanedCurrentTabs = closeDeletedGraphTab(
+      tabsBySpace[spaceId] ?? initialWorkspaceTabs,
+    );
+    setTabsBySpace((current) => ({
+      ...current,
+      [spaceId]: closeDeletedGraphTab(current[spaceId] ?? initialWorkspaceTabs),
+    }));
+    setNoteOpenRequest((current) =>
+      current?.knowledgeBaseId === knowledgeBase.id ? null : current,
+    );
+    setAgentCitationOpenRequest((current) => {
+      if (current?.knowledgeBaseId !== knowledgeBase.id) return current;
+      vaultFileControllerRef.current?.abort();
+      return null;
+    });
+    setVaultFilePreview((current) => {
+      if (current?.knowledgeBaseId !== knowledgeBase.id) return current;
+      vaultFileControllerRef.current?.abort();
+      return null;
+    });
+    setCitationNavigationError(false);
+    writeWorkspacePreference(spaceId, {
+      selectedKnowledgeBaseId: removal.selectedKnowledgeBaseId,
+      activeTabId: cleanedCurrentTabs.activeTabId,
+    });
+  };
   const openGraphNote = (knowledgeBase: KnowledgeBase, noteId: string) => {
     setNoteOpenRequest({
       knowledgeBaseId: knowledgeBase.id,
@@ -370,6 +409,7 @@ export function WorkspaceShell({
         }
         setVaultFilePreview({
           requestId: request.requestId,
+          knowledgeBaseId: request.knowledgeBaseId,
           relativePath: file.relative_path,
           markdown: file.markdown,
           heading: request.heading,
@@ -411,12 +451,14 @@ export function WorkspaceShell({
   };
   const librarySidebar = (
     <KnowledgeLibrarySidebar
+      deletingKnowledgeBaseId={deletingKnowledgeBaseId}
       error={knowledgeError}
       isLoading={isKnowledgeLoading}
       knowledgeBases={knowledgeBases}
       onCreate={async (name) => {
         await createKnowledgeBase(name);
       }}
+      onDelete={deleteKnowledgeBase}
       onOpenClassroom={openClassroomDialog}
       onOpenDueReview={() => dispatchTabs({ type: "focus", tabId: "today" })}
       onOpenGraph={openGraph}
