@@ -734,3 +734,8 @@
 - Web 只加入独立账户面板、二维码依赖、欢迎页和一个账户入口；AI 助教、知识库检索、候选生成、Agent Runtime 和现有工作台核心文件未被 qyw 改动覆盖。
 - 全量 API 测试首次发现 Compose worker 未同步新支付环境变量，已补齐 api/worker 环境后回归通过；这是配置一致性修复，不涉及 AI/知识库逻辑。
 - 当前变更具备提交条件；推送前仍需确保仅显式 stage 白名单文件，排除 `.env`、`.tmp/` 和任何临时检查产物。
+
+## 2026-08-30 · 交付记录
+
+- 选择性支付/账户/欢迎页功能已形成提交 `4cb8e31`，并已推送至 `github-collab/feature/platform-foundation-wip`。
+- 本次没有 merge/cherry-pick qyw211 的混合提交，也没有更新 main；队友可从该 feature 分支获取完整变更。

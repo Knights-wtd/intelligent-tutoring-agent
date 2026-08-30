@@ -740,3 +740,9 @@
 - 迁移从当前稳定 `0018_object_deletion_outbox` 线性延伸至 `0019_recharge_orders_payment`，避免 qyw 分支迁移编号冲突。
 - 验证结果：支付/网关/管理员充值 34 passed、Web 全量 36 files / 274 tests passed、API 全量 1164 passed / 8 skipped（修复 Compose worker 环境同步后）、目标 Ruff passed、TypeScript passed、ESLint passed、Next production build passed、Alembic `upgrade head --sql` passed。
 - `compose.yaml` 的 api/worker 环境变量已保持一致，避免 worker 回归失败；未提交 `.env`、密钥、`.tmp/` 或迁移检查临时文件。
+
+## 2026-08-30 · 选择性功能已提交并推送
+
+- 功能提交：`4cb8e31 feat: add account recharge and welcome experience`。
+- 已通过普通非强制 Git push 同步到 `github-collab/feature/platform-foundation-wip`；未触碰 main，避免覆盖其他分支内容。
+- 远程分支可供队友下载审查；`.env`、密钥和 `.tmp/` 未纳入提交。

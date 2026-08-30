@@ -540,7 +540,7 @@ MVP 不能被称为“完整真实端到端可验收”；在客户接受该限�
 - [x] 接入独立欢迎页并做现有认证回归。
 - [x] 完成本地 API/Web focused tests、ruff、lint、build 和 git diff 安全审计。
 - [x] 通过验证后提交当前 feature 分支；不提交 .env、密钥或 .tmp。
-- **Status:** complete — awaiting commit and remote synchronization.
+- **Status:** complete — committed as `4cb8e31` and pushed to `github-collab/feature/platform-foundation-wip`.
 
 ## 2026-08-30 · 选择性接入 qyw211 Web 功能（完成）
 
