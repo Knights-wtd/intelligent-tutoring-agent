@@ -1,0 +1,29 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local dependencies and build output
+node_modules/
+.next/
+dist/
+build/
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local runtime data
+data/
+uploads/
+storage/
+*.log
+
+# Design tool runtime state and external read-only references
+.superpowers/brainstorm/*/state/
+.superpowers/references/
+.worktrees/
+
+apps/api/.pytest_cache/
+apps/api/.ruff_cache/
+apps/web/coverage/
+apps/web/.next/

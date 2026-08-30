@@ -1,0 +1,114 @@
+{
+  "version": 2,
+  "source": "apps/web/src/components/workspace/workspace-shell.module.css and use-workspace-breakpoint.ts, carbonized 2026-08-26",
+  "extensions": {
+    "colorMeta": {
+      "bg": { "value": "#fbfbfd", "role": "background", "description": "Application ground and light workspace canvas." },
+      "panel": { "value": "#f7f7fa", "role": "surface", "description": "Persistent sidebars and secondary panels." },
+      "panel-deep": { "value": "#ffffff", "role": "surface", "description": "Primary content, input, and reading surface." },
+      "panel-soft": { "value": "#f2f1f7", "role": "surface", "description": "Navigation ground, subtle selection, and separator regions." },
+      "line": { "value": "#e2e1e8", "role": "border", "description": "One-pixel boundaries for panels, tabs, cards, and inputs." },
+      "text": { "value": "#282733", "role": "foreground", "description": "Primary titles and body copy." },
+      "muted": { "value": "#74727f", "role": "foreground-muted", "description": "Supporting labels, metadata, and placeholder copy." },
+      "purple": { "value": "#6558c9", "role": "primary", "description": "Single brand accent for primary actions and selected states." },
+      "purple-deep": { "value": "#eeeafe", "role": "primary-surface", "description": "Quiet surface behind selected purple controls." },
+      "green": { "value": "#167c59", "role": "success", "description": "Ready, successful, and completed states only." },
+      "focus-ring": { "value": "#c8bdf5", "role": "focus", "description": "Three-pixel keyboard focus outline." }
+    },
+    "typographyMeta": {
+      "workspace": {
+        "family": "Inter, Microsoft YaHei, system-ui, sans-serif",
+        "baseSize": "13px",
+        "purpose": "Compact, readable navigation, controls, and study workspace copy."
+      },
+      "supporting": {
+        "size": "12px",
+        "purpose": "Metadata, eyebrow labels, and secondary descriptions."
+      },
+      "panel-title": {
+        "size": "14px",
+        "purpose": "Persistent panel and drawer headings."
+      }
+    },
+    "shadows": [
+      {
+        "name": "drawer",
+        "value": "0 24px 64px rgb(35 31 54 / 24%)",
+        "purpose": "Only for responsive drawers that leave the document plane."
+      }
+    ],
+    "breakpoints": [
+      { "name": "desktop", "query": "(min-width: 1280px)", "layout": "left knowledge library, center tabs, right Tutor" },
+      { "name": "tablet", "query": "(min-width: 960px) and (max-width: 1279px)", "layout": "left knowledge library and center tabs; Tutor in right drawer" },
+      { "name": "compact", "query": "(min-width: 720px) and (max-width: 959px)", "layout": "center tabs; knowledge library and Tutor in drawers" },
+      { "name": "mobile", "query": "(max-width: 719px)", "layout": "single center task; full-width library and Tutor drawers; 44px controls" }
+    ],
+    "radii": [
+      { "value": "7px", "purpose": "Knowledge rows and compact list items." },
+      { "value": "8px", "purpose": "Inputs, tabs, drawer buttons, and secondary controls." },
+      { "value": "9px", "purpose": "Selected rows, primary controls, and emphasized actions." },
+      { "value": "10px to 12px", "purpose": "Cards, errors, empty states, and graph status blocks." },
+      { "value": "16px", "purpose": "Desktop continue-learning dashboard card." },
+      { "value": "999px", "purpose": "Semantic status pills only." }
+    ],
+    "motion": [
+      { "name": "interaction", "value": "160ms ease", "purpose": "Background, border, and color state transitions." },
+      { "name": "graph-viewport", "value": "180ms ease", "purpose": "Graph viewport transform transitions." },
+      { "name": "reduced-motion", "value": "transition-duration: .01ms; scroll-behavior: auto", "purpose": "Applied when prefers-reduced-motion requests reduced movement." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Knowledge library row",
+      "kind": "navigation-row",
+      "html": "<div><button aria-current=\"true\">无线通信</button><button aria-label=\"打开无线通信关联图\">图</button></div>",
+      "css": "border-radius: 7px; selected background: #eeeafe; selected border uses a visible purple-tinted boundary; name and graph remain separate focus targets."
+    },
+    {
+      "name": "Workspace tab",
+      "kind": "tab",
+      "html": "<div role=\"tab\" aria-selected=\"true\">关联图 · 无线通信</div>",
+      "css": "compact tab with 8px control radius; focus outline: 3px solid #c8bdf5; outline-offset: -2px."
+    },
+    {
+      "name": "Continue learning card",
+      "kind": "card",
+      "html": "<article><p>继续学习</p><h2>回到最近任务</h2><button>继续学习</button></article>",
+      "css": "desktop radius: 16px; mobile radius: 12px; white reading surface with a one-pixel #e2e1e8 border and no static shadow."
+    },
+    {
+      "name": "Primary action",
+      "kind": "button",
+      "html": "<button>发送</button>",
+      "css": "background: #6558c9; selected/primary radius: 9px; visible disabled state; focus outline: 3px solid #c8bdf5 with 2px offset."
+    },
+    {
+      "name": "Responsive drawer",
+      "kind": "dialog",
+      "html": "<div role=\"dialog\" aria-modal=\"true\"><header><strong>AI 家教</strong><button>关闭</button></header></div>",
+      "css": "width: min(88vw, 380px); mobile width: 100%; backdrop: rgb(35 31 54 / 36%); shadow: 0 24px 64px rgb(35 31 54 / 24%); backdrop z-index: 40; drawer z-index: 41."
+    }
+  ],
+  "narrative": {
+    "overview": "个人学习库房：借用 Obsidian 的左知识库、中央标签、右上下文助手工作语法，但保持知学空间自己的浅色、柔紫、紧凑且功能真实的产品外观。",
+    "rules": [
+      { "name": "Context follows selection", "body": "Knowledge selection, center tabs, graph context, question context, and Tutor citations must stay aligned to the same real knowledge base." },
+      { "name": "Flat persistent workspace", "body": "Persistent panels use surface tone and one-pixel boundaries; only drawers receive elevation." },
+      { "name": "One accent", "body": "Use #6558c9 for primary and selected states; reserve #167c59 for semantic success." },
+      { "name": "Responsive without state loss", "body": "At 1280, 960, 720, and mobile thresholds, drawers change presentation without destroying selection, tabs, graph, or Tutor state." },
+      { "name": "Honest function boundary", "body": "Buttons invoke real behavior or expose clear disabled, empty, loading, permission, configuration, or error states." }
+    ],
+    "dos": [
+      "Keep knowledge name and graph actions as separate accessible targets.",
+      "Use 13px base copy, 12px supporting copy, visible focus rings, and 44px mobile controls.",
+      "Open Tutor citations in the matching real knowledge preview.",
+      "Respect reduced motion and avoid page-level horizontal scrolling."
+    ],
+    "donts": [
+      "Do not copy Obsidian brand styling or add decorative dashboard chrome.",
+      "Do not add fake controls, browser-stored model keys, or decorative status pills.",
+      "Do not use static card shadows, glassmorphism, gradient glows, or metric-card walls.",
+      "Do not let responsive drawers reset learning or conversation state."
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>平台总体架构</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111318;color:#e9ebf1;font-family:Inter,"Microsoft YaHei",system-ui,sans-serif;padding:28px}h1{font-size:24px;margin:0 0 6px}.sub{color:#969ba8;font-size:13px;margin-bottom:22px}.stack{display:grid;gap:12px;max-width:1280px;margin:auto}.layer{border:1px solid #303541;background:#191c23;border-radius:14px;padding:14px}.label{font-size:10px;letter-spacing:.1em;color:#777f90;text-transform:uppercase;margin-bottom:10px}.row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.card{min-height:76px;border:1px solid #3a404e;background:#222630;border-radius:10px;padding:11px}.card h3{font-size:13px;margin:0 0 5px}.card p{font-size:10px;line-height:1.45;color:#a9aeba;margin:0}.accent{border-color:#6f63d8;background:#28253e}.blue{border-color:#4d86ad;background:#202e38}.green{border-color:#4c9976;background:#20342d}.orange{border-color:#b27b48;background:#372b21}.span2{grid-column:span 2}.span3{grid-column:span 3}.flow{display:flex;align-items:center;justify-content:center;gap:9px;color:#777;font-size:18px;height:26px}.note{display:grid;grid-template-columns:1fr 1fr;gap:12px}.note>div{border-radius:12px;padding:14px;border:1px solid #303541;background:#181b21}.note h2{font-size:14px;margin:0 0 8px}.note ul{margin:0;padding-left:18px;color:#a8adba;font-size:11px;line-height:1.65}.tag{display:inline-block;font-size:9px;padding:3px 6px;border-radius:7px;background:#343044;color:#c6bdff;margin-right:4px}.arrowline{color:#8a7cf0;text-align:center;font-size:11px;padding:2px}@media(max-width:900px){.row{grid-template-columns:repeat(2,1fr)}.span2,.span3{grid-column:span 2}.note{grid-template-columns:1fr}}
+</style>
+</head>
+<body><div class="stack">
+<div><h1>课本知识库 Agent 平台 · 总体架构</h1><div class="sub">模块化单体承载业务一致性，后台 Worker 承载文档与 AI 长任务；接口预留未来拆分能力。</div></div>
+
+<section class="layer"><div class="label">用户界面 · Next.js / React</div><div class="row">
+  <div class="card accent span2"><h3>C3 学习工作台</h3><p>空间切换、内容树、原页/笔记/图谱/题库、可拖动答疑栏</p></div>
+  <div class="card"><h3>班级中心</h3><p>邀请码、成员、教师权限、资料与 AI 内容审核</p></div>
+  <div class="card"><h3>学习中心</h3><p>对话、错题、题库、进度、长期记忆管理</p></div>
+  <div class="card"><h3>余额与账单</h3><p>余额、Token 明细、价格快照、人工充值记录</p></div>
+  <div class="card"><h3>管理后台</h3><p>模型、OCR、Embedding、价格、用户与任务监控</p></div>
+</div></section>
+
+<div class="arrowline">SSE 流式回答 · WebSocket/事件流任务进度 · REST 业务接口</div>
+
+<section class="layer"><div class="label">业务核心 · FastAPI 模块化单体</div><div class="row">
+  <div class="card span2"><h3>身份、租户与权限</h3><p>用户、个人空间、班级、教师/学生、资源范围鉴权</p></div>
+  <div class="card span2 blue"><h3>知识库服务</h3><p>资料、页面、解析结果、索引版本、知识节点和引用</p></div>
+  <div class="card span2 accent"><h3>统一 Agent Runtime</h3><p>上下文预算、工具调用、检索、完整解答/分步引导、流式输出</p></div>
+  <div class="card span2 green"><h3>L0–L3 学习记忆</h3><p>事件、事实、阶段总结、学习画像；去重、冲突、审计、召回</p></div>
+  <div class="card span2 orange"><h3>钱包与计费账本</h3><p>费用预留、用量结算、不可变流水、价格与汇率快照</p></div>
+  <div class="card span2"><h3>配置与审计</h3><p>.env 密钥引用、启用模型目录、操作日志、任务状态</p></div>
+</div></section>
+
+<div class="arrowline">短请求直接处理 · 长任务进入 Redis 队列</div>
+
+<section class="layer"><div class="label">后台任务 Worker · 可独立扩容</div><div class="row">
+  <div class="card blue"><h3>文件安全检查</h3><p>类型、大小、ZIP 路径、恶意内容与重复文件检测</p></div>
+  <div class="card blue"><h3>解析与 OCR</h3><p>先解析文本层，扫描页或失败页再调用平台 OCR</p></div>
+  <div class="card blue"><h3>切分与 Embedding</h3><p>页码、题号、章节、图像锚点和向量索引</p></div>
+  <div class="card green"><h3>知识自生长</h3><p>概念、关系、摘要、题型、草稿笔记与审核队列</p></div>
+  <div class="card green"><h3>记忆整理</h3><p>L0→L1→L2→L3，定期更新、去重与过期清理</p></div>
+  <div class="card"><h3>维护任务</h3><p>重建索引、价格更新、失败重试、数据一致性检查</p></div>
+</div></section>
+
+<section class="layer"><div class="label">基础设施与外部服务</div><div class="row">
+  <div class="card span2"><h3>PostgreSQL + pgvector</h3><p>用户、权限、文档元数据、知识关系、向量、记忆、钱包与审计</p></div>
+  <div class="card"><h3>Redis</h3><p>任务队列、短期缓存、速率限制与事件状态</p></div>
+  <div class="card"><h3>文件/对象存储</h3><p>本机目录或 MinIO；云端切 S3 兼容对象存储</p></div>
+  <div class="card span2 accent"><h3>Provider Adapter</h3><p>千问 · DeepSeek · OpenAI · OCR · Embedding · Rerank</p></div>
+</div></section>
+
+<div class="note">
+  <div><h2>从 DeepTutor 借鉴或选择性复用</h2><ul><li>统一 Agent Loop 与上下文预算</li><li>LLM / Embedding / 解析器 / RAG 适配器边界</li><li>索引版本与 Embedding 签名</li><li>异步文档进度与可追溯引用</li><li>三层记忆的更新、审计和去重模式</li></ul></div>
+  <div><h2>由本平台自主实现</h2><ul><li>账号、个人空间、班级和审核权限</li><li>PostgreSQL 多租户数据模型</li><li>人民币钱包、价格版本和不可变账本</li><li>Obsidian 式可编辑知识网络与 C3 工作台</li><li>平台级密钥隔离和管理员配置目录</li></ul></div>
+</div>
+
+<div class="note"><div><h2>首版检索选择</h2><ul><li><span class="tag">默认</span> PostgreSQL 全文检索 + pgvector 混合召回</li><li><span class="tag">重排</span> 管理员可配置 Rerank API</li><li><span class="tag">图谱</span> 用于浏览、过滤和辅助扩展，不强依赖 GraphRAG</li></ul></div><div><h2>未来扩展</h2><ul><li>Worker 按解析、索引、记忆分组扩容</li><li>知识检索接口可新增 LightRAG / GraphRAG 管线</li><li>文件存储切换云对象存储而不改业务接口</li></ul></div></div>
+</div></body></html>
