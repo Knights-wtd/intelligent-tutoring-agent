@@ -968,13 +968,6 @@ def list_knowledge_documents(
     return summaries
 
 
-@dataclass(frozen=True, slots=True)
-class KnowledgeDocumentChunk:
-    ordinal: int
-    content: str
-    page_number: int | None
-
-
 def list_document_chunks(
     session: Session,
     user: User,
