@@ -559,3 +559,9 @@ Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 character
 - 验收结果：DELETE /api/v1/knowledge-bases/{id} 返回 204；Worker 第一次 500ms 轮询前已清理 <vault_root>/spaces/<space_id>/<knowledge_base_id>；随后详情 GET 返回 404。
 - 这证明数据库硬删除、durable object-deletion outbox、Worker 领取任务与本地 Vault scope 清理已在真实 Compose/PostgreSQL 环境闭环。
 - 第一次隔离注册使用了过长用户名并收到 422；改用符合长度约束的短用户名后一次通过。该失败属于验收数据不符合既有校验，不是产品缺陷。
+## 2026-08-30 · Quality 与发布边界复核
+
+- 用户确认本次暂不处理 Quality workflow 的红叉；它们表示 CI 门禁未全绿，不等同于当前代码未提交或 GitHub 文件不可下载。当前本机功能回归基线仍为此前记录的 API/Web/Runtime 通过结果。
+- 远程核对：`git ls-remote github-collab` 返回 `feature/platform-foundation-wip -> f2a0acf`；`main -> 3347c6f`；`feature/aiopc-upgrades -> c53f459`；`feature/add-AIOPC -> 117fe2b`。
+- 分支关系核对：`main` 是当前稳定分支祖先；`feature/aiopc-upgrades` 与当前稳定分支互不为祖先，因此没有被带入；`feature/add-AIOPC` 已在当前分支祖先链中，变更仅是 `progress.md` 记录。
+- 未发现被跟踪的 `.env`、密钥、token 文件；本地 `.tmp/`、coverage 和临时 HTML 属于未跟踪诊断产物，不进入发布提交。

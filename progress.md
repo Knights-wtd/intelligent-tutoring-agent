@@ -707,3 +707,9 @@ AI 助教“连接不上”的根因已修复。当前实际聊天链路为 `Age
 - 最终已知验证基线：API Agent 聚焦 32 passed、API 全量 pytest 与 Ruff lint 通过；Runtime 25 suites / 92 tests、typecheck、build 通过；Web 35 files / 267 tests、ESLint、production build 通过。
 - Compose 当前 API/Web/PostgreSQL/Redis healthy，Worker/MinIO running；数据库迁移为  018_object_deletion_outbox (head)。
 - 项目修复提交 db9e1b9 fix: complete knowledge and tutor stability 已成功推送至 github-collab/feature/platform-foundation-wip；.tmp/ 保留在本地且未提交，未暂存 .env 或密钥文件。
+
+## 2026-08-30 · 发布前核对
+
+- 已确认当前稳定分支工作代码无已跟踪未提交修改，HEAD 为 `f2a0acf`，远程同名 feature 分支已同步。
+- 已按要求忽略 qyw211 的 `feature/aiopc-upgrades`，不执行 cherry-pick/merge；只将当前稳定分支作为 main 发布候选。
+- Quality workflow 的 API 覆盖率门禁与 Runtime/Claudian CI 失败不在本次发布阻断范围内，后续可单独修复。
