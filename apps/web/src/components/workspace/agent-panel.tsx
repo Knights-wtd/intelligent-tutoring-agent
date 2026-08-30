@@ -97,7 +97,9 @@ function isFaroSession(session: AgentSessionSummary): boolean {
 }
 
 function isWritableSession(session: AgentSessionSummary): boolean {
-  return isFaroSession(session) && session.state !== "archived";
+  return isFaroSession(session)
+    && session.state !== "failed"
+    && session.state !== "archived";
 }
 
 function asReadOnlyHistory(session: AgentSessionSummary): AgentSessionSummary {

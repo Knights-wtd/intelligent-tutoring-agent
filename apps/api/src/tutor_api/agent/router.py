@@ -147,7 +147,7 @@ def archive_session(session_id: UUID, request: Request, current_user: CurrentUse
 async def post_turn(
     session_id: UUID, payload: TurnCreateRequest, request: Request, current_user: CurrentUser
 ):
-    callback = str(request.url_for("runtime_event_callback"))
+    callback = request.app.state.settings.agent_runtime_callback_url
     with session_scope(_session_factory(request)) as db:
         turn, runtime_payload = prepare_turn(
             db, current_user, session_id, payload, request.app.state.settings, callback

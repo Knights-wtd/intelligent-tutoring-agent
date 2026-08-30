@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     faro_timeout_seconds: int = 60
     faro_max_concurrency: int = 2
     agent_runtime_url: str = Field(default="http://host.docker.internal:8765", repr=False)
+    # Trusted host-reachable callback used by the host-native Runtime. Never derive
+    # this URL from a proxied request Host header (for example ``web:3000``).
+    agent_runtime_callback_url: str = Field(
+        default="http://127.0.0.1:8000/api/v1/agent/runtime/events", repr=False
+    )
     agent_runtime_token: SecretStr = Field(default=SecretStr(""), repr=False)
     agent_capability_secret: SecretStr = Field(default=SecretStr(""), repr=False)
     agent_vault_root: str = ".agent-data/vault"

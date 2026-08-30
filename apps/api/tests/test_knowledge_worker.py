@@ -20,6 +20,7 @@ import tutor_api.knowledge.worker as worker_module
 from tutor_api.agent import models as agent_models  # noqa: F401
 from tutor_api.core.database import Base, create_engine_from_url
 from tutor_api.identity.models import User
+from tutor_api.knowledge.candidates import CandidateValidationError
 from tutor_api.knowledge.embeddings import HashEmbeddingAdapter
 from tutor_api.knowledge.indexing import ChunkingConfig, IndexingError
 from tutor_api.knowledge.models import (
@@ -744,6 +745,39 @@ def test_retry_is_bounded_and_error_detail_is_redacted(factory: sessionmaker[Ses
         assert claimed.state is IngestionJobState.FAILED
         assert claimed.completed_at == now + timedelta(seconds=6)
         assert claimed.attempt_count == claimed.max_attempts and claimed.last_error_detail is None
+
+
+def test_candidate_validation_failure_preserves_stable_public_code(
+    factory: sessionmaker[Session],
+) -> None:
+    now = datetime(2026, 8, 30, 10, tzinfo=UTC)
+    with factory.begin() as session:
+        user, kb, index = target(session, "candidate-validation")
+        job = add_job(
+            session,
+            user,
+            kb,
+            index,
+            now=now,
+            state=IngestionJobState.RUNNING,
+            attempts=1,
+            maximum=1,
+            owner="candidate-worker",
+            expires=now + timedelta(seconds=30),
+            started=now,
+        )
+        fail_job(
+            session,
+            job_id=job.id,
+            worker_id="candidate-worker",
+            now=now,
+            error=CandidateValidationError(
+                "candidate_formula_verification_invalid: model payload redacted"
+            ),
+        )
+
+        assert job.last_error_code == "candidate_formula_verification_invalid"
+        assert job.last_error_detail is None
 
 
 def test_terminal_build_failure_fails_target_and_cleans_partial_chunks(

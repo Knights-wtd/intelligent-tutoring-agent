@@ -62,6 +62,7 @@ def api_context(tmp_path: Path) -> Generator[tuple[TestClient, dict[str, object]
     settings = Settings(
         app_env="test",
         agent_runtime_url="http://127.0.0.1:8765",
+        agent_runtime_callback_url="http://127.0.0.1:8000/api/v1/agent/runtime/events",
         agent_runtime_token="runtime-token",
         agent_capability_secret="capability-secret-capability-secret",
         agent_vault_root=str(tmp_path / "vault"),
@@ -514,6 +515,49 @@ def test_agent_send_never_calls_legacy_tutor_adapter(
     assert response.status_code == 202
     assert runtime.calls == 1
     legacy_tutor_adapter.assert_not_called()
+
+
+def test_turn_callback_uses_trusted_runtime_url_instead_of_proxy_host(
+    api_context: tuple[TestClient, dict[str, object]],
+) -> None:
+    client, context = api_context
+    app = context["app"]
+    assert isinstance(app, FastAPI)
+
+    class RecordingRuntime:
+        payload = None
+
+        async def start_turn(self, payload, *, request_id=None):
+            del request_id
+            self.payload = payload
+            return RuntimeStartResponse(
+                execution_id="execution-callback",
+                native_session_id="native-callback",
+                accepted_sequence=0,
+            )
+
+    runtime = RecordingRuntime()
+    app.state.agent_runtime_client = runtime
+    created = client.post(
+        "/api/v1/agent/sessions",
+        json={
+            "knowledge_base_id": str(context["knowledge_base_id"]),
+            "provider": "faro",
+            "model": "gemini-3.7-flash-tiered",
+            "context_window": 32_000,
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/agent/sessions/{created.json()['id']}/turns",
+        json={"prompt": "验证代理回调地址"},
+        headers={"Host": "web:3000"},
+    )
+
+    assert response.status_code == 202
+    assert runtime.payload is not None
+    assert str(runtime.payload.callback_url) == app.state.settings.agent_runtime_callback_url
+    assert "web:3000" not in str(runtime.payload.callback_url)
 
 
 def test_runtime_event_callback_accepts_protocol_envelope_and_returns_durable_ack(

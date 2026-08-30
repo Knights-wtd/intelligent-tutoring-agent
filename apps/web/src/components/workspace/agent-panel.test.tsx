@@ -248,6 +248,81 @@ describe("AgentPanel", () => {
     );
   });
 
+  it.each([
+    ["URL", () => window.history.replaceState({}, "", "/workspace?agentSession=session-failed&agentAfter=9")],
+    ["localStorage", () => localStorage.setItem("agent-session-preference-v1", JSON.stringify({
+      sessionId: "session-failed",
+      lastPersistedSequence: 9,
+    }))],
+    ["最近会话", () => undefined],
+  ])("does not restore a failed Faro session from %s when a healthy Faro session exists", async (_source, arrangePreference) => {
+    const failedSession: AgentSessionSummary = {
+      ...runningSession,
+      id: "session-failed",
+      title: "失败会话",
+      state: "failed",
+      last_event_sequence: 9,
+    };
+    const healthySession: AgentSessionSummary = {
+      ...runningSession,
+      id: "session-healthy",
+      title: "健康会话",
+      state: "waiting_input",
+      last_event_sequence: 3,
+    };
+    mocks.list.mockResolvedValue([failedSession, healthySession]);
+    arrangePreference();
+
+    renderPanel();
+
+    await waitFor(() => expect(mocks.events).toHaveBeenCalledWith(
+      "session-healthy",
+      0,
+      expect.any(AbortSignal),
+    ));
+    expect(mocks.events).not.toHaveBeenCalledWith(
+      "session-failed",
+      expect.any(Number),
+      expect.any(AbortSignal),
+    );
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.connectAgentEvents).toHaveBeenCalledWith(
+      "session-healthy",
+      0,
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it.each([
+    ["failed Faro", session({ id: "session-failed", state: "failed" })],
+    ["archived Faro", session({ id: "session-archived", state: "archived" })],
+    ["旧 provider", session({
+      id: "session-legacy-provider",
+      provider: "claude",
+      model: "fable",
+      state: "waiting_input",
+    })],
+  ])("creates a healthy Faro session when only %s history exists", async (_kind, unavailableSession) => {
+    mocks.list.mockResolvedValue([unavailableSession]);
+
+    renderPanel();
+
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith({
+      knowledge_base_id: "kb-current",
+      provider: "faro",
+      model: "gemini-3.7-flash-tiered",
+      context_window: 32_000,
+      title: "当前知识库",
+      linked_contexts: [{ knowledge_base_id: "kb-current" }],
+    }, expect.any(AbortSignal)));
+    expect(mocks.events).toHaveBeenCalledWith(
+      "session-created",
+      0,
+      expect.any(AbortSignal),
+    );
+  });
+
   it("replays a cursor gap, reconnects from the recovered cursor, and streams every event without a fixed accumulation limit", async () => {
     let onEvent: ((value: AgentEventEnvelope) => void) | undefined;
     let onState: ((value: AgentConnectionState) => void) | undefined;

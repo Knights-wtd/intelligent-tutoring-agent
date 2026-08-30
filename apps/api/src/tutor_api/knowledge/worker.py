@@ -19,6 +19,7 @@ from uuid import UUID
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from tutor_api.knowledge.candidates import CandidateValidationError
 from tutor_api.knowledge.indexing import (
     ChunkingConfig,
     EmbeddingAdapter,
@@ -547,9 +548,12 @@ def complete_job(
 
 
 def _public_error_code(error: Exception) -> str:
-    raw = getattr(error, "code", None)
-    if hasattr(raw, "value"):
-        raw = raw.value
+    if isinstance(error, CandidateValidationError):
+        raw = str(error).partition(":")[0]
+    else:
+        raw = getattr(error, "code", None)
+        if hasattr(raw, "value"):
+            raw = raw.value
     if isinstance(raw, str):
         normalized = raw.strip().casefold()
         if _SAFE_ERROR_CODE.fullmatch(normalized):

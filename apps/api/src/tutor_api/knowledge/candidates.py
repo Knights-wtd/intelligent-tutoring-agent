@@ -340,6 +340,37 @@ def _invalid_verification(payload: object) -> CandidateValidationError:
     return CandidateValidationError(f"candidate_formula_verification_invalid: {snippet}")
 
 
+def _merge_formula_verifications(
+    items: tuple[CandidateFormulaVerification, ...],
+) -> CandidateFormulaVerification:
+    status = CandidateFormulaVerificationStatus.VERIFIED
+    if any(
+        item.status is CandidateFormulaVerificationStatus.CONTRADICTED
+        for item in items
+    ):
+        status = CandidateFormulaVerificationStatus.CONTRADICTED
+    elif any(
+        item.status is CandidateFormulaVerificationStatus.UNVERIFIED
+        for item in items
+    ):
+        status = CandidateFormulaVerificationStatus.UNVERIFIED
+    mappings: list[CandidateFormulaVariableMapping] = []
+    for item in items:
+        for mapping in item.variable_mapping:
+            if mapping not in mappings:
+                mappings.append(mapping)
+    return CandidateFormulaVerification(
+        status=status,
+        textbook_expression="\n".join(
+            dict.fromkeys(item.textbook_expression for item in items)
+        ),
+        normalized_expression="\n".join(
+            dict.fromkeys(item.normalized_expression for item in items)
+        ),
+        variable_mapping=tuple(mappings),
+    )
+
+
 def _parse_formula_verification(
     payload: object,
 ) -> CandidateFormulaVerification | None:
@@ -352,6 +383,13 @@ def _parse_formula_verification(
     """
     if payload is None:
         return None
+    if isinstance(payload, list):
+        parsed_items = tuple(
+            verification
+            for item in payload
+            if (verification := _parse_formula_verification(item)) is not None
+        )
+        return _merge_formula_verifications(parsed_items) if parsed_items else None
     if isinstance(payload, str):
         stripped = payload.strip()
         if not stripped:
@@ -603,13 +641,38 @@ def merge_knowledge_candidates(groups: tuple[KnowledgeCandidateSet, ...]) -> Kno
         for note in group.notes:
             existing = notes_by_key.get(note.key)
             if existing is not None:
-                if (
-                    existing.title != note.title
-                    or existing.kind is not note.kind
-                    or existing.parent_key != note.parent_key
-                    or existing.markdown != note.markdown
-                ):
-                    raise CandidateValidationError("candidate_note_conflict")
+                markdown = existing.markdown
+                if note.markdown != existing.markdown:
+                    if existing.markdown in note.markdown:
+                        markdown = note.markdown
+                    elif note.markdown not in existing.markdown:
+                        markdown = (
+                            f"{existing.markdown.rstrip()}\n\n---\n\n"
+                            f"{note.markdown.lstrip()}"
+                        )
+                verifications = tuple(
+                    verification
+                    for verification in (
+                        existing.formula_verification,
+                        note.formula_verification,
+                    )
+                    if verification is not None
+                )
+                external_sources = list(existing.external_sources)
+                for source in note.external_sources:
+                    if source not in external_sources:
+                        external_sources.append(source)
+                notes_by_key[note.key] = replace(
+                    existing,
+                    parent_key=existing.parent_key or note.parent_key,
+                    markdown=markdown,
+                    formula_verification=(
+                        _merge_formula_verifications(verifications)
+                        if len(verifications) > 1
+                        else verifications[0] if verifications else None
+                    ),
+                    external_sources=tuple(external_sources),
+                )
             else:
                 notes_by_key[note.key] = note
                 pointers_by_key[note.key] = []
