@@ -200,6 +200,116 @@ describe("agent API client", () => {
     expect(error).toEqual(expect.objectContaining({ status: 503, detail: "Runtime unavailable" }));
   });
 
+  it("uses HTTP polling through the same-origin proxy and advances the replay cursor", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify([event(10), event(11)]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const received: AgentEventEnvelope[] = [];
+    const states: AgentConnectionState[] = [];
+
+    const connection = connectAgentEvents(
+      "session",
+      9,
+      (incoming) => received.push(incoming),
+      (state) => states.push(state),
+      { pollIntervalMs: 100 },
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(received.map((item) => item.sequence)).toEqual([10, 11]);
+    expect(connection.after).toBe(11);
+    expect(states.at(-1)).toEqual(expect.objectContaining({ status: "open", attempt: 0, after: 11 }));
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/agent/sessions/session/events?after=9",
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/agent/sessions/session/events?after=11",
+      expect.objectContaining({ credentials: "include", signal: expect.any(AbortSignal) }),
+    );
+
+    connection.close();
+    expect(states.at(-1)).toEqual(expect.objectContaining({ status: "closed", after: 11 }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries failed polling requests with exponential backoff and returns to open", async () => {
+    vi.useFakeTimers();
+    const delayFor = vi.fn((attempt: number) => 100 * 2 ** (attempt - 1));
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockRejectedValueOnce(new Error("still down"))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const states: AgentConnectionState[] = [];
+
+    const connection = connectAgentEvents("session", 4, vi.fn(), (state) => states.push(state), {
+      reconnectDelayMs: delayFor,
+      pollIntervalMs: 1_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(states.at(-1)).toEqual(expect.objectContaining({ status: "reconnecting", attempt: 1, after: 4 }));
+    await vi.advanceTimersByTimeAsync(99);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(states.at(-1)).toEqual(expect.objectContaining({ status: "reconnecting", attempt: 2, after: 4 }));
+    await vi.advanceTimersByTimeAsync(199);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(states.at(-1)).toEqual(expect.objectContaining({ status: "open", attempt: 0, after: 4 }));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(delayFor.mock.calls.map(([attempt]) => attempt)).toEqual([1, 2]);
+
+    connection.close();
+  });
+
+  it.each([401, 403])("stops HTTP polling after unauthorized response %s", async (status) => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Unauthorized" }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const states: AgentConnectionState[] = [];
+
+    connectAgentEvents("session", 0, vi.fn(), (state) => states.push(state));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(states.at(-1)).toEqual(expect.objectContaining({ status: "unauthorized", code: status }));
+    await vi.runAllTimersAsync();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts an active polling request and clears scheduled work on close", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockReturnValue(new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchMock);
+    const states: AgentConnectionState[] = [];
+
+    const connection = connectAgentEvents("session", 0, vi.fn(), (state) => states.push(state));
+    const signal = fetchMock.mock.calls[0][1]?.signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+
+    connection.close();
+
+    expect(signal.aborted).toBe(true);
+    expect(states.at(-1)).toEqual(expect.objectContaining({ status: "closed", code: 1000 }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("advances the cursor on each event and reconnects with exponential backoff", async () => {
     vi.useFakeTimers();
     const received: AgentEventEnvelope[] = [];

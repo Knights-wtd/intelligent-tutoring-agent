@@ -336,6 +336,7 @@ export interface AgentConnectionOptions {
   apiBaseUrl?: string;
   WebSocketImpl?: AgentWebSocketConstructor;
   reconnectDelayMs?: (attempt: number) => number;
+  pollIntervalMs?: number;
   setTimeoutImpl?: typeof globalThis.setTimeout;
   clearTimeoutImpl?: typeof globalThis.clearTimeout;
 }
@@ -357,22 +358,101 @@ export function connectAgentEvents(
     throw new RangeError("after must be a non-negative safe integer");
   }
 
-  const WebSocketImpl = options.WebSocketImpl
-    ?? (globalThis.WebSocket as unknown as AgentWebSocketConstructor | undefined);
-  if (!WebSocketImpl) throw new Error("WebSocket is not available");
-
+  const useSameOriginPolling = options.apiBaseUrl === undefined
+    && options.WebSocketImpl === undefined
+    && apiBaseUrl === "";
   const delayFor = options.reconnectDelayMs ?? defaultReconnectDelay;
   const schedule = options.setTimeoutImpl ?? globalThis.setTimeout.bind(globalThis);
   const cancel = options.clearTimeoutImpl ?? globalThis.clearTimeout.bind(globalThis);
   let cursor = after;
   let attempt = 0;
   let stopped = false;
-  let socket: AgentWebSocketLike | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   const emitState = (state: Omit<AgentConnectionState, "after">) => {
     onState({ ...state, after: cursor });
   };
+
+  if (useSameOriginPolling) {
+    const pollIntervalMs = options.pollIntervalMs ?? 500;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let pollController: AbortController | null = null;
+
+    const schedulePoll = (delayMs: number) => {
+      if (stopped) return;
+      pollTimer = schedule(() => {
+        pollTimer = null;
+        void poll();
+      }, delayMs);
+    };
+
+    const poll = async () => {
+      if (stopped) return;
+      const controller = new AbortController();
+      pollController = controller;
+      try {
+        const replay = await agentApi.events(sessionId, cursor, controller.signal);
+        if (stopped) return;
+        for (const incoming of replay.events) {
+          if (incoming.session_id !== sessionId) {
+            throw new TypeError("received event for a different session");
+          }
+          if (incoming.sequence <= cursor) continue;
+          cursor = incoming.sequence;
+          onEvent(incoming);
+          if (stopped) return;
+        }
+        cursor = Math.max(cursor, replay.last_sequence);
+        attempt = 0;
+        emitState({ status: "open", attempt });
+        schedulePoll(pollIntervalMs);
+      } catch (caught) {
+        if (stopped || (caught instanceof Error && caught.name === "AbortError")) return;
+        const error = caught instanceof Error ? caught : new Error("Agent event polling failed");
+        if (caught instanceof AgentApiError && (caught.status === 401 || caught.status === 403)) {
+          stopped = true;
+          emitState({ status: "unauthorized", attempt, code: caught.status, error });
+          return;
+        }
+        attempt += 1;
+        emitState({
+          status: "reconnecting",
+          attempt,
+          error,
+          ...(caught instanceof AgentApiError ? { code: caught.status } : {}),
+        });
+        schedulePoll(delayFor(attempt));
+      } finally {
+        if (pollController === controller) pollController = null;
+      }
+    };
+
+    emitState({ status: "connecting", attempt });
+    void poll();
+
+    return {
+      get after() {
+        return cursor;
+      },
+      close() {
+        if (stopped) return;
+        stopped = true;
+        if (pollTimer !== null) {
+          cancel(pollTimer);
+          pollTimer = null;
+        }
+        pollController?.abort();
+        pollController = null;
+        emitState({ status: "closed", attempt, code: 1000 });
+      },
+    };
+  }
+
+  const WebSocketImpl = options.WebSocketImpl
+    ?? (globalThis.WebSocket as unknown as AgentWebSocketConstructor | undefined);
+  if (!WebSocketImpl) throw new Error("WebSocket is not available");
+
+  let socket: AgentWebSocketLike | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   const connect = () => {
     if (stopped) return;
