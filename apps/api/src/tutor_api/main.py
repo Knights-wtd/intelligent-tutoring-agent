@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tutor_api.agent.router import router as agent_router
 from tutor_api.agent.runtime_client import RuntimeClient
+from tutor_api.billing.gateways import build_payment_gateway
 from tutor_api.billing.router import admin_router
 from tutor_api.billing.router import router as billing_router
 from tutor_api.classrooms.router import router as classrooms_router
@@ -68,6 +69,7 @@ def create_app(
         model=active_settings.embedding_model,
         dimension=active_settings.embedding_dimension,
     )
+    app.state.payment_gateway = build_payment_gateway(active_settings)
     app.state.object_storage = (
         object_storage
         if object_storage is not None or active_settings.app_env == "test"

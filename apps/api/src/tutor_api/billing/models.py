@@ -33,6 +33,19 @@ class LedgerEntryType(StrEnum):
     CONSUMPTION = "consumption"
 
 
+class PaymentProviderKind(StrEnum):
+    MOCK = "mock"
+    ALIPAY = "alipay"
+    WECHAT = "wechat"
+
+
+class RechargeOrderState(StrEnum):
+    PENDING = "pending"
+    PAID = "paid"
+    PAID_MISMATCH = "paid_mismatch"
+    CANCELLED = "cancelled"
+
+
 class Wallet(Base):
     __tablename__ = "wallets"
 
@@ -107,6 +120,69 @@ class LedgerEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class RechargeOrder(Base):
+    """A self-service recharge initiated against a payment gateway.
+
+    The order itself holds no money: crediting happens exactly once, when the
+    gateway notify confirms payment, by posting the paired recharge ledger entry
+    (``credited_recharge_record_id``). ``gateway_trade_no`` keeps the gateway's
+    transaction id so cross-order reuse is detectable and auditable.
+    """
+
+    __tablename__ = "recharge_orders"
+    __table_args__ = (
+        CheckConstraint("amount > 0", name="ck_recharge_order_amount_positive"),
+        CheckConstraint(
+            "state IN ('pending', 'paid', 'paid_mismatch', 'cancelled')",
+            name="ck_recharge_order_state",
+        ),
+        ForeignKeyConstraint(
+            ["credited_recharge_record_id", "wallet_id"],
+            ["recharge_records.id", "recharge_records.wallet_id"],
+            name="fk_recharge_order_credit_record_wallet",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    wallet_id: Mapped[UUID] = mapped_column(ForeignKey("wallets.id"), index=True)
+    provider: Mapped[PaymentProviderKind] = mapped_column(
+        Enum(
+            PaymentProviderKind,
+            native_enum=False,
+            create_constraint=True,
+            validate_strings=True,
+            values_callable=lambda enum_type: [member.value for member in enum_type],
+        ),
+        nullable=False,
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    out_trade_no: Mapped[str] = mapped_column(String(64), unique=True)
+    state: Mapped[RechargeOrderState] = mapped_column(
+        Enum(
+            RechargeOrderState,
+            native_enum=False,
+            values_callable=lambda enum_type: [member.value for member in enum_type],
+        ),
+        default=RechargeOrderState.PENDING,
+        server_default=RechargeOrderState.PENDING.value,
+        nullable=False,
+    )
+    credited_recharge_record_id: Mapped[UUID | None] = mapped_column(unique=True)
+    gateway_trade_no: Mapped[str | None] = mapped_column(String(64), unique=True)
+    gateway_notify: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    # Creation-time gateway payload (redirect URL / QR payload / mode) so the
+    # account panel can re-render the payment surface from a status poll.
+    gateway_creation: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class RechargeRecord(Base):
     __tablename__ = "recharge_records"
     __table_args__ = (
@@ -117,6 +193,9 @@ class RechargeRecord(Base):
             "reversed_by_user_id IS NOT NULL AND reversal_reason IS NOT NULL)",
             name="ck_recharge_record_reversal_audit_complete",
         ),
+        # Required by SQLite: recharge_orders' composite FK targets these two
+        # columns, and the parent pair must be uniquely constrained together.
+        UniqueConstraint("id", "wallet_id", name="uq_recharge_record_id_wallet"),
         ForeignKeyConstraint(
             ["ledger_entry_id", "wallet_id"],
             ["ledger_entries.id", "ledger_entries.wallet_id"],

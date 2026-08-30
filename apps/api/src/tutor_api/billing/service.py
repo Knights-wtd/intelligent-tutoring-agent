@@ -10,16 +10,20 @@ from routers until that decision is made.
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from tutor_api.billing.gateways import order_reference_for_provider
 from tutor_api.billing.models import (
     LedgerEntry,
     LedgerEntryType,
+    PaymentProviderKind,
+    RechargeOrder,
+    RechargeOrderState,
     RechargeRecord,
     Wallet,
     WalletReservation,
@@ -57,6 +61,27 @@ class DuplicateExternalReferenceError(ValueError):
 
 class RechargeTargetUserNotFoundError(ValueError):
     pass
+
+
+class RechargeOrderNotFoundError(LookupError):
+    pass
+
+
+class RechargeOrderAmountError(ValueError):
+    pass
+
+
+# 积分与人民币 1:1:订单金额即入账积分,单位为元,保留两位小数。
+MIN_RECHARGE_ORDER_AMOUNT = Decimal("1.00")
+MAX_RECHARGE_ORDER_AMOUNT = Decimal("10000.00")
+_SUPPORTED_RECHARGE_PROVIDERS = frozenset(
+    {PaymentProviderKind.MOCK.value, PaymentProviderKind.ALIPAY.value, "wechat"}
+)
+
+
+def _cents_money(value: Decimal | int | str) -> Decimal:
+    amount = Decimal(str(value)).quantize(Decimal("0.01"))
+    return amount
 
 
 def _money(value: Decimal | int | str) -> Decimal:
@@ -225,6 +250,92 @@ def reverse_manual_recharge(
     record.reversal_reason = reason
     session.flush()
     return entry
+
+
+def create_recharge_order(
+    session: Session,
+    *,
+    user_id: UUID,
+    provider: str,
+    amount: Decimal | int | str,
+) -> RechargeOrder:
+    """Open a pending gateway recharge order for the user's wallet."""
+
+    if provider not in _SUPPORTED_RECHARGE_PROVIDERS:
+        raise RechargeOrderAmountError("Unsupported payment provider")
+    order_amount = _cents_money(amount)
+    if order_amount < MIN_RECHARGE_ORDER_AMOUNT or order_amount > MAX_RECHARGE_ORDER_AMOUNT:
+        raise RechargeOrderAmountError(
+            "Recharge amount is outside the supported range "
+            f"[{MIN_RECHARGE_ORDER_AMOUNT}, {MAX_RECHARGE_ORDER_AMOUNT}]"
+        )
+    wallet = _wallet_for_update(session, user_id)
+    order = RechargeOrder(
+        user_id=user_id,
+        wallet_id=wallet.id,
+        provider=PaymentProviderKind(provider),
+        amount=order_amount,
+        out_trade_no=f"R{uuid4().hex}",
+        state=RechargeOrderState.PENDING,
+    )
+    session.add(order)
+    session.flush()
+    return order
+
+
+def confirm_recharge_payment(
+    session: Session,
+    *,
+    out_trade_no: str,
+    gateway_trade_no: str,
+    paid_amount: Decimal | int | str,
+    notify_payload: dict[str, str],
+) -> RechargeOrder:
+    """Credit a paid gateway order exactly once, idempotent across retries.
+
+    Amount mismatches are never auto-credited: the order moves to
+    ``paid_mismatch`` and stays untouched for manual reconciliation, because
+    silently posting a different amount would corrupt the 1:1 points contract.
+    """
+
+    order = session.scalar(
+        select(RechargeOrder).where(RechargeOrder.out_trade_no == out_trade_no).with_for_update()
+    )
+    if order is None:
+        raise RechargeOrderNotFoundError("Recharge order was not found")
+    if order.state != RechargeOrderState.PENDING:
+        return order
+    paid = _cents_money(paid_amount)
+    now = datetime.now(UTC)
+    order.gateway_notify = notify_payload
+    order.gateway_trade_no = gateway_trade_no
+    if paid != order.amount:
+        order.state = RechargeOrderState.PAID_MISMATCH
+        order.paid_at = now
+        session.flush()
+        return order
+    record = create_manual_recharge(
+        session,
+        user_id=order.user_id,
+        amount=order.amount,
+        external_reference=order_reference_for_provider(order.provider.value, gateway_trade_no),
+        reason=f"在线充值：{order.provider.value} 订单 {order.out_trade_no}",
+        created_by_user_id=order.user_id,
+    )
+    order.credited_recharge_record_id = record.id
+    order.state = RechargeOrderState.PAID
+    order.paid_at = now
+    session.flush()
+    return order
+
+
+def recharge_order_for_user(
+    session: Session, order_id: UUID, *, user_id: UUID
+) -> RechargeOrder:
+    order = session.get(RechargeOrder, order_id)
+    if order is None or order.user_id != user_id:
+        raise RechargeOrderNotFoundError("Recharge order was not found")
+    return order
 
 
 def billing_entries(

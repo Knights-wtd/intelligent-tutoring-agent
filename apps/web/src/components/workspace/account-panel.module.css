@@ -1,0 +1,338 @@
+.dialog {
+  position: fixed;
+  z-index: 20;
+  inset: 50% auto auto 50%;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(760px, calc(100dvh - 32px));
+  overflow: auto;
+  transform: translate(-50%, -50%);
+  padding: 22px;
+  border: 1px solid #dedbe8;
+  border-radius: 16px;
+  background: #fff;
+  color: #282733;
+  box-shadow: 0 24px 70px rgb(39 33 67 / 20%);
+}
+
+.dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #e2e1e8;
+}
+
+.dialog > header h2,
+.dialog > header p {
+  margin: 0;
+}
+
+.dialog > header h2 {
+  margin-top: 4px;
+  color: #353341;
+  font-size: 20px;
+}
+
+.dialog > header button,
+.dialog button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid #d6d2e4;
+  border-radius: 8px;
+  background: #fff;
+  color: #51479e;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dialog button:hover:not(:disabled),
+.dialog button:focus-visible {
+  border-color: #aaa0df;
+  background: #f8f6ff;
+}
+
+.dialog button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.backdrop {
+  position: fixed;
+  z-index: 19;
+  inset: 0;
+  background: rgb(35 30 50 / 28%);
+}
+
+.eyebrow {
+  color: #807b91;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #e3b6be;
+  border-radius: 10px;
+  background: #fff7f8;
+  color: #8f2f41;
+}
+
+.error p {
+  margin: 0;
+}
+
+.accountBalanceCard {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+  padding: 18px;
+  border: 1px solid #ded8f5;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f7f5ff, #fbfaff);
+}
+
+.accountBalanceLabel,
+.accountBalanceHint {
+  color: #777482;
+  font-size: 12px;
+}
+
+.accountBalanceValue {
+  color: #453d92;
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+.accountBalanceUnit {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.accountBalanceHint {
+  margin-top: 2px;
+}
+
+.accountRechargeForm {
+  display: grid;
+  gap: 14px;
+}
+
+.accountFieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid #e2e1e8;
+  border-radius: 10px;
+}
+
+.accountFieldset legend {
+  padding: 0 6px;
+  color: #4d4961;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.accountAmountChips,
+.accountProviderRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.accountAmountChips button[aria-pressed="true"],
+.accountProviderOption {
+  border-color: #bdb3ec;
+  background: #eeeafe;
+  color: #453d92;
+}
+
+.accountCustomLabel {
+  display: block;
+  margin: 14px 0 6px;
+  color: #777482;
+  font-size: 12px;
+}
+
+.accountFieldset input {
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid #d9d7e1;
+  border-radius: 8px;
+  color: #282733;
+  font: inherit;
+}
+
+.accountFieldset input:focus-visible {
+  border-color: #8d82d8;
+  outline: 3px solid rgb(141 130 216 / 18%);
+}
+
+.accountProviderOption,
+.accountProviderDisabled {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid #e2e1e8;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.accountProviderDisabled {
+  color: #9895a1;
+  background: #f7f7fa;
+}
+
+.accountSubmitButton {
+  width: 100%;
+  min-height: 42px !important;
+  border-color: #6558c9 !important;
+  background: #6558c9 !important;
+  color: #fff !important;
+}
+
+.accountSubmitButton:hover:not(:disabled),
+.accountSubmitButton:focus-visible {
+  border-color: #51479e !important;
+  background: #51479e !important;
+}
+
+.accountAwaiting,
+.accountSuccess {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border-radius: 10px;
+}
+
+.accountAwaiting {
+  border: 1px solid #ead7a6;
+  background: #fffaf0;
+  color: #775d1f;
+}
+
+.accountSuccess {
+  border: 1px solid #c8e5d5;
+  background: #f2fbf6;
+  color: #176a4d;
+}
+
+.accountAwaiting p,
+.accountSuccess p {
+  margin: 0;
+}
+
+.accountAwaiting button,
+.accountSuccess button {
+  justify-self: start;
+}
+
+.accountQrBlock {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #e2e1e8;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.accountQrImage {
+  display: block;
+  width: 220px;
+  height: 220px;
+  max-width: 100%;
+}
+
+.accountQrPlaceholder,
+.accountQrHint {
+  margin: 0;
+  color: #777482;
+  font-size: 12px;
+  text-align: center;
+}
+
+.accountPayLink {
+  color: #51479e;
+  font-weight: 700;
+}
+
+.accountHistory {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid #e2e1e8;
+}
+
+.accountHistory h3 {
+  margin: 0 0 10px;
+  color: #4d4961;
+  font-size: 14px;
+}
+
+.accountHistoryEmpty {
+  margin: 0;
+  color: #9895a1;
+  font-size: 12px;
+}
+
+.accountHistoryList {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.accountHistoryRow {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0eff4;
+  font-size: 12px;
+}
+
+.accountEntryType {
+  color: #5b5966;
+}
+
+.accountEntryAmount {
+  color: #176a4d;
+  font-weight: 700;
+}
+
+.accountEntryTime {
+  color: #9895a1;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 16px;
+  }
+
+  .accountHistoryRow {
+    grid-template-columns: 1fr auto;
+  }
+
+  .accountEntryTime {
+    grid-column: 1 / -1;
+  }
+}

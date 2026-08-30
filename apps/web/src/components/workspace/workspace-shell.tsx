@@ -16,6 +16,7 @@ import { apiUrl } from "@/lib/api-base";
 import { classroomApi } from "@/lib/classrooms-api";
 import type { KnowledgeBase } from "@/lib/knowledge-api";
 
+import { AccountPanel } from "./account-panel";
 import { AgentPanel, type AgentPanelCitationTarget } from "./agent-panel";
 import { KnowledgeGraphPanel } from "./knowledge-graph-panel";
 import { KnowledgeLibrarySidebar } from "./knowledge-library-sidebar";
@@ -91,6 +92,7 @@ export function WorkspaceShell({
   const [createdInviteCode, setCreatedInviteCode] = useState<string | null>(null);
   const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
   const [isAgentDrawerOpen, setIsAgentDrawerOpen] = useState(false);
+  const [isAccountPanelOpen, setIsAccountPanelOpen] = useState(false);
   const [agentCitationOpenRequest, setAgentCitationOpenRequest] =
     useState<AgentCitationOpenRequest | null>(null);
   const [vaultFilePreview, setVaultFilePreview] = useState<VaultFilePreview | null>(null);
@@ -586,6 +588,16 @@ export function WorkspaceShell({
 
   return (
     <main className={styles.shell} data-breakpoint={breakpoint} data-layout={layoutName}>
+      <div aria-label="账户与工作区设置" className={styles.workspaceAccountBar}>
+        <span className={styles.workspaceAccountContext}>当前空间：{selectedSpace.name}</span>
+        <button
+          aria-haspopup="dialog"
+          onClick={() => setIsAccountPanelOpen(true)}
+          type="button"
+        >
+          账户与充值
+        </button>
+      </div>
       <section
         aria-label="学习工作区"
         className={`${styles.desktopWorkspace} ${styles.responsiveWorkspace}`}
@@ -700,6 +712,10 @@ export function WorkspaceShell({
             portalTarget,
           )
         : null}
+
+      {isAccountPanelOpen ? (
+        <AccountPanel onClose={() => setIsAccountPanelOpen(false)} />
+      ) : null}
 
       {isSpaceDialogOpen ? (
         <div className={styles.classroomDialogBackdrop} role="presentation">

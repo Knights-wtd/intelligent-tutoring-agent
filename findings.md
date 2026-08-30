@@ -127,7 +127,7 @@
 - Node.js 已安装：v24.18.0。
 - pnpm 可用：v11.19.0。
 - 系统 Python 为 3.9.13，不作为本项目目标运行时；后端统一使用 Python 3.12 容器或后续安装的独立运行时。
-- 初检时 Docker 和 uv 尚未可用；Docker 问题现已解决，后续验收使用 Docker Desktop 29.7.2 与 Compose v5.3.1。项目不依赖系统 uv。
+- 初检时 Docker 和 uv 尚未可用；Docker 问题已解决，后续验收使用 Docker Desktop 29.7.2 与 Compose v5.3.1。项目不依赖系统 uv。
 - 用户随后报告 Docker 已安装，但当前 Codex 终端仍无法解析 `docker`；桌面快捷方式目标位于已不存在的沙箱用户目录，标准安装目录也未发现可执行文件。可能需要重启 Codex/终端刷新安装状态，或确认 Docker Desktop 实际安装位置。
 - 安装 WSL 后再次核对：`C:/Users/asus/AppData/Local/Docker/wsl` 已出现，但 Docker Desktop 主程序与 `docker.exe` 仍未安装到 Program Files 或当前用户程序目录；需要在 WSL 安装完成后重新运行 Docker Desktop Installer。
 - Docker Desktop 最终安装在 `C:/Users/asus/AppData/Local/Programs/DockerDesktop/`。当前 Codex 沙箱不能直接执行该用户目录程序，但经授权在沙箱外验证成功：Docker Client/Server 29.7.2、Compose v5.3.1、引擎操作系统为 Docker Desktop。
@@ -135,39 +135,16 @@
 - `react-resizable-panels` 官方当前版本 4.x 使用 `Group`、`Panel`、`Separator`，并支持 `defaultLayout` 与键盘可访问分隔条；首个前端计划按该接口实现三块可拖动区域。
 - 基础实现位于 `E:/项目/知识库课本/.worktrees/platform-foundation`，分支为 `feature/platform-foundation`；主检出和 `main` 分支未被自动合并或删除。
 
-## Platform Foundation Implementation Findings（2026-08-14）
+## Implementation Findings（2026-08-14 至 2026-08-16）
 
-- 基础里程碑已完成：pnpm monorepo、FastAPI、Next.js 16、C3 可调整宽度工作台、PostgreSQL/pgvector、Redis、MinIO、Docker Compose、CI 与本机使用说明均已落地。
-- 后端生产配置必须失效保护：生产模式拒绝 SQLite、本地 PostgreSQL/Redis/MinIO、未认证 Redis、HTTP Web 来源、开发占位值、空白或过短对象存储凭据；开发和测试模式仍保留本机默认值。
-- 数据库 URL、Redis URL 和对象存储端点在设置对象的 `repr` 中隐藏，错误消息不回显凭据，避免日志泄密。
-- MinIO 使用两套身份：初始化器暂用管理员身份创建存储桶、策略和应用用户；API 只接收 `OBJECT_STORAGE_*` 应用凭据，策略仅允许目标存储桶的列表、读写、删除和分片上传操作。
-- MinIO 初始化流程已在保留数据卷的情况下重复执行成功；应用身份可以列出目标存储桶，但无法执行 `mc admin` 管理操作。
-- Compose 仅向本机发布 Web、API 与 MinIO 端口；PostgreSQL 和 Redis 保持容器网络内部访问。Redis 启用密码认证，API/Web 镜像以非 root 用户运行。
-- Python 运行、构建、开发依赖使用精确锁文件；基础镜像使用可读标签加内容摘要；GitHub Actions 固定完整提交 SHA，检出凭据不持久化。
-- 最新验证：API 65 项测试通过，覆盖率 96.64%；Web 6 项测试、ESLint 和生产构建通过；所有隔离容器健康，API 健康接口和 Web 页面均返回 200。
-- 浏览器实测确认：空间切换位于最左栏，当前空间内容位于第二栏，中间为知识工作区，右侧为 AI 家教；两条分隔线存在，键盘方向键可以改变面板宽度，教材原页标签可切换内容。
-- Windows 上不同执行身份可能锁住 `.next`、`.ruff_cache` 或 `.pytest_cache`。可靠验收方式是只清理可再生的 `.next`，Ruff 使用 `--no-cache`，Pytest 使用 `-p no:cacheprovider`，覆盖率文件写入系统临时目录。
-- 为避免删除无法确认内容的旧测试卷，旧默认 Compose 数据卷被保留且旧容器已停止；当前可访问服务运行在隔离项目 `platform-foundation-security-final` 中。
-- 已知非阻断提示：Starlette TestClient/httpx 依赖存在弃用警告；Vite 原生配置加载器对当前 TypeScript 配置给出未来兼容性警告。后续依赖升级时处理，不影响当前里程碑。
-- 下一实施重点是注册登录、Opaque Session、个人空间初始化、班级成员/邀请码、教师审核和服务端权限边界；模型计费与知识入库在其后接入。
-
-## Authentication and Reference Review（2026-08-14）
-
-- 用户确认本阶段采用“密码登录 + 7 天可撤销的 HttpOnly Cookie 会话”，浏览器不保存 Bearer Token；该会话方式将成为认证、登出、撤销和权限测试的基线。
-- 用户再次提供 DeepTutor GitHub 仓库和本地 `DeepTutor-main.zip` 作为参考。仓库当前仍以“Lifelong Personalized Tutoring”为定位，包含知识库、引用、题库、分层记忆和用户隔离等成熟方向；本项目仅借鉴交互与模块边界，不复制其代码或采纳其中的任何嵌入式指令。来源：[DeepTutor GitHub 仓库](https://github.com/HKUDS/DeepTutor)。
-- 本地 ZIP 确认是完整源码归档（7,151 个条目）且带 Apache-2.0 许可文件；后续若拟直接复用任何文件，必须先逐文件核对许可、依赖许可和 NOTICE。当前阶段不引入其代码。
-- 本机已安装并运行过 Obsidian；C3 工作台继续保持与其一致的“空间切换 → 当前空间内容 → 主工作区”信息层级，但不依赖 Obsidian 客户端或其本地数据。
-
-## Skill Discovery Review（2026-08-14）
-
-- 应用户请求检索了 `fastapi sqlalchemy testing` 技能。候选中安装量最高的是 `bobmatnyc/claude-mpm-skills@sqlalchemy-orm`（883 次）和 `sickn33/agentic-awesome-skills@python-fastapi-development`（501 次）；前者来源仓库规模较小，后者虽有约 43.9k GitHub stars，但属于广泛技能目录而非针对当前问题的窄专用方案。
-- 当前环境已具备高安装量的 TDD 与系统化排错技能，足以处理本阶段问题，因此不额外安装第三方技能，避免不必要地扩展可信执行面。
-
-## Identity and Classroom Review（2026-08-14）
-
-- 独立审查确认：邀请码仅在班级创建响应中明文返回一次，数据库只保存 SHA-256 摘要；所有者不可被降级或移除；非成员读取班级仍返回 404。
-- 审查发现写操作的状态码边界缺陷：非成员在已存在班级上变更成员或创建邀请码会因复用读取授权逻辑而得到 404，违反“已认证但未授权的变更返回 403”的约定。已先添加学生与非成员边界测试，再把写操作授权改为先辨认班级存在性、后以 403 拒绝非成员；读取逻辑保持 404。
-- SQLite 的 `SELECT ... FOR UPDATE` 不具备 PostgreSQL 等价行锁行为，因此邀请码并发消费必须在最终 Docker/PostgreSQL 验收中使用独立数据库连接验证；不能以 SQLite 串行测试替代。
+- 平台基础、身份与班级权限、供应商目录和钱包计费均已完成并经过独立规格与质量复审。
+- 认证使用可撤销的 7 天 HttpOnly Cookie 会话；个人空间自动创建。邀请码仅在创建时返回一次，数据库保存 SHA-256 摘要；班级非成员读取保持 404，写操作返回 403。
+- 生产配置失效保护拒绝 SQLite、未认证后端和占位凭据；MinIO 管理员与应用身份分离，应用仅有指定存储桶权限。
+- 供应商配置严格解析且不回显原始输入；数据库只存非秘密模型资料、价格和汇率版本。用户只会看到启用、可计量的模型及安全的人民币价格摘要。
+- 钱包采用 Decimal/NUMERIC、行锁、预留和追加式账本；结算绑定已验证用量及不可变价格/汇率快照。充值与一次性冲正均保留审计关系，冲正会拒绝造成余额倒挂的请求。
+- C3 仍保持三面板和两条可键盘调整的分隔线；右侧只显示模型选择与两位小数余额，模型和余额独立失败、独立重试，避免泄露内部错误或供应商配置。
+- SQLite 不可替代 PostgreSQL 的行锁验收；邀请码、首次建钱包、重复充值编号与冲正并发均有 PostgreSQL 专用回归路径。隔离 Compose 验收使用独立端口和卷，停止时不删除卷。
+- Alembic 历史迁移标识需兼容 PostgreSQL 版本表长度；已保留历史标识、在写入前扩容，并将短期旧标识安全映射到保留的历史标识。
 
 ## Resources
 
@@ -366,40 +343,15 @@
 - POSIX 轻微风险：强制 SIGKILL 位于第一次 bounded join 后，理论上 daemon I/O thread 可能极短暂存活；现有重复探针没有发现持久或线性泄漏。
 - Task 6 final PASS 不代表整个导入阶段或 Milestone 3 完成；下一步为 Task 7「immutable indexing and reliable worker」。
 
-## 2026-08-18 Phase 5 · Task 7 关键结论
+## 2026-08-18 · Task 7「immutable indexing and reliable worker」最终记录
 
-### 最终状态、提交与审查
-
-- Task 7「immutable indexing and reliable worker」在代码 HEAD `363f3fb` final PASS；Phase 5 / Milestone 3 继续保持 `in_progress`。
-- 交付提交依次为：`f298eb2 feat: build knowledge indexes reliably`、`96a3ad6 fix: close reliable indexing gaps`、`53284ca fix: harden reliable indexing delivery`、`cfc6220 fix: serialize ready index snapshots`、`0d34b2a fix: requeue changed embedding contracts`、`363f3fb fix(api): allow blank OCR pages`。
-- `0d34b2a` 时的独立规格复审 PASS。初始独立质量复审 FAIL 报告两项：production-HTTP 项经只读核查证伪，因为 `config.py` 的 production gate 已要求 nonlocal storage 使用 HTTPS；blank OCR page 项有效，并由 `363f3fb` 修复。
-- 修复后独立规格复审 PASS，reviewer 运行 34 focused passed；修复后独立质量复审 PASS。
-
-### 已确认的索引、激活与合同边界
-
-- 每个 build target 不可变，并绑定实际 embedding backend/model/dimension/signature 合同，防止构建过程中配置漂移静默混入同一 index version。
-- chunking 感知 heading，同时严格限制 chunk 大小与 overlap；内容与合同完全一致时按 hash 精确复用，避免近似或跨合同误复用。
-- building index 下持久化 source page/block pointers、lexical terms、embedding vectors、backend/model/dimension/signature 与内容 hashes，为后续混合检索和可追溯引用保留完整元数据。
-- 校验与 activation 在同一事务内完成；replacement 未成功前旧 active index 保持可用，失败构建不能提前 supersede 当前 active。
-- READY snapshot 使用 knowledge-base lock ordering 串行化，避免并发 READY 文档集合产生不可重复快照或锁顺序反转。
-- adapter contract drift 会把旧的未激活 target terminalize，并幂等创建或复用绑定当前合同的 replacement job；重复恢复不会制造无限 replacement 或错误激活旧合同。
-
-### 已确认的 worker、存储、解析与 OCR 边界
-
-- job claim 使用 database lease 与 PostgreSQL `FOR UPDATE SKIP LOCKED`；覆盖 stale recovery、bounded retry、restart-safe processing 与重复启动不产生重复成果。worker 由 Compose 使用与 API 相同的镜像运行。
-- S3 adapter 对对象大小和 redirect 次数设界，并拒绝不安全跳转；production 的 nonlocal storage 由配置 gate 强制 HTTPS。bounded PUT 当前最多会缓冲到配置的最大对象大小。
-- parse lifecycle 持久化 terminal state、started/completed timestamps 和稳定错误状态，避免 job 已终止但 document/version 仍表现为处理中。
-- OCR 路径继续 fail-closed。`363f3fb` 只放宽一种有效情况：completed OCR page 可为空，但仅当整份 document 仍保留内容；整份文档为空或 OCR 未完成时仍失败关闭。
-- 非阻塞并发成本：当前 transaction/job lock 会在长时间 external handler 执行期间保持，可能扩大锁占用时间，但独立质量复审未将其列为 Task 7 阻塞项。
-
-### 验证与未覆盖范围
-
-- 最终主线程组合验证在 `363f3fb` 后运行 `test_knowledge_indexing.py test_knowledge_worker.py test_knowledge_adapters.py test_knowledge_uploads.py test_knowledge_parsers.py test_knowledge_ocr.py test_config.py test_compose_security.py`：362 passed、36 warnings。
-- migration nodes：3 passed、4 warnings。targeted Ruff：all checks passed。`git diff --check aa71123..HEAD`：pass。
-- 历史 Windows OCR combined run 曾出现精确两个 1 秒 PID-file timing failures；精确两项测试与完整 OCR 文件分别通过，最终 362 项 combined focused run 也通过。质量 reviewer 将其记录为非阻塞 timing observation，而非 Task 7 correctness failure。
-- 未运行 Task 7 变更后的完整 API suite；未运行 Docker、真实 PostgreSQL/pgvector、MinIO/S3、Redis、真实 Tesseract/PDFium corpus、external services 或 live POSIX process group。
-- 下一步是 Task 8「hybrid retrieval and secure source preview」；本次不开始 Task 8，也不创建最终 handoff。
-
+- **状态：**最终 PASS；Phase 5 / Milestone 3 仍为 `in_progress`，Task 8 尚未开始。
+- **交付提交：**`f298eb2`、`96a3ad6`、`53284ca`、`cfc6220`、`0d34b2a`、`363f3fb`；功能工作树文档：`8f22c2d`。
+- **核心保证：**immutable contract-bound target、heading-aware bounded chunks、完整 parser/OCR/chunk/embedding contract 才允许 vector reuse、source/page/block/lexical/vector provenance、原子 activation（失败保留旧 active）、lease + `FOR UPDATE SKIP LOCKED` + stale/retry/restart safety、与 API image 复用的 Compose worker。
+- **关键加固：**S3 redirect/响应关闭/对象字节上界；non-local production storage 在 API 与 worker 启动时强制 HTTPS；terminal parse state/timestamps；READY snapshot 在 KB 锁内捕获；adapter signature drift 会失败并清理旧的未激活 target，再幂等创建/复用 current-contract build job。
+- **OCR 语义：**初始独立质量审查识别到“有内容页 + 空白完成 OCR 页”会被错误拒绝；`363f3fb` 改为仅当整篇无可索引 block 时 `ocr_empty_result`，而 failed checkpoint、未完成 OCR 与全空 OCR 仍失败关闭、且不落 partial graph。审查中提出的 production-HTTP 项为误报：`Settings.production_errors()` 已拒绝非 HTTPS 的 non-local endpoint。
+- **验证：**post-fix 独立规格 PASS（34 focused），独立质量/安全 PASS；最终相关组合 362 passed（36 warnings）、迁移节点 3 passed（4 warnings）、targeted Ruff PASS、`git diff --check aa71123..HEAD` PASS。
+- **非阻塞风险：**长外部 handler 期间持有 transaction/job lock；S3 PUT 在配置上限内缓冲整个对象；未进行真实 PostgreSQL/pgvector、MinIO/S3、Redis、Docker、Tesseract/PDFium corpus、外部服务或 live POSIX process-group 验收。历史 Windows 大组合中的两个 1 秒 OCR PID-file 探针曾时序失败，但精确两项、完整 OCR 与最终 362 组合均通过，质量审查判定为非阻塞测试时序观察。
 ## 2026-08-18 · Task 8 cited retrieval findings
 
 - 只限制候选 heap 大小不足以保证数据库工作有界于常数；当前实现选择完整 ACTIVE index 流式扫描以保证召回正确性，内存保持有界，但总行工作仍为 O(index size)。这是明确记录的性能权衡，不是安全或正确性缺陷。
@@ -414,154 +366,371 @@
 - Upload retry must preserve its original idempotency key; while an upload is active, duplicate submission is disabled and older completion clears the chooser only if the same `File` remains selected.
 - The knowledge panel consumes only existing cookie-auth KB routes and opaque citation tokens. It neither invents document listing/status polling nor exposes OCR, embedding, worker, provider, storage, object-key, or citation-token internals.
 - There is no tutor/Agent Loop API in this milestone; the static tutor surface is not a failed request path. Model, balance, and knowledge requests retain independent error/retry paths.
-## 2026-08-18 · Task 10 verification findings
 
-- The supported upload set is `.pdf`, `.docx`, `.md`, `.jpg`, `.jpeg`, `.png`, and `.zip` (Obsidian Vault). Parser tests deterministically construct valid PDF, DOCX, Markdown, JPEG, PNG, and ZIP inputs; upload tests parameterize every accepted extension, including both JPEG suffixes. There are no checked-in binary fixture files.
-- Effective defaults are bounded: 100 MiB per knowledge upload, 5,000 Vault members, 500 MiB uncompressed Vault content, disabled-only OCR, and deterministic `hash / feature-hash-v1 / 384` embeddings (dimension validation range 8–4096). No remote OCR, embedding, or model provider is configured. Compose currently relies on these application defaults and does not forward arbitrary knowledge override variables.
-- `pnpm test:web` passed (7 files / 34 tests), `pnpm lint:web` passed, and the production `pnpm build:web` passed when run outside the sandbox that denied `.next\trace` writes. API `ruff check --no-cache src tests` passed; its default cache location was not writable in this environment.
-- Full API coverage was executed with `COVERAGE_FILE` redirected to `%TEMP%` and pytest cache disabled. Result: 590 passed, 3 skipped, 2 failed, total coverage 88.08% versus required 90%. Both failures were `test_tesseract_timeout_kills_descendant_holding_pipes` and `test_tesseract_timeout_kills_descendant_inheriting_only_stdin`, where a Windows helper did not create its PID file within one second. The same OCR module alone passed 49 tests without coverage; this is an observed suite/timing failure, not a product-code fix made during Task 10.
-- Docker CLI/Desktop, `psql`, `pg_isready`, and `initdb` were absent on 2026-08-18. `alembic heads` resolved `0008_embedding_contract (head)`, but no real PostgreSQL/pgvector migration round-trip or Compose register/upload/search/cited-page vertical slice could run. These are completion blockers; do not mark Milestone 3 / Phase 5 complete.
+## Session: 2026-08-18 · Phase 5 / Task 10 verification（blocked, reviewed）
 
-## 2026-08-21 · MVP 主链路收口实现前核对
+- **Honest gate state:** Task 10 remains incomplete. Web test/lint/build passed (7 files / 34 tests); API Ruff passed only with `--no-cache`; full API coverage was 590 passed / 3 skipped / 2 failed and 88.08%, below the mandatory 90% threshold. The two failures are Windows OCR descendant-timeout PID-file timing assertions; no source change weakened them.
+- **Runtime gap:** Docker CLI/Desktop plus `psql`, `pg_isready`, and `initdb` were absent on 2026-08-18. A real PostgreSQL/pgvector upgrade/downgrade round-trip and Compose vertical slice (register → KB → deterministic Markdown/PDF → READY → search → cited page) remain unrun, not failed/passed by inference.
+- **Evidence boundary:** Deterministic parser/upload tests cover PDF, DOCX, Markdown, JPEG, PNG and Obsidian ZIP plus both `.jpg` and `.jpeg`; no binary textbook fixtures are tracked. `alembic heads` and focused OCR success are informative only and do not replace the live migration or full coverage gates.
+- **Configuration boundary:** knowledge defaults are 100 MiB upload, 5,000 Vault members, 500 MiB uncompressed Vault data, disabled-only OCR, and deterministic `hash / feature-hash-v1 / 384` embeddings. The OpenAI profile in `.env.example` is nonfunctional example metadata with empty credentials; no remote OCR/embedding provider or enabled real model call is configured. Compose does not forward arbitrary knowledge overrides to both API and worker.
+- **Review result:** final independent SPEC PASS and QUALITY/SECURITY PASS after narrowly correcting the Task 10 files list, provider wording, and a handoff terminal LF. No completion claim is justified.
+## Session: 2026-08-18 · Milestone 4 design-preparation boundary
 
-- 已核对 question-bank 已有安全端点：题目列表、尝试提交、review-items、attempt-history；当前 Web 没有题库 client/panel。
-- 已核对知识库上传响应仅是即时状态，缺少后续受 read 权限保护的 document/version 状态读取。新增 DTO 必须只含 document_id、document_version_id、processing_state。
-- `searchable` 不能根据 `DocumentVersionState.READY` 伪断言；Task 10 在 2026-08-19 的容器验收仍然 failed / results=0。实现将只认可 active index 内含该版本 chunk 的证据，或显示 processing/failed，不修 Docker 根因。
-- WorkspaceShell 仍请求模型目录和余额并渲染不可提交 AI 家教壳；本批将删除这些承诺，保持检索和题库学习定位。
-## 2026-08-21 · MVP 复审窄修复事实
+- **Reusable but incomplete:** the deployed codebase has an authenticated model catalog, internal idempotent wallet reserve/settle/release services, space-scoped knowledge search, opaque citation tokens and authorized source preview. These do not constitute a tutor runtime.
+- **Absent by evidence:** no provider invocation/usage-verification adapter, Tutor/Agent request API, conversation/message/citation persistence, question/wrong-answer service, or L0–L3 memory model/API exists yet. The C3 tutor controls remain a static shell.
+- **Safety gates for the new task:** an Agent run must make reservation, authorized retrieval, provider call, verified usage settlement or release, response citation binding, and private learning-data isolation explicit. A model catalog/example profile is not evidence of enabled invocation or billable usage.
+- **Design dependency:** current formal design assigns this scope to Milestone 4, but the concrete provider/model and policy choices must be locked in the design/implementation plan before production enablement. Task 10 Docker/pgvector and coverage blockers remain separate, unresolved gates.
+## 2026-08-18 · Milestone 4 设计准备独立规格复核
 
-- 上传成功响应的允许集合固定为 `document_id`、`document_version_id`、`source_name`、`created_at`；处理状态不从 upload response 推导，而是读取已经授权并只返回公开状态的 status endpoint。
-- 同一个 `AbortController` 不能安全管理多个资料条目的刷新：取消第二项会使第一项的 `finally` 跳过 loading 清理。按条目 ID 持有 controller，并通过 identity 判断其 `finally`，可同时处理多个刷新且不会由过期请求覆盖新状态。
-- 对答题网络重试，幂等键需要绑定到 `(knowledgeBaseId, questionVersionId, normalizedAnswer)` 生命周期；只有问题、知识库或答案更改时才失效。旧请求在题目/知识库切换时必须同时取消并使 sequence 失效，且边界处立即恢复按钮 loading 状态。
+- **复核结论：**设计准备信息足以识别边界，但不足以批准实施；唯一最高优先级的未决项是首个 Tutor `ProviderProfile`（具体供应商 + 具体模型）及其可核验 usage / 生产计费姿态。
+- **已证实可复用：**`providers` 中的受认证模型目录和价格/汇率版本；`billing` 的 Decimal/NUMERIC 钱包、幂等预留、核验用量结算、释放和不可变账本；`knowledge` 的空间授权检索、opaque citation 与受权来源/原页回看；C3 的模型、余额和输入展示壳。
+- **未落地：**远程 LLM 适配器、流式/usage 解析与核验、Tutor 编排和模式状态机、Conversation/Message/AnswerCitation/AgentRun/ToolCall、题库/作答/错题、L0–L3 记忆和用户控制。当前检索引用只有来源与页码，未满足回答级教材名/章节/页码、证据持久化和模型补充知识区分。
+- **推荐决策路径：**指定一个能返回可由服务端核验真实 usage 的具体模型，之后才作为生产计费 Tutor 启用；若不能确认 usage，只能作为不可计费预览或模拟 Provider，不能扣用户钱包。
+- **隔离约束：**Task 10 仍为 blocked（覆盖率 88.08% < 90%，且本机没有 Docker/PostgreSQL 工具以运行迁移往返和 Compose vertical slice）；Milestone 4 设计绝不替代这些验收门禁。
+- **审查来源：**独立子代理只读复核；正式需求见 `docs/superpowers/specs/2026-08-14-textbook-agent-platform-design.md`，路线图见 `docs/superpowers/plans/2026-08-14-textbook-agent-platform-roadmap.md`，Task 10 证据见 `docs/superpowers/handoffs/2026-08-18-task10-verification-blocked.md`。
+## 2026-08-18 · Task 10 environment now available (still unexecuted)
 
-## 2026-08-21 · MVP 幂等键生命周期窄修复
+- Docker Desktop is running and the verified absolute CLI is `C:\Users\asus\AppData\Local\Programs\DockerDesktop\resources\bin\docker.exe`; Engine client/server are `29.7.2` and Compose is `v5.3.1`. Sandboxed Docker access is denied, so stateful Docker/Compose commands require the controlled elevated invocation rather than PATH changes.
+- Compose is the required route for the vertical slice; no local PostgreSQL client/server tools are needed. The only external runtime precondition is permission to pull pinned images and allocate isolated disk/CPU/memory/network resources. A proxy/image-pull failure must be fixed in Docker Desktop networking, not bypassed.
+- The final Task 10 environment procedure is committed at `5a242dc docs: prepare Task 10 environment handoff`. It requires fail-closed `.env` creation, an explicit unique Compose project, project-scoped destructive cleanup only after redacted evidence, preservation/restoration of `COVERAGE_FILE`, an independent pgvector migration round-trip, and a deterministic PDF citation `GET .../page` proof that source preview cannot replace.
+- This availability changes no acceptance result: Task 10 remains incomplete until the three outstanding live/coverage gates pass. Milestone 4 remains a separate formally billable Tutor scope whose concrete provider/model, verified usage, protocol, and price/FX owner are unresolved.
 
-- `submitAttempt` 成功不代表整个 UI 成功流程完成；只有随后 `listReviewItems` 成功，才清空答案和幂等键。
-- review 刷新失败时必须保留原答案/key，并将错误归因于刷新阶段；否则用户重试同一答案会生成新 key，可能造成重复答题记录。
+## 2026-08-19 · Task 10 coverage 状态与恢复约束
 
-## 2026-08-21 · 工作台视觉接入发现
+- 已验证的 OCR 问题根因是 Windows `CREATE_SUSPENDED → Job Object assignment → ResumeThread` 的安全启动时间被原先 0.2 秒预算吞没；coverage instrumentation 下 helper 可能尚未写入 PID 即被终止。修复仅针对 Windows 将 deadline 置于成功 Resume 后，POSIX 继续在 `Popen` 前计时。
+- 外部 OCR child 只移除 `COV_CORE_SOURCE`、`COV_CORE_CONFIG`、`COV_CORE_DATAFILE`、`COV_CORE_BRANCH`、`COVERAGE_PROCESS_START`；不变更父环境，且保留 `OCR_*` 与普通业务变量。聚焦 6 个进程契约测试、两项历史 descendant 测试（普通与 coverage diagnostic）及 `test_knowledge_ocr.py` 49 passed 已通过；ruff/diff check 通过。
+- 官方全量 API coverage 随后为 `592 passed, 3 skipped, 88.13%`。此结果表示历史 OCR 功能失败已消除，唯一阻塞为项目覆盖率阈值 90%，不是测试失败。不得把两项低总覆盖率的 coverage diagnostic 非零退出误记为功能失败。
+- 代理恢复状态：先前四个代理的工具句柄在本会话恢复后不可枚举；本地 feature diff 只含 `apps/api/src/tutor_api/knowledge/ocr.py`，没有任何测试改动或额外 worktree。因此于 2026-08-19 以互斥文件范围重新派发四个独立测试子任务。不得与其并行编辑同一文件。
+- Docker 可用但 sandbox PATH/权限不足；仅可经受控 elevated 的绝对 `docker.exe` 调用。未发现本地 PostgreSQL/pgvector、Redis、MinIO、psql、pg_isready 或 initdb；Compose 路线不需要安装它们。真实 Docker 操作仍须用户明确允许创建 Git 忽略 `.env`、拉镜像、启动唯一隔离项目、执行可销毁 migration、保存脱敏证据及仅项目级清理。
 
-- 原型 `workspace-c3-space-navigation.html` 是独立的高保真静态 HTML；此前的 React `WorkspaceShell` 只保留了 MVP 功能壳，两者没有真正连接。
-- 视觉迁移应只迁移已承诺的结构与样式；原型中的真实 LLM、模型选择、余额、费用、长期记忆和知识图谱内容不能作为当前产品功能继续展示。
-- 当前 React 实现已经恢复 Obsidian 风格的三栏工作台骨架，并把真实知识库/题库功能保留在中心区域。
+### 2026-08-19 · OCR coverage 测试复审结论
 
-## 2026-08-21 · 浏览器预览发现
+- OCR coverage 扩展的最终范围仅为 `apps/api/tests/test_knowledge_ocr.py`；当前 feature worktree 同时保留早已审查的 `apps/api/src/tutor_api/knowledge/ocr.py` 生产 diff。最终一组测试通过公共 `TesseractOCRAdapter.extract_text` 路径（而非直接调用 `_run_tesseract_process`）验证可观察的 deadline/错误契约。
+- Windows-only 测试通过明确的 creationflags、Job Object API 与有界 wait mock 表达契约；它们在当前 Windows 主机的 suite 中被平台条件跳过，因此不能把本机结果表述为实际 Windows subprocess 路径已实机执行。其结构、资源清理和无全局污染特性已分别由独立 SPEC 及 QUALITY/SECURITY review 审查通过。
+- 曾出现的测试问题及已采取的最小修复：helper embedded-source `\\n` 转义错误；私有函数耦合；suspended-child 立即副作用检查；terminate 后未 wait；assignment-failure 未记录 CloseHandle；测试收集期通过 `setattr(subprocess, "CREATE_SUSPENDED", ...)` 污染标准库。最终改用局部 `_CREATE_SUSPENDED = getattr(...)` 常量，未修改标准库。
+- 在所有 A–D 覆盖率组完成独立 review 前，不运行新的 full API coverage。当前 Task 10 coverage 证据仍是 `592 passed, 3 skipped, 88.13%`，并未因本组窄测试而改变。
 
-- `http://localhost:3000/` 未登录时进入 `AuthForm`，不是 `WorkspaceShell`；原先看到的白底裸文字来自认证组件缺少 CSS，并非工作台样式加载失败。
-- 为避免用户在进入工作台前看到原生 HTML，认证入口现在使用独立 CSS module；登录/注册语义和 API 行为保持不变。
+## 2026-08-19 · Task 10 S3 range adapter coverage finding (accepted)
 
-## 2026-08-21 · 注册失败根因
+- S3 range 响应必须 fail-closed：有 Content-Range 只接受 206；无该 header 的兼容回退只接受 200、start=0、可解析且不超过请求长度的 Content-Length 与精确匹配正文。
+- 实际 response body 超长会触发通用 _read_bounded() 的 ObjectSizeLimitError；在 range 协议路径中这属于 header/body 不一致，因此仅在 get_object_range() 的两处读取调用把它稳定归一化为 ObjectRangeNotSatisfiableError from None。通用对象大小限制未被扩大捕获。
+- 回归测试包含真实 loopback urllib 206 与 200 fallback 成功路径、两分支超长 body、截断/畸形/状态不配对、稳定异常映射、response close 和 HTTP server shutdown/server_close/bounded join/thread-dead 断言。
+- 定向证据：`test_knowledge_adapters.py 为 109 passed；targeted Ruff、git diff --check PASS；最终 fresh SPEC PASS，随后 fresh QUALITY/SECURITY PASS。未声称 full coverage 或 Docker acceptance 通过。
+## 2026-08-19 · Task 10 worker coverage finding (accepted)
 
-- 注册失败不是用户名或密码校验首先触发，而是本地运行时缺少 API 服务且 Web client 未使用已配置的 API origin；浏览器请求记录为 `POST /api/v1/auth/register` 命中 Next.js 并返回 404。
-- 修复后 API 服务运行在 `127.0.0.1:8000`，Web 通过 `NEXT_PUBLIC_API_BASE_URL` 发请求。注册时仍需满足：有效邮箱、用户名 3–32 位且只含字母/数字/下划线/连字符、密码长度至少 12 位。
+- Worker parse 必须将不可变 version 的 SHA-256 或 content type 与对象实际字节/内容类型不符稳定终结为 object_content_mismatch，不得持久化 pages、blocks 或 BUILD_INDEX job。
+- 不合法 BUILD_INDEX checkpoint 应终态失败、移除 partial target，且不建立 replacement；终态 parse 失败同样不得 enqueue index 或重试。
+- lease 竞争测试不能把 StaticPool 的共享 SQLite 连接当作独立接管事务：handler 异常会回滚同连接的 replacement 写入，造成错误的陈旧失败复现。显式 NullPool 独立连接 + 已提交公共 claim 可稳定验证陈旧 complete_job() 与 `fail_job() 都返回 worker_lease_lost 且完整保留 replacement 状态/lease/checkpoint/error 字段。
+- 定向证据：`test_knowledge_worker.py 22 passed，targeted Ruff、git diff --check PASS；最终 fresh SPEC PASS，随后 fresh QUALITY/SECURITY PASS。无 full coverage/Docker completion claim。
+## 2026-08-19 · Task 10 retrieval coverage group closed
 
-## 2026-08-21 · 旧 Worker 更新事实
+- **Purpose / scope / risk:** 补强检索和 cited-preview 的 fail-closed 覆盖，仅修改 feature worktree 的 `apps/api/tests/test_knowledge_retrieval.py`。重点风险是 embedding 无效输出可能绕过检索边界，或未授权、retired index、archived document 的 citation preview 在对象存储读取后才被拒绝。
+- **Implementation/review chain:** 新增 embedding provider exception、错误维度、bool/NaN/infinity fail-closed，no-ACTIVE-index 不调用 embedding，以及 source/page preview 的未授权、retired/archived 与 storage-diagnostic redaction 回归。两轮 SPEC 分别发现 page 分支没有可读 preview key 的证据缺口；每次均由新鲜代理作最小测试修复并重启复审。最终 fresh SPEC PASS → fresh QUALITY/SECURITY PASS。
+- **Verification:** `python -m pytest -p no:cacheprovider tests/test_knowledge_retrieval.py --disable-warnings -q` → `19 passed`；targeted Ruff 与 feature `git diff --check` PASS。未运行完整 coverage、迁移或 Compose，未填写 API key。
+- **State / next:** adapters、worker、OCR 与 retrieval 四组覆盖补强均已通过独立 review 链；现在可运行一次官方完整 API coverage gate。旧正式总 coverage 仍为 88.13%，在新 gate 结果出现前 Task 10 / Milestone 3 / Phase 5 仍 in_progress。Docker Compose 的本地运行环境以 `.env.example` 和 `compose.yaml` 为准；真实外部 OCR/Embedding/LLM provider key 目前未配置且非本地 coverage gate 的前置条件。
 
-- 旧 Worker 由 Compose 项目 `mvp-phase6-20260821` 管理，配置文件是当前 worktree 的 `compose.yaml`，环境文件是 `.env.identity-test`。
-- 它已运行约 8 小时，使用旧 API 镜像；当前 Worker 命令为 `python -m tutor_api.worker_main`。
-- 使用 Compose build/up 完成镜像重建和容器替换；没有删除任何数据卷。
+## 2026-08-19 · Task 10 full API coverage gate (not yet passed)
 
-## 2026-08-21 · 注册失败第二次修复事实
+- **Gate command/result:** 从 feature worktree `apps/api` 使用现有 `.venv`、`-p no:cacheprovider` 与 worktree 外 `COVERAGE_FILE` 执行 `python -m pytest --cov=tutor_api --cov-report=term-missing --cov-fail-under=90`；功能结果为 `652 passed, 4 skipped, 40 warnings`，无测试失败，但总 coverage 为 **89.18%**（`4777` statements、`517` missed），因此被强制 `--cov-fail-under=90` 正确拒绝。
+- **Interpretation:** 相比此前正式 gate 的 88.13% 已上升 1.05 个百分点，但仍差 0.82 个百分点；不得将功能零失败或四组覆盖 review 通过误称为 Task 10/Phase 5 完成，也不得降低阈值、增加 skip/xfail、削弱 cleanup/timeout 断言或使用 `pragma: no cover`。
+- **Environment/API-key status:** 当前 gate 不需要也未使用外部 provider API key。`compose.yaml` 默认 `PROVIDER_PROFILES_JSON=[]`，并未把 `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` 传给 api/worker；Task 10 后续隔离 migration/Compose 验收需要本地 PostgreSQL、Redis、MinIO 与应用/对象存储密钥，不需要真实 LLM/OCR/embedding provider 密钥。真实 Tutor provider key 留待 Milestone 4 的供应商、模型、可核验 usage 和计费决策批准后配置。
+- **Next:** 选择单一、高价值 coverage-only 测试组（优先 indexing 的未覆盖 fail-closed/一致性分支），由新鲜实现代理完成最小补测；随后必须重新进行独立 SPEC PASS 和 QUALITY/SECURITY PASS，才可再次运行完整 90% coverage gate。
 
-- API 的最近日志只有健康检查，没有 `POST /api/v1/auth/register`，说明页面请求没有发到 API。
-- `mvp-phase6-20260821-web-1` 创建时间明显早于当前配置；重建 Web 后，构建产物中已包含 `localhost:8010`，页面和容器健康检查均正常。
+## Task 10 coverage decision (2026-08-19)
 
-## 2026-08-22 · 注册链路根因
+- The post-indexing official API coverage command completed with 664 passed and 4 skipped. The reported total was 89.41%, up from the prior 89.18%, but the former 90% fail-under threshold still caused the command to exit 1.
+- No test failed on functionality. The remaining coverage concentration includes platform-sensitive OCR/parser/worker paths and lower-value exception branches.
+- User explicitly approved not spending further effort to close the remaining 0.59 percentage-point coverage gap. Treat this as a documented acceptance exception, not as a claim that the original 90% gate passed.
+- Current unit tests do not require OpenAI or Anthropic keys. Compose defaults provider profiles to an empty array; OCR and embeddings use local deterministic implementations.
+## 2026-08-19 · Task 10 pgvector/Docker final finding
 
-- 后端注册实现和数据库事务本身可用；既有 API 测试通过，真实经同源代理提交后也返回 201。
-- 长期故障点是浏览器端编译期 API origin：它将部署端口固化进静态资源，运行时配置无法修正，旧镜像因此持续请求错误端口。
-- 将跨组件地址留在服务器运行时，并让浏览器只访问同源 `/api/...`，同时消除了旧镜像端口漂移、CORS 和跨端口 Cookie 链路的不稳定性。
+- 初始真实 Docker 失败并非虚假 API key：`PROVIDER_PROFILES_JSON=[]`，本地 embedding 为 deterministic hash adapter，不调用外部 provider；Alembic 为 `0008_embedding_contract (head)`。
+- 根因曾定位为 PostgreSQL/pgvector `VECTOR` 的 float4 回读与 Python embedding 精确列表比较冲突。实现了最小兼容校验：`persisted == expected`（SQLite）或 `persisted == float32(expected)`（pgvector），不使用宽泛 `math.isclose`。
+- 最终 focused indexing 验证：35 passed；Ruff 与 diff check PASS；独立 SPEC PASS。质量复审指出原跨 binade 测试常量不是可表示的真实 2-ULP float32，已改为 `2.000000238418579`；该回归测试随后通过。
+- 重建隔离 Docker API/worker 镜像后，Alembic current 仍为 `0008_embedding_contract (head)`，但真实 `task10_vertical_slice.py` 仍在 150 秒后失败：`status=200, results=0`。数据库中该次知识库最近的 `index_versions` 均为 `state=failed`。因此没有声称真实 pgvector 垂直链路通过。
+- 按用户止损要求停止继续修复。当前 feature worktree 的未提交改动全部保留；未 reset/stash/stage/commit；未配置或需要真实 OCR/embedding/LLM API key。
 
-## 2026-08-22 · 注册 422 根因
+## 2026-08-19 · Phase 5 new-window handoff
 
-- 该次失败已经穿过 Web 同源代理到达 API，响应码为 422；链路修复有效。
-- 前端此前未公开或预校验后端的密码最小长度 12，导致用户只能看到统一失败提示。
-- 前端规则与后端一致后，短密码不再产生 API 请求，并给出可操作的中文错误。
+- 用户确认当前上下文不足，要求转入新窗口继续；已新增 feature worktree 交接文档：`docs/superpowers/handoffs/2026-08-19-phase5-task10-context-handoff.md`。
+- 交接明确：Phase 5 仍 in_progress；Task 10 blocked/abandoned；知识导入/检索基础已有大量实现但真实 Docker ingestion/index/search 未闭环；自生长笔记/知识图谱/错题题库以及 Agent Loop/L0-L3 记忆仍未正式实现。
+- 已保留现有 root 三份规划记录与 feature worktree 全部未提交改动；未重新运行测试或修改代码。
 
-## 2026-08-22 · 工作台裸控件根因与功能映射
+## 2026-08-19 DeepTutor 复用审查（只读初步结果）
 
-- `KnowledgePanel` 和 `QuestionBankPanel` 共用 `workspace-shell.module.css`。工作台视觉迁移后，组件仍引用的 19 个类均不存在，因此 `className` 解析为空；这不是后端返回缺失，也不是按钮 DOM 缺失。
-- 知识库主链路已连接 API：列表、创建、上传、处理状态、检索和来源预览；题库学习者链路已连接题目列表、答题评估、待复习项和个人历史。
-- 后端 `POST /api/v1/knowledge-bases/{id}/questions` 已存在，但当前 Web 没有教师/作者出题入口。
-- 工作台外壳有 7 个静态原型控件没有 `onClick` 或提交行为；它们不应被算作已交付功能，后续应接真实交互或明确禁用/移除。
+- 用户提供本地源码：C:\Users\asus\Downloads\DeepTutor-main\DeepTutor-main，要求评估是否可以直接复制完成 Phase 5。
+- 初步确认 DeepTutor 根项目为 Apache-2.0，并带有 THIRD_PARTY_NOTICES.md；其中至少记录 CSSwitch 的 MIT notice。不能无条件删除许可证、版权和第三方声明。
+- DeepTutor 解析层（33 个 Python 文件）与 RAG 层（56 个 Python 文件）是本地文件/目录运行时，包含可选 Docling、MinerU、LlamaIndex、LightRAG、GraphRAG、PageIndex 等重型/外部后端；当前 API 依赖锁定为 FastAPI + SQLAlchemy + psycopg + Redis + MinIO 边界，没有这些依赖和目录运行时。
+- DeepTutor 的 ParsedDocument/parser signature、embedding signature/index versioning、preflight 和 retriever 属于有价值的设计参考；但其持久化主要围绕 data/knowledge_bases/<kb>/version-* 文件目录或可选引擎存储，不能直接替换当前 knowledge_bases/documents/document_versions/pages/blocks/index_versions/chunks/ingestion_jobs 的不可变 SQL 模型。
+- 当前项目已拥有 PDF/DOCX/Markdown/JPG/PNG/Obsidian Vault 解析、OCR、安全对象存储、版本化索引与引用基础；直接复制 DeepTutor parsing 会重复实现并绕开租户、对象存储和原页证据边界。
+- Phase 5 第 3、4 项对应的 DeepTutor memory/notebook/question/agent 模块更接近可移植的业务算法和提示词参考，不是可直接粘贴的 FastAPI/SQLAlchemy 功能：其 memory 使用本地 Markdown/JSON L0-L3 目录，Question/Notebook/Agent 依赖 DeepTutor 自己的 orchestrator、stream bus、tool/capability registry、session SQLite、runtime workspace 和 provider factory。
+- 结论暂定：**不能整目录复制或覆盖当前 pps/api**。可考虑在用户确认后，以 Apache-2.0 合规方式提取少量纯算法/协议思想，先映射到当前数据模型和权限服务，再写 focused tests；本轮尚未复制、修改业务代码或运行测试。
 
-## 2026-08-22 · 浅色工作台排版事实
+- 完成详细审查报告：E:\项目\知识库课本\.worktrees\platform-foundation\docs\superpowers\reviews\2026-08-19-deeptutor-phase5-reuse-review.md。结论：DeepTutor 可作为 Apache-2.0 合规的选择性来源，但没有可以安全地“整目录复制粘贴”进当前架构的 Phase 5 模块；解析/RAG 仅作参考，Notebook/Question/Memory 的概念需迁移到 SQL、多租户、来源可追溯模型。两名独立审查子代理均因服务端 429 Too Many Requests 未返回报告，后续源级复制前应重新获得独立复审。
 
-- 浅色模式通过语义 token 集中在 `WorkspaceShell` 的 CSS Module 中，避免在 JSX 中散布颜色逻辑；柔紫和薄荷绿分别承担选择/主操作与健康/连接状态。
-- `react-resizable-panels` 的 `Panel` class 会落在内部 slot，窄屏收起时需结合 `[data-panel]:has(...)` 隐藏其外层 panel，才可真正为中心内容回收宽度。
-- 本地 Windows `npm run build` 受 `.next/trace-build` 文件锁阻塞，但同一代码在干净 Docker build 环境完成了编译、类型检查和静态生成；该锁定是本地生成目录问题，不是应用构建错误。
+## DeepTutor 全量 Phase 5 复用审阅（2026-08-20）
 
-## 2026-08-22 · LLM Markdown 导入设计事实
+- DeepTutor 的 `learning`/`mastery` 不是论文专用能力，已包含诊断、讲解、Feynman 检查、练习、错误分类、掌握度、间隔复习、题目 pending 生命周期和中文课程提示词，和本产品课程辅导目标高度相关。
+- 可优先迁移的不是整套代码，而是纯算法/策略：确定性评分、掌握度计算、下一目标选择、间隔复习、错误粗分类，以及标准答案隔离和服务端状态机约束。
+- `learning/storage.py` 虽已改为 SQLite/CAS/lease，但仍是 DeepTutor workspace 聚合存储；它不能替代当前 PostgreSQL/SQLAlchemy、`space_id` 权限、MinIO、Redis/worker、不可变文档版本和 Provider/Billing。
+- `book` 的 `Chapter/Page/Block`、partial/error/ready 状态、source anchor 和增量编译思想值得中后期参考；其 compiler、storage、retrieval 和 provider 不能直接复制。
+- memory consolidator 的自然边界分块、行级编辑、引用回校验和 checkpoint 思路值得后续吸收；文件化 LLM 运行时必须改为多租户、可审计、异步 SQL 实现。
+- `agentic_pipeline.py` 只能参考工具门控、上下文预算、暂停/恢复、服务端参数注入；直接复制会引入第二套 session/tool/stream/provider/usage runtime。
+- Apache 2.0 允许在保留许可证/归属/专利声明和第三方 notices 的前提下派生，但本轮未复制源代码。任何复制前都要做许可证与依赖审计，并明确修改说明。
+- DeepTutor 复用审阅不会替代 Task 10 的真实 ingestion/index/search/citation 验收；当前 Task 10 仍未完成，Phase 5 仍未完成。
 
-- 用户选择 B：Word/PDF/图片全文由 LLM 整理为 Markdown，而不是只做标题/摘要增强。
-- 原始文件、解析块和生成 Markdown 必须分离；生成结果先是草稿，用户确认后才能进入正式知识库。
-- 章节长短不是有效性指标。长文只按 Faro 模型上下文窗口分块；短文也应正常通过。异常检查限制为空响应、明显截断、模型错误文本混入等。
-- Obsidian 双向链接由确定性 `[[笔记名]]` 解析器建立，支持反向链接和未解析链接；LLM 的自动链接建议不直接写入正式关系。
-- Faro 教程只确认 OpenAI 兼容聊天接口和 Gemini 生成接口，未确认 embedding 接口；本计划不假设 Faro 能提供向量模型。
-- 真实 Faro Key 不应写入源码、数据库、日志、计划文件、浏览器或测试输出。
-- 同一验收指标连续三次修复失败后必须暂停并请求用户决定，避免无止境试错。
 
-## 2026-08-23 Markdown data-layer verification pause
+## 2026-08-20 · Learning Foundation review finding
 
-Acceptance metric: `apps/api/tests/test_knowledge_markdown_models.py`.
+- A minimal pure Python learning-domain slice was added in the feature worktree only. It contains deterministic grading, mastery, review scheduling, and next-step policy; it has no database, API, provider, LLM, filesystem, Docker, or DeepTutor runtime dependency.
+- Focused validation after repair: 30 passed; Ruff and focused `git diff --check` passed. The only test warning is a pre-existing `PytestCacheWarning` / `WinError 5` cache-write denial; no workaround was introduced.
+- Independent SPEC review passed after one targeted correction.
+- Independent QUALITY/SECURITY review did **not** pass: residual Minor issue is that `QuestionSpec(question_type=OPEN, expected_answer=<mutable non-string>)` can retain the caller object, so a frozen contract is not fully immutable on that unused field.
+- This was explicitly judged the same frozen-container rule already corrected once; per the agreed one-correction stop rule, it is documented rather than repaired again. Treat this slice as an uncommitted partial foundation with a known quality exception, not a Phase 5 completion.
 
-Three targeted repair attempts were made after introducing Markdown note/revision/link models:
-1. Fixed a literal newline escape introduced while rewriting the new test; test collection then advanced.
-2. Added the missing `KnowledgeBase` import; test collection then advanced.
-3. Ran the focused suite; all three cases now fail because the helper's `MarkdownNote` construction still omits required `knowledge_base_id`.
+## 2026-08-20 20:16 · Question Bank Foundation Task 1 completed
 
-Per the user-approved three-strike rule, stop here before a fourth repair and request direction. No schema or architecture change is proposed; the next repair would only correct the test helper's required scope field.
-## 2026-08-23 Textbook acceptance extension
+- Added the minimal tenant-aware persistence schema only: questions, question_versions, and question_attempts, plus migration  009_question_bank_foundation from  008_embedding_contract and Alembic metadata import.
+- Contracts now enforce KB/space composite ownership, immutable DocumentVersion anchoring, per-question version uniqueness, tenant-aware attempt links, and (user_id, question_version_id, request_key_hash) idempotency.
+- Each version retains a chunk provenance *snapshot* only; it has no chunks foreign key or ORM relationship, so reindex worker cleanup remains independent.
+- Focused red test initially confirmed missing 	utor_api.question_bank. Final focused verification: 11 passed; Ruff passed using a temporary cache; target diff check passed (only pre-existing env.py line-ending notice).
+- Independent SPEC review passed after one formatting-only correction. Independent QUALITY/SECURITY review initially found ORM/migration JSON-vs-JSONB drift; one targeted correction aligned the ORM with the migration and added dialect-resolution regression coverage. Quality/security re-review: PASS, no P0/P1/P2 findings.
+- No Docker/Compose, Alembic upgrade, full suite, coverage gate, staging, committing, reset, stash, or protected Task 10/Learning file modification occurred.
+- Task 2 (safe author/read/attempt APIs) is next; Phase 5 remains in progress and Task 10 remains blocked/abandoned.
 
-The user authorized using the provided wireless-communications DOCX as the platform's real acceptance sample. The review workflow must propose (not auto-publish) chapter/section hierarchy plus concept, formula, property, method, and example notes. Repeated specialized terms should resolve to one canonical candidate note with context-aware candidate backlinks. Formula occurrences must link to definition, derivation/conditions, and examples when supported by source context. Raw source remains immutable; all candidate wikilinks require user confirmation before publication.
+## 2026-08-20 · Question Bank Task 2 API findings
 
-Observed sample facts: DOCX parsed locally with 6,728 blocks / 502,860 characters / stable source pointers; no OCR is needed. Safe DOCX bounds were raised to 4,096 archive entries, 64 MiB expanded archive, 32 MiB member/XML sizes; parser security suite passed. The original PDF has no extractable text layer and requires OCR.
-## 2026-08-29 · AI 助教无法运行的根因与恢复边界
+- A citation identifier is an opaque capability-like input: malformed, forged, cross-KB, inactive, and overlong tokens all use the same 404 behavior, after server-side signature and scoped-source validation. Rejecting a malformed token at schema level with 422 leaks an avoidable behavior distinction.
+- Response DTO omission alone is not sufficient for efficient confidentiality boundaries: public list/detail queries should also defer private answer/rubric/provenance/identity columns, so large private fields are not loaded for ordinary student reads.
+- Aggregate JSON input limits matter even when each element is bounded. Normalized expected keywords now cap both count (50) and total characters (4,096), and excess inputs are rejected before any Question write.
+- The Question Bank Task 2 final evidence is `20 passed` focused tests plus targeted Ruff and diff checks; final independent SPEC and QUALITY/SECURITY reviews both passed.
 
-- **根因已定位：** 当前 `WorkspaceShell` 挂载 `AgentPanel`，请求 `/api/v1/agent` 后进入 Host Claudian Runtime；Runtime 当前只注册 `ClaudeProvider`。这条链路与用户要求的 Faro → Gemini 3.7 Flash 不一致。
-- **直接故障点：** `apps/api/src/tutor_api/tutor/router.py` 把 Tutor 创建会话和发消息接口改成 `410 Gone`，`/api/v1/tutor/status` 被移除；`main.py` 也不再创建 `FaroOpenAICompatibleAdapter` 和 `tutor_semaphore`。因此 API/Docker health 为 healthy 并不表示 AI 助教聊天写链路存在。
-- **Faro 配置仍保留：** `compose.yaml`、`.env.example`、`core/config.py`、`llm/faro.py`、`worker_main.py` 仍包含 Faro 配置；默认模型为 `gemini-3.7-flash-tiered`。Worker 的语义索引仍可能使用 Faro，但当前聊天 UI 不使用它。
-- **可复用实现：** Git HEAD 仍有完整 Faro Tutor router/service/schemas/main、前端 TutorPanel/tutor-api 与测试，可作为恢复参考。
-- **必须保留的新增能力：** 当前 Tutor service/router 新增 legacy 会话列表/读取；citation schema 已扩展 knowledge/web 类型及 `knowledge_base_id`、`knowledge_base_name`、`space_id`、`url`。不能简单 checkout HEAD 覆盖。
-- **产品/UI方向：** AI 助教默认区域只保留聊天、引用、输入框、状态摘要和“设置”按钮；设置使用统一暖白/浅紫 tokens，二级页签为“会话记录”和“服务设置”；服务页只读显示 Faro、Gemini 模型、配置/连接状态，不显示 Key，不提供 Claude 选项。
-- **测试解释：** 2026-08-29 运行的 Web 聚焦测试为 3 files / 21 tests passed，但当前测试仍接受 Agent cutover 和只读 Tutor 历史，因此不是目标功能验收。API 聚焦测试在用户中断前只产生部分通过标记，无最终结论。
-- **工作树风险：** 当前约 95 个修改/未跟踪条目，包含 Claudian Runtime、Agent API、Vault、迁移和大量测试；任何恢复操作必须限制路径并审查 diff。
-## 2026-08-30 · AI 助教 Faro/Gemini 最终结论
+## 2026-08-20 · Question Bank Task 3A review outcome
 
-- **最终根因：** 旧活跃链路虽然使用 Agent API，但 Runtime 只注册 `ClaudeProvider`；Faro 配置只存在于环境和其他 worker 路径，没有进入 AI 助教聊天链路。8765 端口一度还运行重启前旧构建，所以仅看容器/API 健康无法发现此问题。
-- **最终架构：** `AgentPanel → /api/v1/agent → Agent Runtime → Faro OpenAI-compatible /chat/completions → gemini-3.7-flash-tiered`。Runtime provider registry 不再包含 Claude。
-- **配置边界：** 活跃会话固定 `provider=faro`、`model=gemini-3.7-flash-tiered`、`context_window=32000`。数据库中的旧 Claude 或错误 Faro 设置不能覆盖固定配置；API 拒绝错误更新。
-- **兼容策略：** 旧 Claude/Fable 会话只读保留，避免历史丢失；对旧会话发起新 turn 返回明确的 `409 agent_session_provider_retired`，不会送入 Runtime。
-- **UI 决策：** AI 助教主区域只承担对话；会话记录与服务设置进入设置弹层二级页签。Provider、模型与上下文窗口只读，密钥只显示 configured/not-configured 状态。视觉沿用现有暖白/浅紫、细边框、圆角与轻阴影。
-- **验收证据：** Runtime diagnostics 仅报告 `faro` 且为 `ok`；真实 Faro smoke 两次成功并收到非空 `model_text_delta`；API 119 项、Web 232 项、Runtime 86 项测试全部通过，Web lint/build 与 Runtime typecheck/build 通过。
-- **运行状态：** Host Runtime PID `35704`；API/Web/PostgreSQL/Redis healthy，Worker/MinIO running；API health 为 `ok`，Web 入口 HTTP 200。
-- **安全约束：** 验证过程未打印 Faro key、Runtime token 或 Capability secret；没有 reset/clean、删除卷、覆盖其他未提交改动或恢复退休 Tutor 写接口。
+- Pure deterministic assessment implementation is functionally verified (20 focused tests, Ruff, whitespace check) and the independent specification review passed.
+- `AssessmentResult` and `ReviewSchedule` construction invariants plus bounded `deque(maxlen=5)` mastery history are independently confirmed fixed.
+- Residual P2: the AST test catches `from tutor_api.learning.grading import ...` but not `from tutor_api import learning`; current runtime imports remain standard library only.
+- This is the same import-isolation rule after the one permitted correction. Record as `QUALITY/SECURITY FAIL / stop-rule`; do not apply a third fix or call the task fully approved.
 
-## 2026-08-30 · 最终稳定性收尾调查
+## 2026-08-20 · Question Bank Task 3B review outcome
 
-- 正常 Markdown 已真实验证上传、Worker 完成、手动刷新到“可搜索”，说明状态 API 与基础 Worker 链路不是全面失效。
-- 已确认 Web 存在双状态源缺陷：workspace 轮询只更新 `workspaceDocuments`，不会按 `document_id + document_version_id` 把权威 `processing_state` 合并到 `uploadsByKnowledgeBase`，所以“原始资料”可已就绪而“当前任务”仍停留在处理中。
-- `knowledgeApi.workspace()` 与 `documentStatus()` 的易变 GET 未显式 `cache: no-store`，存在复用旧状态的风险。
-- 数据库中发现两条真实 PDF 失败：一条 parse_document 最终为 `DataError/worker_unhandled_error`，一条为 `ParseError/invalid_format`；需安全重放定位，禁止泄露正文和异常敏感细节。
-- 用户补充最终缺陷范围：会话记录无法返回旧聊天、四个会话功能无效、Capabilities 四按钮不可操作、知识库无删除入口；这些均纳入本轮收尾。
+- Assessment schema function/spec evidence passed: composite tenancy/user/version/attempt FK, one assessment per attempt, deterministic scoring/mastery/review evidence, contract labels, additive migration, and 35 focused SQLite/offline-DDL tests.
+- Current schema does not store answers, rubrics, keywords, request hashes, or source/provenance snapshots.
+- Residual P2 is limited to regression coverage: the exact privacy column allowlist checks ORM metadata, not the physical migration-created column set. A migration-only future sensitive column could evade that guard.
+- Stop-rule applies after the one targeted test correction; retain `QUALITY/SECURITY FAIL` for Task 3B and do not apply a third fix.
 
-## 2026-08-30 · Runtime mutation contract blocker
+## 2026-08-20 · Question Bank Task 3C concurrency finding
 
-- 真实分叉 400 的根因是 API RuntimeClient 未发送 Runtime 对 stop/rewind/fork 强制要求的 `Idempotency-Key` 与 `X-Workspace-Capability`。
-- fork 请求还缺少预生成的 `fork_session_id`；Runtime 返回体包含该 `session_id` 与 `native_session_id`，API 数据库必须使用相同 session UUID，避免双端会话 ID 分裂。
-- resume 使用完整 RuntimeStartRequest，是另一套合同；前端目前明确禁用继续，本轮不把它伪装成可用能力。
-- 调查中一次误用 `apps/runtime/src` 路径失败；真实 Runtime 路径为 `apps/agent-runtime/src`，后续已改用正确路径。
+- A unique idempotency key alone is not sufficient for derived learning evidence: concurrent different keys for the same user and question version can both observe the same prior mastery/streak state. A transaction-scoped serialization primitive must cover replay lookup, evidence read, derivation, and write.
+- PostgreSQL `pg_advisory_xact_lock` keyed from the stable pair `(user_id, question_version_id)` is a narrow fit here when executed on the request's outer SQLAlchemy transaction; SQLite tests must bypass PostgreSQL-only lock SQL.
+- Focused dialect-mocked tests can verify key scope and ordering, but they are not equivalent to a real PostgreSQL concurrent end-to-end test. That verification was not authorized or run.
+## 2026-08-20 · Question Bank Task 4 owner review queue findings
 
-## 2026-08-30 · Vault 删除真实 E2E 与最终取舍
+### Accepted contract
 
-- 用户明确表示分叉功能不是必需项，因此最终收尾不再为分叉增加新能力；已经完成并通过的修复保留，避免无收益改动。
-- 使用全新隔离账号和个人知识库执行真实删除，不接触用户主知识库；在 Worker 实际 gent_vault_root 下创建 cleanup-proof.md 后调用删除接口。
-- 验收结果：DELETE /api/v1/knowledge-bases/{id} 返回 204；Worker 第一次 500ms 轮询前已清理 <vault_root>/spaces/<space_id>/<knowledge_base_id>；随后详情 GET 返回 404。
-- 这证明数据库硬删除、durable object-deletion outbox、Worker 领取任务与本地 Vault scope 清理已在真实 Compose/PostgreSQL 环境闭环。
-- 第一次隔离注册使用了过长用户名并收到 422；改用符合长度约束的短用户名后一次通过。该失败属于验收数据不符合既有校验，不是产品缺陷。
-## 2026-08-30 · Quality 与发布边界复核
+- The review queue is a read-only current view, not a historical error archive: one latest assessment per question version, owner-scoped to the current user and knowledge-base space, and returned only when the latest evidence has `needs_review=true`.
+- `scope=due` uses `review_due_at <= now(UTC)`. `limit` is bounded to 1..50 and pagination is keyset-based over `(review_due_at, assessment.created_at, assessment.id)` with `limit + 1` lookahead.
+- The safe projection is enforced at both DTO and query levels. `load_only(...)` prevents ordinary review-queue reads from loading answers, rubrics, provenance, identities, request hashes, or internal assessment/attempt identifiers.
 
-- 用户确认本次暂不处理 Quality workflow 的红叉；它们表示 CI 门禁未全绿，不等同于当前代码未提交或 GitHub 文件不可下载。当前本机功能回归基线仍为此前记录的 API/Web/Runtime 通过结果。
-- 远程核对：`git ls-remote github-collab` 返回 `feature/platform-foundation-wip -> f2a0acf`；`main -> 3347c6f`；`feature/aiopc-upgrades -> c53f459`；`feature/add-AIOPC -> 117fe2b`。
-- 分支关系核对：`main` 是当前稳定分支祖先；`feature/aiopc-upgrades` 与当前稳定分支互不为祖先，因此没有被带入；`feature/add-AIOPC` 已在当前分支祖先链中，变更仅是 `progress.md` 记录。
-- 未发现被跟踪的 `.env`、密钥、token 文件；本地 `.tmp/`、coverage 和临时 HTML 属于未跟踪诊断产物，不进入发布提交。
+### Review outcome
+
+- Independent SPEC review: **PASS**.
+- Independent QUALITY/SECURITY review: **PASS**, no P0/P1/P2.
+- Focused verification: `20 passed`; targeted Ruff and four-file diff check: **PASS**.
+- Review record: `.worktrees/platform-foundation/docs/superpowers/reviews/2026-08-20-question-bank-review-items-task4-review.md`.
+
+### Boundary and next step
+
+- No Docker/Compose, Alembic, full suite, coverage, real PostgreSQL concurrency/performance, or external-provider validation was run for this slice. Existing framework deprecation warnings are non-blocking.
+- Task 4 is complete, but Phase 5 remains `in_progress`. Task 10 is still blocked/abandoned, and the Task 3A/3B P2 stop-rule records remain unchanged. The next capability must be separately scoped rather than reopening stopped work.
+## 2026-08-21 · Question Bank Task 5 attempt-history plan
+
+- Planned the next independent Phase 5 slice: a bounded owner-only read endpoint for all immutable assessment history of one question version.
+- Scope is migration-free and read-only. It reuses readable knowledge-base authorization, filters by current user and tenant, uses `QuestionAttempt.created_at` for newest-first keyset pagination, and exposes only the already-approved safe assessment projection.
+- It deliberately excludes answer keys, submitted answers, rubrics, provenance, identities, request hashes, Task 10, LLM/Agent work, and changes to `tutor_api.learning`.
+- Plan: `.worktrees/platform-foundation/docs/superpowers/plans/2026-08-21-question-bank-attempt-history-plan.md`.
+## 2026-08-21 · Question Bank Task 5 final findings
+
+- `attempt-history` is deliberately distinct from Task 4’s review queue: it returns all immutable assessments for the current user/version rather than collapsing to the latest assessment.
+- Public chronology must use `QuestionAttempt.created_at`; assessment creation time is not a substitute for when the learner attempted the question.
+- Stable newest-first history pagination needs the full tuple `(attempted_at DESC, assessment.id DESC)` in both SQL ordering and cursor predicate. Equal timestamps are now covered with public `review_due_at` markers across two pages; no internal assessment ID is exposed in the response.
+- Safe output requires both an explicit DTO/envelope and `load_only(...)` query projection. Selecting `QuestionAttempt.created_at` as a scalar avoids loading the attempt entity’s submitted answer and idempotency hash.
+- Independent Task 5 reviews: SPEC PASS and QUALITY/SECURITY PASS, with no P0/P1. The only review qualification is procedural: ordinary `git diff --check` does not inspect untracked files. The controller used `git diff --no-index --check -- NUL <file>` and observed no whitespace diagnostics; this is whitespace evidence only, not a replacement for source/test review.
+- Task 5 review record: `.worktrees/platform-foundation/docs/superpowers/reviews/2026-08-21-question-bank-attempt-history-task5-review.md`.
+
+## 2026-08-21 · MVP 验收范围与止损规则
+
+- 本期可向客户声明的范围是“带来源追溯的资料知识库 + 题库学习闭环 MVP”，不能将模型目录、哈希 embedding 或普通知识库搜索描述成真实 LLM 课程辅导 Agent。
+- 真实 LLM Tutor 仍缺少已确认的 endpoint、密钥注入方式、模型名、协议和真实调用/计费验收；改为高级延期项，而不是隐性假设某供应商格式。
+- 2026 年 8 月 19 日真实 Docker Task 10 失败仍有效：服务健康不等于资料已可检索。MVP Gate 允许一次证据驱动定位和至多一次狭窄修复；若仍失败，停止反复调参并把该路径写为客户可见 FAIL/限制。
+- 题库 Task 3A/3B 和 Learning Foundation 已有冻结 stop-rule 限制保持不变；Task 5 已完成且不重新实现。用户接受 coverage `89.41%` 的例外，不能替代端到端真实证据。
+- 为减少低价值流程成本，三个耦合 MVP 工作项合并后只进行一次集中验证、一次 SPEC 审查、一次 QUALITY/SECURITY 审查；安全、权限、来源、私密字段、幂等与事务一致性仍不可省略。
+
+## 2026-08-21 · 独立 MVP 审计发现
+
+- 知识库页面已有创建、上传、搜索和 citation 预览交互；题库端点已注册，但工作台中的“题库/错题集”仍是静态树项，学习者无法在 UI 完成作答—反馈—复习—历史闭环。
+- “AI 家教”目前没有提交行为、Tutor/Agent API、LLM client 或真实费用结算。若本期不接入真实 LLM，必须将其隐藏或重命名为资料检索/题库练习，不能保留可误解的模型、费用和回答承诺。
+- 上传返回“处理中”后，前端缺少明确状态刷新/轮询，客户无法确认是否已真正可检索；这应作为 MVP 主链路项而非界面美化项。
+
+## 2026-08-21 · MVP 收口执行阻塞（非项目环境）
+
+- 合并 MVP 批次的唯一实现子代理在写入 CSS/测试收尾时被执行平台拒绝，返回 `403 Forbidden：预扣费额度失败`。该限制与 Docker、Compose、PostgreSQL、API key、LLM、OCR、embedding 或本机硬件无关。
+- 因已有 partial changes 且 focused tests 仍为 18/21，当前不得作出 MVP 实现完成、集中验证通过、SPEC PASS、QUALITY/SECURITY PASS 或 Phase 6 可验收的任何声明。
+- 恢复条件是 Codex 执行额度可用；恢复后应复用同一实现子代理继续其明确收尾，不扩大范围、不切换为 controller 手工重做，也不重新运行历史 Docker/Task 10 验收。
+
+## 2026-08-21 · MVP 收口批次完成后的规格修正
+
+- 前一条“执行额度阻塞、18/21 失败”的记录是过程日志，已被后续事实 supersede：实现收尾已完成，21/21 focused tests、目标 ESLint、无增量 TypeScript 检查均通过。
+- MVP 本期承诺的是题库 UI 的最近答题历史；完整历史分页 UI 不作为客户首付款验收阻塞项。后端 pagination contract 保留。
+- 上传接口的兼容字段仍可能到达浏览器，但 UI 不读取/显示；安全 status endpoint 是唯一学习者处理状态来源。完整 DTO 最小化作为后续契约优化登记，不构成本期泄密证据。
+- SPEC 初审的 P1 记录不一致已修正；P2 项已通过明确范围和延期记录处理。等待复审与 QUALITY/SECURITY 审查。
+
+## 2026-08-21 · MVP 复审后的真实阻断项
+
+- 规格复审确认本期客户口径为“带来源追溯的资料知识库 + 题库学习闭环 MVP”；完整答题历史分页 UI、真实 LLM Tutor、知识图谱、长期记忆、多 Agent、生成式题目、教师分析、性能压测和非关键 coverage 均延期。
+- 质量/安全复审确认没有跨租户越权或学习者私密答案泄露，但上传 POST 响应仍将 `ingestion_job_id`、`content_sha256`、`job_state` 及无必要空间/内部状态字段发给浏览器，属于本次必须收紧的 P1。
+- 前端存在可复现的取消竞态：题库切题/切换知识库时旧提交或历史请求可能污染新题目，取消后 loading 可能卡死；资料状态刷新不同条目时共享 controller 可能令前一条永久显示刷新中；答题网络重试没有复用同一 Idempotency-Key。
+- 修复原则：只做契约和状态管理的窄改动，保留既有未提交文件，不重做已完成任务；修复后只做目标 focused tests、lint/typecheck 和独立窄复审。
+
+## 2026-08-21 · MVP 窄复审最终结论
+
+- 最终独立窄复审 PASS：P0=0、P1=0、P2=0。
+- 上传 POST 与前端 DTO 现在只暴露 `document_id`、`document_version_id`、`source_name`、`created_at`；处理状态单独通过授权 status endpoint 获取。
+- 题库幂等键绑定到知识库、题目版本和规范化答案；提交成功但 review-items 刷新失败时保留评估、答案和 key，避免重复答题；修改答案、切题或切换知识库时生成新 key。
+- 本结论只覆盖代码合同和 focused 回归，不代表 Docker/PostgreSQL/pgvector、Alembic、全量测试、外部 OCR/Embedding/LLM 已通过。2026-08-19 真实 Docker 资料链路失败事实仍有效。
+
+## 2026-08-21 · Phase 6 环境阻塞事实
+
+- 尝试启动真实隔离验收前，当前 PowerShell 执行 `docker version --format '{{.Server.Version}}'` 失败，提示 `docker` 不可解析。
+- 本次没有自行安装、搜索、修改 PATH、启动 Docker Desktop、运行 Compose 或清理数据卷；没有新增任何真实链路结论。
+- 要继续 Phase 6，只需要一个可用入口：Docker Desktop 引擎已就绪且当前终端能解析 `docker`，或 Docker CLI 的准确可执行路径/远程 Compose 入口。API key 不是本 Gate 的前置条件：默认知识处理链路使用本地/禁用外部 provider 配置，真实 LLM Tutor 仍延期。
+
+## 2026-08-21 · Phase 6 真实资料 Gate 失败证据
+
+### 环境
+
+- Compose project：`mvp-phase6-20260821`
+- Docker Server：`29.7.2`
+- Docker Compose：`v5.3.1`
+- Alembic：`0010_question_attempt_assessment (head)`
+- 服务：postgres/pgvector、redis、minio、api、worker、web 均已启动；api 与 web healthy。
+
+### 真实链路结果
+
+| 步骤 | 结果 |
+|---|---|
+| 注册临时用户 | PASS |
+| 创建个人知识库 | PASS |
+| 上传唯一 token 的 Markdown | PASS，HTTP 201 |
+| 状态观察 | `processing` → `failed` |
+| `parse_document` | `completed` |
+| `build_index` | `failed`，3/3 次尝试 |
+| 失败码 | `index_validation_failed` |
+| 观察到的页/块 | `pages=1`，`chunks=0` |
+| 搜索唯一 token | 未执行为 PASS；索引失败后无合法检索前提 |
+| citation/source/page preview | 未执行为 PASS；无搜索 citation |
+
+### 决策
+
+这是 2026-08-19 失败事实之后的新鲜隔离复验，仍在索引校验层失败。按项目 stop-rule，当前不做第三轮无证据调参；真实 PostgreSQL/pgvector 资料导入、检索和来源预览不宣称通过。若客户要求无条件资料检索 MVP，需要单独授权一次有根因假设和最小修复；否则本期交付口径收缩为“代码复审通过的知识库/题库 API 与 UI + 资料上传/状态可见化”，资料检索端到端列为已知阻塞。
+
+## 2026-08-21 · Phase 6 一次性索引修复结果
+
+- 逐字段诊断中唯一不一致项是 embedding：持久化值与期望值是同一 PostgreSQL float4，但 Python float64 文本表示不同；其他 ordinal、租户/版本/页块/source pointer/content hash、lexical terms、dimension、signature 均一致。
+- 已实施且通过独立窄验证的唯一修复：将 embedding 比较改为 float4 32-bit 位模式比较，避免相对容差，并显式拒绝 signed-zero 位模式不一致、NaN/Inf、overflow、类型异常和长度不一致。
+- stop-rule 仍生效：真实 Docker Gate 只允许在代码修复后重验一次；若重验仍失败，保留 FAIL，不再无依据反复调参。
+- 当前新会话的 `docker` 不可解析，因此真实重验尚未开始；不得把本次代码测试 PASS 写成资料检索端到端 PASS。
+
+## 2026-08-21 · Phase 6 真实资料 Gate 修复后 PASS
+
+- 修复后的唯一真实重验已通过：重建 api/worker 后，新资料成功完成解析、索引构建和可检索状态转换。
+- 证据：`processing → searchable`；唯一 token 搜索返回 1 条；citation source/page 两个预览端点均返回 HTTP 206，内容类型分别为 `text/markdown; charset=utf-8` 与 `text/plain; charset=utf-8`。
+- 先前一次上传请求返回“不支持的文件类型”是验收脚本 multipart 文件部件未声明 `text/markdown`，未进入解析/索引，不计为产品 Gate 失败；随后使用明确 MIME 的请求完成同一验收。
+- 旧环境与修复前环境的索引失败记录仍不可删除，但已被本次有根因修复后的新鲜实证 supersede 为当前 Gate PASS。
+- MVP 可以进入客户验收/资金节点；高级能力按既定清单延期，不因本次 PASS 扩大承诺范围。
+
+## 2026-08-30 · Faro 健康不等于 AI 组件健康
+
+- `.env` 的 Faro base URL、key、模型和 runtime 配置存在且基础连接可用，但这不能证明组件成功。
+- AI 助教独立根因：前端把 `state=failed` 的 Faro 会话仍视为可写，URL/localStorage/最近会话会反复恢复失败会话。
+- 知识候选独立根因一：Gemini 实际可返回 `formula_verification: []` 或多个校验对象的列表，旧解析器只接受单对象/null。
+- 知识候选独立根因二：同一个 canonical key 会在不同上下文块生成互补 markdown/公式/来源，旧合并器要求完全一致并抛出 `candidate_note_conflict`。
+- 可观测性问题：`CandidateValidationError` 的稳定码存放在异常消息前缀，Worker 原实现只读取 `.code`，导致真实错误被降级为 `worker_unhandled_error`。
+- 修复后真实 AI 助教链路：AgentPanel/API → Agent Runtime → Faro → Gemini → `model_text_delta`，最终 runtime=completed、session=waiting_input、无 error event。
+- 修复后真实知识候选链路：Worker → Faro/Gemini → 结构/候选解析 → 跨块合并 → DB；任务 `1cc3f623-2eb6-489a-a4f2-ea613a7fac88` completed（6/6），批次 `fca98b9e-5130-4f7a-80e8-aa9130b47dd1` needs_review，29 notes，failure_code 为空。
+
+## 2026-08-30 · UI 503 的第二层根因
+
+- 直接调用 API:8000 的 smoke 会成功，但 UI 通过 Web:3100 反向代理时，请求到达 API 的 Host 是 Docker 内部 `web:3000`。
+- `post_turn` 原先用 `request.url_for("runtime_event_callback")` 构造 callback，导致 Runtime 收到 `http://web:3000/api/v1/agent/runtime/events`。
+- Agent Runtime 是宿主机 Node 进程，不能解析 Docker Compose 内部 DNS 名 `web`；它虽然 Faro 调用成功并建立 sequence=0 的 Runtime session，但首个事件无法回调 API，API 的 RuntimeClient 30 秒后将请求映射为 `503 runtime_unavailable`。
+- 这解释了“Faro health 正常、直接 API smoke 正常，但 UI AI 助教失败”的表面矛盾。
+- 修复后 callback 来自可信环境配置而非不可信/不可达的代理 Host。
+
+## 2026-08-30 · 组件级 UI 最终验收与提交前验证
+
+- 真实 Web 页面 `http://127.0.0.1:3100` 已刷新并读取可见 DOM；知识候选审核区显示 3 条候选及“确认并生成层级知识库”按钮。
+- 同一真实 UI 会话已显示 Gemini 返回文本 `UI_QA_OK_20260830`；这不是 Faro health 检查，而是 Web → API → Runtime → Faro/Gemini → callback/event → UI 的最终画面证据。
+- 提交前新鲜验证：API 聚焦回归全通过；Web 全量 35 files / 238 tests 通过；ESLint 与目标 Ruff 通过；`git diff --check` 无错误（仅 CRLF 提示）。
+- 远程 `github-collab` fetch 连续 3 次因本机到 github.com:443 连接失败而未完成；本地远程跟踪引用与提交前 HEAD 均为 `666535a`。后续使用普通非强制 push，若远程已前进会安全拒绝，不会覆盖协作者提交。
+
+## 2026-08-30 · GitHub 提交完成
+
+- 本地提交：`a568c12 fix: restore candidate generation and proxied agent turns`，11 个文件，336 additions / 12 deletions。
+- 常规 Git HTTPS 因当前 DNS 路径上的 `github.com:443` 不可达而失败；改用已认证的 GitHub Git Data API，先验证远端分支仍停在父提交 `666535a`，再逐 blob/tree/commit 上传。
+- API 创建的 tree 与 commit SHA 均与本地 Git 对象完全一致，随后以 `force=false` 更新远程分支。
+- GitHub API 二次读取确认远程 SHA 为 `a568c12e1bbf63660f1262901b76a31407f15d1d`；本地 remote-tracking ref 已同步，`HEAD...github-collab/feature/platform-foundation-wip = 0/0`。
+
+## 2026-08-30 · 组件级二次审计发现 WebSocket 代理缺口
+
+- 最终 UI DOM 虽已显示持久化的 `UI_QA_OK_20260830`，但连接状态仍为“正在重连（第 5 次）”。
+- 根因是浏览器默认连接 `ws://127.0.0.1:3100/api/v1/agent/ws/...`，而当前 Next catch-all route 仅实现 HTTP fetch proxy，不代理 WebSocket upgrade。
+- 这意味着先前的 Web HTTP E2E 与刷新后消息回放均通过，但“发送后无需刷新即可实时看到回复”的 UI 链路仍有缺口；不能仅凭 Faro health、HTTP poll 或数据库事件宣称组件完全恢复。
+- 正在为同源 Next HTTP 代理模式增加事件轮询 fallback，同时保留显式 API base 下的 WebSocket 路径。
+
+## 2026-08-30 · AI 助教 UI 实时连接缺口完成修复
+
+- 二次审计确认 Next 的 HTTP catch-all 不能代理 WebSocket upgrade，导致 UI 虽能刷新回放模型结果，却持续显示“正在重连”。
+- `apps/web/src/lib/agent-api.ts` 已在同源 Next HTTP 代理模式自动使用 500ms HTTP polling；显式 API base/WebSocket 实现仍保留。
+- polling 支持 cursor 推进、事件分发、401/403 停止、指数退避、Abort 和 timer cleanup；新增对应回归测试。
+- 新鲜验证：Web 全量 35 files / 243 tests 通过；ESLint 通过；Next production build 成功；Web 容器重建并 healthy。
+- 真实页面刷新后稳定显示 `已连接 · cursor 4`，同时保留可见 Gemini 回复 `UI_QA_OK_20260830`，不再显示“正在重连”。
+- 最终提交 `b99879f fix: poll agent events through web proxy` 已以非强制方式同步到 GitHub；远程 API 再确认同 SHA，本地与远程 `0/0`。
+
+## 2026-08-30 · AI 助教 UUID / 消息正文 / 上下文合同排查
+
+- 输入框上方 `86d77e8b-74d0-4fea-ba1f-82f24a9c35e0` 已由数据库确认是知识库 `wire sign` 的 `knowledge_bases.id`，不是文件名、文件 ID 或会话 ID。
+- Web 默认上下文只提供 `knowledge_base_id`，Composer 又把该 ID 当展示兜底，因此内部 UUID 泄露；整库关联应显示 `知识库：wire sign`，具体文件关联才显示文件名。
+- Runtime 的 Faro Provider 发出 `user_message.payload.message`，Web reducer 只读 `payload.text`，导致页面只显示角色“你”而正文为空；数据库已证明用户输入完整保存。
+- 前端虽发送 `linked_contexts`，API `TurnCreateRequest` 未声明该字段，当前会被 Pydantic 静默忽略；关联知识库目前没有真正注入 Runtime。
+- Faro 空响应发生在 HTTP/JSON 成功后提取 `choices[0].message.content` 阶段；需安全记录 finish_reason/message keys 等结构摘要，并修正 Gemini 3.7 不应携带的废弃 sampling 参数。
+
+## 2026-08-30 真实页面验收补充
+- UUID `86d77e8b-74d0-4fea-ba1f-82f24a9c35e0` 经数据库确认对应知识库 `wire sign`，不是文件名。
+- 修复后的 Composer 不再把内部 `knowledge_base_id` / `vault_file_id` 作为可见标签；默认显示 `知识库：<名称>`。
+- 重建 Web/API 并重启 Faro Runtime 后，真实页面显示 `知识库：Faro 真实链路验收` 与 `已连接 · cursor 12`。
+- 真实检索注入能让 Faro 根据 `wireless-faro-e2e.md` / `browser-faro-candidate.md` 回答路径损耗、信噪比和误码率关系。
+- E2E 发现检索上下文曾被拼进用户气泡；已将 Faro 可见 `user_message` 限定为首个文本块，同时仍向模型发送完整检索上下文。
+- 数据库最新事件序列 9-12 为 `turn_started → user_message → model_text_delta → session_state(completed)`，其中 user_message 仅保存原始提问。
+
+## 2026-08-30 · qyw211 选择性接入边界
+
+- qyw211 的 c53f459 是大杂糅提交，直接 merge/cherry-pick 会覆盖当前 Faro、知识库和工作台修复；本轮只选择性移植 billing、account-panel、welcome。
+- 当前稳定数据库 head 为 0018_object_deletion_outbox；qyw 分支使用 0016/0017/0018/0019，不能直接复制迁移文件，必须新建从 0018 继承的支付迁移。
+- 当前前端没有 qrcode 依赖；账户面板需要 qrcode 与类型包，依赖锁文件应通过 pnpm 生成而非复制 qyw 的整份锁文件。
+
+## 2026-08-30 · qyw211 支付选择性接入最终审计
+
+- qyw211 支付代码未整体合并，避免将 AI 助教、知识库、题库和工作台改动带入当前工作树。
+- 支付入口统一经过 billing service；线上通知只在签名/字段/金额校验后调用现有人工充值入账路径，避免另建余额逻辑。重复通知可幂等处理，金额不匹配进入 `paid_mismatch` 且不入账。
+- 0019 迁移显式声明 `mock/alipay/wechat` 与订单状态约束，并关闭 SQLAlchemy 非原生 Enum 的自动 CHECK 生成，避免重复 `payment_provider_kind` 约束。
+- 完整 API 测试唯一失败：`tests/test_knowledge_worker.py::test_compose_worker_reuses_api_image_without_ports_or_root`，原因是当前未提交的支付配置已加入 API 环境而 `compose.yaml` 的 worker 环境尚未同步；本轮禁止覆盖/修改 `compose.yaml`，因此未将该失败伪装成支付代码问题。
+
+## 2026-08-30 · 支付/账户/欢迎页选择性接入结论
+
+- qyw211 提交 `c53f459` 是 AI 助教、知识库、题库、支付和 UI 的混合提交，不能整体合并；本轮采取白名单移植。
+- 支付实现复用当前钱包账本和人工充值/冲正服务，新增充值订单和网关适配层。默认 `PAYMENT_PROVIDER=mock`，无真实支付宝/微信凭据时应用仍可启动。
+- 数据库采用新迁移 `0019_recharge_orders_payment`，父迁移固定为当前稳定 head `0018_object_deletion_outbox`，没有引入 qyw 的冲突编号。
+- Web 只加入独立账户面板、二维码依赖、欢迎页和一个账户入口；AI 助教、知识库检索、候选生成、Agent Runtime 和现有工作台核心文件未被 qyw 改动覆盖。
+- 全量 API 测试首次发现 Compose worker 未同步新支付环境变量，已补齐 api/worker 环境后回归通过；这是配置一致性修复，不涉及 AI/知识库逻辑。
+- 当前变更具备提交条件；推送前仍需确保仅显式 stage 白名单文件，排除 `.env`、`.tmp/` 和任何临时检查产物。

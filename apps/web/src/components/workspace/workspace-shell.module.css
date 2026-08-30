@@ -558,3 +558,11 @@
   .vaultFileViewer { padding: 14px; }
   .vaultFileViewer header { flex-direction: column; }
 }
+
+
+.workspaceAccountBar { display: flex; min-height: 42px; align-items: center; justify-content: flex-end; gap: 12px; padding: 6px 14px; border-bottom: 1px solid var(--line); background: #fff; }
+.workspaceAccountContext { margin-right: auto; overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.workspaceAccountBar button { min-height: 32px; padding: 6px 11px; border: 1px solid #d4cfee; border-radius: 8px; background: #f7f5ff; color: #51479e; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
+.workspaceAccountBar button:hover { border-color: #aa9ee0; background: #eeeafe; }
+.workspaceAccountBar button:focus-visible { outline: 3px solid #c8bdf5; outline-offset: 2px; }
+@media (max-width: 640px) { .workspaceAccountBar { min-height: 48px; padding-inline: 8px; } .workspaceAccountBar button { min-height: 38px; } }

@@ -473,7 +473,7 @@ def test_legacy_sqlite_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0018_object_deletion_outbox"
+        assert version == "0019_recharge_orders_payment"
     finally:
         engine.dispose()
 
@@ -498,7 +498,7 @@ def test_short_lived_task7_revision_upgrades_to_current_head(tmp_path) -> None:
     try:
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version == "0018_object_deletion_outbox"
+        assert version == "0019_recharge_orders_payment"
     finally:
         engine.dispose()
 
@@ -759,7 +759,7 @@ def test_versioned_knowledge_migration_round_trip(tmp_path) -> None:
             assert "trg_chunks_validate_embedding_update" in trigger_names
             assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0018_object_deletion_outbox"
+                "0019_recharge_orders_payment"
             )
     finally:
         engine.dispose()
@@ -1532,7 +1532,7 @@ def test_tutor_migration_matches_model_metadata(tmp_path) -> None:
         with engine.connect() as connection:
             assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
             assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
-                "0018_object_deletion_outbox"
+                "0019_recharge_orders_payment"
             )
     finally:
         engine.dispose()

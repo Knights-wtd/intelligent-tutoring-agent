@@ -105,6 +105,9 @@ export function AuthForm({ mode, onAuthenticated }: AuthFormProps) {
         <a className={styles.switchLink} href={isRegistration ? "/login" : "/register"}>
           {isRegistration ? "已有账号？去登录" : "还没有账号？去注册"}
         </a>
+        <a className={styles.welcomeLink} href="/welcome">
+          先了解知学空间
+        </a>
       </section>
     </main>
   );

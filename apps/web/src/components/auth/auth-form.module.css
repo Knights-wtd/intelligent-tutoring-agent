@@ -45,6 +45,8 @@
 .submitButton:disabled { cursor: wait; opacity: .6; }
 .switchLink { display: block; margin-top: 22px; color: #b9b1ff; font-size: 12px; text-align: center; text-decoration: none; }
 .switchLink:hover { color: white; text-decoration: underline; }
+.welcomeLink { display: block; margin-top: 10px; color: #9295a5; font-size: 12px; text-align: center; text-decoration: none; }
+.welcomeLink:hover { color: white; text-decoration: underline; }
 
 @media (max-width: 520px) {
   .authPage { padding: 16px; }
